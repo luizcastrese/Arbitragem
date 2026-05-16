@@ -1,15 +1,25 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+
+from app.agents.judge import decide_case as judge_decide_case
+from app.agents.organizer import organize_case as organizer_organize_case
+from app.agents.reviewer import review_decision
+from app.core.hashing import sha256_text
+from app.documents.chunker import chunk_text
+from app.reports.report_generator import build_report
 
 app = FastAPI(title="Arbitragem MVP")
 
 cases = {}
 
+
 @app.get("/")
 def root():
     return {
         "project": "Arbitragem MVP",
-        "status": "running"
+        "status": "running",
+        "description": "AI-assisted arbitration workflow prototype"
     }
+
 
 @app.post("/cases")
 def create_case(payload: dict):
@@ -21,6 +31,7 @@ def create_case(payload: dict):
         "claimant": payload.get("claimant"),
         "respondent": payload.get("respondent"),
         "documents": [],
+        "chunks": [],
         "organized": None,
         "decision": None,
         "review": None
@@ -28,65 +39,92 @@ def create_case(payload: dict):
 
     return cases[case_id]
 
+
+def get_case_or_404(case_id: str):
+    if case_id not in cases:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return cases[case_id]
+
+
 @app.post("/cases/{case_id}/documents/text")
 def add_document(case_id: str, payload: dict):
+    case = get_case_or_404(case_id)
+
+    content = payload.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="Document content is required")
+
+    document_id = f"D{len(case['documents']) + 1}"
+    document_hash = sha256_text(content)
+    chunks = chunk_text(content)
+
     document = {
+        "id": document_id,
         "name": payload.get("name"),
-        "content": payload.get("content")
+        "content": content,
+        "sha256": document_hash,
+        "chunks_count": len(chunks)
     }
 
-    cases[case_id]["documents"].append(document)
+    case["documents"].append(document)
+
+    for index, chunk in enumerate(chunks, start=1):
+        case["chunks"].append({
+            "id": f"{document_id}-C{index}",
+            "document_id": document_id,
+            "text": chunk,
+            "sha256": sha256_text(chunk)
+        })
 
     return {
         "message": "document added",
         "document": document
     }
 
+
+@app.get("/cases/{case_id}/chunks")
+def list_chunks(case_id: str):
+    case = get_case_or_404(case_id)
+    return case["chunks"]
+
+
 @app.post("/cases/{case_id}/organize")
 def organize_case(case_id: str):
-    case = cases[case_id]
+    case = get_case_or_404(case_id)
 
-    organized = {
-        "summary": "Potential dispute regarding delivery and payment.",
-        "controversial_points": [
-            "partial delivery",
-            "deadline compliance"
-        ],
-        "documents_count": len(case["documents"])
-    }
-
+    organized = organizer_organize_case(case["documents"])
     case["organized"] = organized
 
     return organized
 
+
 @app.post("/cases/{case_id}/decide")
 def decide_case(case_id: str):
-    case = cases[case_id]
+    case = get_case_or_404(case_id)
 
-    decision = {
-        "framework": "Commercial Balanced",
-        "decision": "Release 70% payment to contractor.",
-        "confidence": 0.81
-    }
+    if not case.get("organized"):
+        raise HTTPException(status_code=400, detail="Case must be organized before decision")
 
+    decision = judge_decide_case(case["organized"])
     case["decision"] = decision
 
     return decision
 
+
 @app.post("/cases/{case_id}/review")
 def review_case(case_id: str):
-    case = cases[case_id]
+    case = get_case_or_404(case_id)
 
-    review = {
-        "approved": True,
-        "issues": [],
-        "needs_human": False
-    }
+    if not case.get("decision"):
+        raise HTTPException(status_code=400, detail="Case must be decided before review")
 
+    review = review_decision(case["decision"])
     case["review"] = review
 
     return review
 
+
 @app.get("/cases/{case_id}/report")
 def report(case_id: str):
-    return cases[case_id]
+    case = get_case_or_404(case_id)
+    return build_report(case)
