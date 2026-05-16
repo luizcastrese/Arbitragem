@@ -1,88 +1,93 @@
 # Arbitragem
 
-AI-assisted computational arbitration infrastructure MVP.
+MVP de uma infraestrutura de arbitragem computacional assistida por IA.
 
-## Vision
+## Visão
 
-The project explores whether structured documentary disputes can be partially adjudicated through multi-agent AI systems operating under explicit normative frameworks.
+O projeto investiga se disputas documentais estruturadas podem ser parcialmente organizadas, analisadas e decididas por sistemas multiagentes de IA operando sob frameworks normativos explícitos.
 
-The system is designed as:
+O sistema foi pensado para ser:
 
 - procedural;
-- auditable;
-- framework-based;
-- retrieval-augmented;
-- evidence-oriented.
+- auditável;
+- baseado em frameworks;
+- orientado por evidências;
+- aumentado por retrieval/RAG.
 
-It is NOT intended to replace courts.
+Ele **não** pretende substituir tribunais ou câmaras arbitrais reais nesta fase.
 
-The initial goal is to test whether structured disputes can be organized, analyzed and reasoned about consistently through computational adjudication pipelines.
+O objetivo inicial é testar se disputas estruturadas podem ser organizadas e analisadas de forma consistente por um pipeline computacional de adjudicação.
 
 ---
 
-# Current Architecture
+## Arquitetura atual
 
-## Pipeline
+### Pipeline
 
 ```text
-create case
+criação do caso
 ↓
-upload documents
+upload de documentos
 ↓
-SHA-256 hashing
+hash SHA-256
 ↓
 chunking
 ↓
-OpenAI embeddings
+embeddings OpenAI
 ↓
 retrieval / RAG
 ↓
-organizer agent
+agente organizador
 ↓
-judge agent
+agente julgador
 ↓
-reviewer agent
+agente revisor
 ↓
-final report
+relatório final
 ```
 
 ---
 
-# Components
+## Componentes
 
-| Component | Status |
+| Componente | Status |
 |---|---|
-| FastAPI backend | ✓ |
-| Hashing | ✓ |
-| Chunking | ✓ |
-| Embeddings | ✓ |
-| Retrieval | ✓ |
-| RAG pipeline | ✓ |
-| Organizer agent | ✓ |
-| Judge agent | ✓ |
-| Reviewer agent | ✓ |
-| OpenAI integration | ✓ |
-| Framework system | ✓ |
-| Audit-oriented structure | ✓ |
+| Backend FastAPI | ✓ |
+| Hashing SHA-256 | ✓ |
+| Chunking de documentos | ✓ |
+| Upload de texto | ✓ |
+| Upload de PDF | ✓ |
+| Parser de PDF | ✓ |
+| Embeddings OpenAI | ✓ |
+| Retrieval lexical | ✓ |
+| Retrieval vetorial | ✓ |
+| Pipeline RAG | ✓ |
+| Agente organizador | ✓ |
+| Agente julgador | ✓ |
+| Agente revisor | ✓ |
+| Integração OpenAI | ✓ |
+| Framework normativo inicial | ✓ |
+| Estrutura orientada à auditabilidade | ✓ |
+| Persistência SQLite/SQLAlchemy inicial | ✓ |
 
 ---
 
-# Initial Framework
+## Framework inicial
 
-## Commercial Balanced
+### Comercial Equilibrado
 
-Principles:
+Princípios:
 
-1. contractual priority;
-2. proportionality;
-3. good faith;
-4. avoid unjust enrichment;
-5. contextual analysis of delays;
-6. partial fulfillment may justify proportional payment.
+1. prioridade contratual;
+2. proporcionalidade;
+3. boa-fé;
+4. vedação ao enriquecimento injusto;
+5. análise contextual de atrasos;
+6. cumprimento parcial pode justificar pagamento proporcional.
 
 ---
 
-# Running Locally
+## Como rodar localmente
 
 ```bash
 python -m venv .venv
@@ -92,7 +97,13 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Open:
+No Windows, a ativação do ambiente virtual pode ser feita com:
+
+```bash
+.venv\Scripts\activate
+```
+
+Depois, acesse:
 
 ```text
 http://localhost:8000/docs
@@ -100,47 +111,79 @@ http://localhost:8000/docs
 
 ---
 
-# Environment Variables
+## Variáveis de ambiente
+
+Crie um arquivo `.env` com:
 
 ```text
-OPENAI_API_KEY=your_api_key
+OPENAI_API_KEY=sua_chave_aqui
 ```
 
 ---
 
-# Main Endpoints
+## Endpoints principais
 
-| Endpoint | Purpose |
+| Endpoint | Função |
 |---|---|
-| POST /cases | create dispute |
-| POST /cases/{id}/documents/text | upload document |
-| GET /cases/{id}/chunks | inspect chunks |
-| GET /cases/{id}/retrieve | test retrieval |
-| POST /cases/{id}/organize | factual organization |
-| POST /cases/{id}/decide | generate decision |
-| POST /cases/{id}/review | review decision |
-| GET /cases/{id}/report | final report |
+| `POST /cases` | criar disputa |
+| `POST /cases/{id}/documents/text` | adicionar documento em texto |
+| `POST /cases/{id}/documents/pdf` | adicionar documento em PDF |
+| `GET /cases/{id}/chunks` | inspecionar chunks |
+| `GET /cases/{id}/retrieve` | testar retrieval |
+| `POST /cases/{id}/organize` | organizar fatos |
+| `POST /cases/{id}/decide` | gerar decisão |
+| `POST /cases/{id}/review` | revisar decisão |
+| `GET /cases/{id}/report` | obter relatório final |
 
 ---
 
-# Current Limitations
+## Fluxo de uso
 
-- no PostgreSQL yet;
-- no persistent storage;
-- no PDF upload endpoint yet;
-- no vector database yet;
-- no authentication;
-- no blockchain/escrow layer;
-- no frontend;
-- no production audit system.
+1. Criar um caso.
+2. Enviar documentos em texto ou PDF.
+3. O sistema gera hashes, chunks e embeddings.
+4. O retrieval recupera trechos relevantes.
+5. O agente organizador estrutura a disputa.
+6. O agente julgador aplica o framework Comercial Equilibrado.
+7. O agente revisor audita a decisão.
+8. O sistema gera relatório final.
 
 ---
 
-# Long-Term Vision
+## Limitações atuais
 
-A marketplace of:
+- a API ainda usa memória em parte do fluxo principal;
+- a persistência SQLAlchemy foi iniciada, mas ainda precisa ser integrada a todos os endpoints;
+- ainda não há autenticação;
+- ainda não há frontend;
+- ainda não há banco vetorial externo como pgvector, Chroma ou Pinecone;
+- ainda não há camada blockchain/escrow;
+- ainda não há auditoria de produção;
+- ainda não há versionamento completo de prompts, modelos e frameworks.
 
-- normative frameworks;
-- arbitration engines;
-- institutional reputations;
-- computational adjudication systems.
+---
+
+## Próximos passos técnicos
+
+1. Integrar totalmente os endpoints ao banco SQLite/SQLAlchemy.
+2. Persistir decisões, revisões e execuções dos agentes.
+3. Criar camada de logs auditáveis.
+4. Adicionar banco vetorial real.
+5. Criar frontend simples.
+6. Adicionar autenticação e permissões por parte.
+7. Evoluir para PostgreSQL + pgvector.
+8. Futuramente, integrar escrow/smart contracts.
+
+---
+
+## Visão de longo prazo
+
+O projeto pode evoluir para um ecossistema de:
+
+- frameworks normativos;
+- motores de arbitragem;
+- reputações institucionais;
+- sistemas computacionais de adjudicação;
+- resolução financeira privada com execução programável.
+
+A tese central é que disputas documentais e financeiras podem ser tratadas por uma infraestrutura institucional computacional, desde que haja consentimento, rastreabilidade, auditabilidade e frameworks explícitos.
