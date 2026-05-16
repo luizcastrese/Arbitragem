@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from openai import OpenAI
 
@@ -8,11 +8,10 @@ from openai import OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-def call_openai_json(system_prompt: str, user_payload: Dict[str, Any], model: str = "gpt-4.1-mini") -> Dict[str, Any]:
-    """Call OpenAI and request a JSON response.
 
-    The function is intentionally small so the rest of the app can swap models later.
-    """
+def call_openai_json(system_prompt: str, user_payload: Dict[str, Any], model: str = "gpt-4.1-mini") -> Dict[str, Any]:
+    """Call OpenAI and request a JSON response."""
+
     response = client.responses.create(
         model=model,
         input=[
@@ -25,3 +24,13 @@ def call_openai_json(system_prompt: str, user_payload: Dict[str, Any], model: st
 
     text = response.output_text
     return json.loads(text)
+
+
+
+def generate_embedding(text: str, model: str = "text-embedding-3-small") -> List[float]:
+    response = client.embeddings.create(
+        model=model,
+        input=text
+    )
+
+    return response.data[0].embedding
