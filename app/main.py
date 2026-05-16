@@ -4,6 +4,7 @@ from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
 from app.core.hashing import sha256_text
+from app.core.manifest import lock_case_manifest
 from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
@@ -37,7 +38,9 @@ def create_case(payload: dict):
         "chunks": [],
         "organized": None,
         "decision": None,
-        "review": None
+        "review": None,
+        "locked_manifest": None,
+        "manifest_locked": False
     }
 
     return cases[case_id]
@@ -52,6 +55,12 @@ def get_case_or_404(case_id: str):
 
 
 def process_document(case: dict, name: str, content: str):
+    if case.get("manifest_locked"):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot modify documents after manifest lock"
+        )
+
     document_id = f"D{len(case['documents']) + 1}"
     document_hash = sha256_text(content)
     chunks = chunk_text(content)
@@ -136,6 +145,37 @@ async def upload_pdf(case_id: str, file: UploadFile = File(...)):
     }
 
 
+@app.post("/cases/{case_id}/lock")
+def lock_manifest(case_id: str):
+    case = get_case_or_404(case_id)
+
+    if len(case["documents"]) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one document is required before locking"
+        )
+
+    manifest = lock_case_manifest(case)
+
+    return {
+        "message": "process manifest locked",
+        "manifest": manifest
+    }
+
+
+@app.get("/cases/{case_id}/manifest")
+def get_manifest(case_id: str):
+    case = get_case_or_404(case_id)
+
+    if not case.get("locked_manifest"):
+        raise HTTPException(
+            status_code=400,
+            detail="Manifest has not been locked yet"
+        )
+
+    return case["locked_manifest"]
+
+
 @app.get("/cases/{case_id}/chunks")
 def list_chunks(case_id: str):
     case = get_case_or_404(case_id)
@@ -167,6 +207,12 @@ def retrieve_chunks(case_id: str, query: str, method: str = "embedding"):
 def organize_case(case_id: str):
     case = get_case_or_404(case_id)
 
+    if not case.get("manifest_locked"):
+        raise HTTPException(
+            status_code=400,
+            detail="Process manifest must be locked before organization"
+        )
+
     organized = organizer_organize_case(
         documents=case["documents"],
         chunks=case["chunks"]
@@ -185,6 +231,7 @@ def decide_case(case_id: str):
         raise HTTPException(status_code=400, detail="Case must be organized before decision")
 
     decision_context = {
+        "manifest": case.get("locked_manifest"),
         "organized_case": case["organized"],
         "retrieved_evidence": {
             "delivery": retrieve_chunks(case_id, "delivery obligations and partial fulfillment"),
@@ -206,7 +253,12 @@ def review_case(case_id: str):
     if not case.get("decision"):
         raise HTTPException(status_code=400, detail="Case must be decided before review")
 
-    review = review_decision(case["decision"])
+    review_payload = {
+        "manifest": case.get("locked_manifest"),
+        "decision": case.get("decision")
+    }
+
+    review = review_decision(review_payload)
     case["review"] = review
 
     return review
