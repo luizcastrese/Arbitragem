@@ -5,6 +5,7 @@ from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
 from app.core.hashing import sha256_text
 from app.documents.chunker import chunk_text
+from app.documents.retrieval import retrieve_relevant_chunks
 from app.reports.report_generator import build_report
 
 app = FastAPI(title="Arbitragem MVP")
@@ -38,6 +39,7 @@ def create_case(payload: dict):
     }
 
     return cases[case_id]
+
 
 
 def get_case_or_404(case_id: str):
@@ -88,11 +90,26 @@ def list_chunks(case_id: str):
     return case["chunks"]
 
 
+@app.get("/cases/{case_id}/retrieve")
+def retrieve_chunks(case_id: str, query: str):
+    case = get_case_or_404(case_id)
+
+    return retrieve_relevant_chunks(
+        query=query,
+        chunks=case["chunks"],
+        limit=5
+    )
+
+
 @app.post("/cases/{case_id}/organize")
 def organize_case(case_id: str):
     case = get_case_or_404(case_id)
 
-    organized = organizer_organize_case(case["documents"])
+    organized = organizer_organize_case(
+        documents=case["documents"],
+        chunks=case["chunks"]
+    )
+
     case["organized"] = organized
 
     return organized
