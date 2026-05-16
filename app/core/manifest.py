@@ -3,18 +3,22 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from app.core.hashing import sha256_text
+from app.core.signing import attach_signature
 
 PLATFORM_VERSION = "0.1.0"
 PROCEDURE_VERSION = "mvp-procedure-0.1"
 DEFAULT_FRAMEWORK = "commercial_balanced_v1"
 
 
+
 def canonical_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+
 def canonical_hash(data: Any) -> str:
     return sha256_text(canonical_json(data))
+
 
 
 def build_process_manifest(
@@ -60,11 +64,16 @@ def build_process_manifest(
             "decision_must_reference_retrieved_evidence": True,
             "reviewer_agent_checks_framework_alignment": True,
             "counterparty_can_verify_manifest_hash": True,
+            "platform_signature_required": True,
+            "manifest_becomes_immutable_after_lock": True,
         },
     }
 
     manifest["manifest_hash"] = canonical_hash(manifest)
-    return manifest
+
+    signed_manifest = attach_signature(manifest)
+    return signed_manifest
+
 
 
 def lock_case_manifest(case: Dict) -> Dict:
