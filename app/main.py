@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
@@ -6,6 +6,7 @@ from app.agents.reviewer import review_decision
 from app.core.hashing import sha256_text
 from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
+from app.documents.pdf_parser import extract_text_from_pdf_bytes
 from app.documents.retrieval import retrieve_relevant_chunks
 from app.reports.report_generator import build_report
 
@@ -42,27 +43,22 @@ def create_case(payload: dict):
     return cases[case_id]
 
 
+
 def get_case_or_404(case_id: str):
     if case_id not in cases:
         raise HTTPException(status_code=404, detail="Case not found")
     return cases[case_id]
 
 
-@app.post("/cases/{case_id}/documents/text")
-def add_document(case_id: str, payload: dict):
-    case = get_case_or_404(case_id)
 
-    content = payload.get("content", "")
-    if not content:
-        raise HTTPException(status_code=400, detail="Document content is required")
-
+def process_document(case: dict, name: str, content: str):
     document_id = f"D{len(case['documents']) + 1}"
     document_hash = sha256_text(content)
     chunks = chunk_text(content)
 
     document = {
         "id": document_id,
-        "name": payload.get("name"),
+        "name": name,
         "content": content,
         "sha256": document_hash,
         "chunks_count": len(chunks)
@@ -86,9 +82,57 @@ def add_document(case_id: str, payload: dict):
 
         case["chunks"].append(chunk_record)
 
+    return document
+
+
+@app.post("/cases/{case_id}/documents/text")
+def add_document(case_id: str, payload: dict):
+    case = get_case_or_404(case_id)
+
+    content = payload.get("content", "")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Document content is required")
+
+    document = process_document(
+        case=case,
+        name=payload.get("name", "text_document"),
+        content=content
+    )
+
     return {
         "message": "document added",
         "document": document
+    }
+
+
+@app.post("/cases/{case_id}/documents/pdf")
+async def upload_pdf(case_id: str, file: UploadFile = File(...)):
+    case = get_case_or_404(case_id)
+
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    file_bytes = await file.read()
+
+    try:
+        extracted_text = extract_text_from_pdf_bytes(file_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"PDF parsing failed: {str(exc)}")
+
+    if not extracted_text.strip():
+        raise HTTPException(status_code=400, detail="No readable text found in PDF")
+
+    document = process_document(
+        case=case,
+        name=file.filename,
+        content=extracted_text
+    )
+
+    return {
+        "message": "pdf processed",
+        "document": document,
+        "text_preview": extracted_text[:1000]
     }
 
 
