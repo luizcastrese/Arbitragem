@@ -5,6 +5,7 @@ from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
 from app.core.hashing import sha256_text
 from app.documents.chunker import chunk_text
+from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.retrieval import retrieve_relevant_chunks
 from app.reports.report_generator import build_report
 
@@ -41,7 +42,6 @@ def create_case(payload: dict):
     return cases[case_id]
 
 
-
 def get_case_or_404(case_id: str):
     if case_id not in cases:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -71,12 +71,20 @@ def add_document(case_id: str, payload: dict):
     case["documents"].append(document)
 
     for index, chunk in enumerate(chunks, start=1):
-        case["chunks"].append({
+        chunk_record = {
             "id": f"{document_id}-C{index}",
             "document_id": document_id,
             "text": chunk,
-            "sha256": sha256_text(chunk)
-        })
+            "sha256": sha256_text(chunk),
+            "embedding": None
+        }
+
+        try:
+            chunk_record["embedding"] = build_embedding(chunk)
+        except Exception:
+            chunk_record["embedding_error"] = True
+
+        case["chunks"].append(chunk_record)
 
     return {
         "message": "document added",
@@ -91,8 +99,18 @@ def list_chunks(case_id: str):
 
 
 @app.get("/cases/{case_id}/retrieve")
-def retrieve_chunks(case_id: str, query: str):
+def retrieve_chunks(case_id: str, query: str, method: str = "embedding"):
     case = get_case_or_404(case_id)
+
+    if method == "embedding":
+        try:
+            return retrieve_by_embedding(
+                query=query,
+                chunks=case["chunks"],
+                limit=5
+            )
+        except Exception:
+            pass
 
     return retrieve_relevant_chunks(
         query=query,
@@ -122,7 +140,16 @@ def decide_case(case_id: str):
     if not case.get("organized"):
         raise HTTPException(status_code=400, detail="Case must be organized before decision")
 
-    decision = judge_decide_case(case["organized"])
+    decision_context = {
+        "organized_case": case["organized"],
+        "retrieved_evidence": {
+            "delivery": retrieve_chunks(case_id, "delivery obligations and partial fulfillment"),
+            "payment": retrieve_chunks(case_id, "payment terms and proportional payment"),
+            "deadline": retrieve_chunks(case_id, "deadline compliance and delay")
+        }
+    }
+
+    decision = judge_decide_case(decision_context)
     case["decision"] = decision
 
     return decision
