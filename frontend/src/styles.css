@@ -49,30 +49,6 @@ body {
   line-height: 1.7;
 }
 
-.hero-actions {
-  margin-top: 36px;
-  display: flex;
-  gap: 16px;
-}
-
-button {
-  border: none;
-  border-radius: 12px;
-  padding: 14px 22px;
-  font-size: 16px;
-  cursor: pointer;
-}
-
-.primary {
-  background: #6366f1;
-  color: white;
-}
-
-.secondary {
-  background: rgba(255,255,255,0.08);
-  color: white;
-}
-
 .content {
   max-width: 1200px;
   margin: 0 auto;
@@ -85,11 +61,20 @@ button {
   gap: 24px;
 }
 
-.card {
+.card,
+.panel {
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 20px;
+}
+
+.card {
   padding: 28px;
+}
+
+.panel {
+  margin-top: 32px;
+  padding: 32px;
 }
 
 .card-icon {
@@ -97,51 +82,90 @@ button {
   color: #818cf8;
 }
 
+.card h3,
+.panel h2 {
+  margin-bottom: 14px;
+}
+
 .card h3 {
-  margin-bottom: 12px;
   font-size: 22px;
 }
 
-.card p {
+.card p,
+.muted {
   color: #cbd5e1;
   line-height: 1.7;
 }
 
-.workflow {
-  margin-top: 72px;
-}
-
-.workflow h2 {
-  font-size: 34px;
-  margin-bottom: 32px;
-}
-
-.steps {
+.form {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 
-.step {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 18px 22px;
-  background: rgba(255,255,255,0.04);
-  border-radius: 16px;
-  border: 1px solid rgba(255,255,255,0.08);
+.two-columns {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  margin-top: 24px;
 }
 
-.step-number {
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
-  display: flex;
+input,
+textarea {
+  width: 100%;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 14px;
+  color: white;
+}
+
+textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
+button {
+  border: none;
+  border-radius: 12px;
+  padding: 14px 22px;
+  font-size: 15px;
+  cursor: pointer;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
+}
+
+.primary {
   background: #6366f1;
-  font-weight: bold;
+  color: white;
 }
 
-.step span {
-  font-size: 18px;
+.secondary {
+  background: rgba(255,255,255,0.08);
+  color: white;
+}
+
+.actions-row {
+  margin-top: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.actions-row button {
+  background: rgba(99,102,241,0.18);
+  color: white;
+}
+
+.status {
+  margin-top: 18px;
+  color: #c7d2fe;
+}
+
+.result pre {
+  margin-top: 18px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 14px;
+  padding: 18px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
 }
