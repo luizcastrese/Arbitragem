@@ -3,8 +3,10 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
+from app.core.audit import build_audit_event
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
+from app.core.store import append_audit, create_case_record, get_case, list_cases
 from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
@@ -12,8 +14,6 @@ from app.documents.retrieval import retrieve_relevant_chunks
 from app.reports.report_generator import build_report
 
 app = FastAPI(title="Arbitragem MVP")
-
-cases = {}
 
 
 @app.get("/")
@@ -25,32 +25,34 @@ def root():
     }
 
 
+@app.get("/cases")
+def get_cases():
+    return list_cases()
+
+
 @app.post("/cases")
 def create_case(payload: dict):
-    case_id = str(len(cases) + 1)
+    case = create_case_record(payload)
 
-    cases[case_id] = {
-        "id": case_id,
-        "title": payload.get("title"),
-        "claimant": payload.get("claimant"),
-        "respondent": payload.get("respondent"),
-        "documents": [],
-        "chunks": [],
-        "organized": None,
-        "decision": None,
-        "review": None,
-        "locked_manifest": None,
-        "manifest_locked": False
-    }
+    append_audit(
+        case,
+        "case_created",
+        build_audit_event("case_created", {
+            "title": case.get("title")
+        })
+    )
 
-    return cases[case_id]
+    return case
 
 
 
 def get_case_or_404(case_id: str):
-    if case_id not in cases:
+    case = get_case(case_id)
+
+    if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    return cases[case_id]
+
+    return case
 
 
 
@@ -74,6 +76,15 @@ def process_document(case: dict, name: str, content: str):
     }
 
     case["documents"].append(document)
+
+    append_audit(
+        case,
+        "document_added",
+        build_audit_event("document_added", {
+            "document_id": document_id,
+            "sha256": document_hash
+        })
+    )
 
     for index, chunk in enumerate(chunks, start=1):
         chunk_record = {
@@ -157,6 +168,14 @@ def lock_manifest(case_id: str):
 
     manifest = lock_case_manifest(case)
 
+    append_audit(
+        case,
+        "manifest_locked",
+        build_audit_event("manifest_locked", {
+            "manifest_hash": manifest.get("manifest_hash")
+        })
+    )
+
     return {
         "message": "process manifest locked",
         "manifest": manifest
@@ -174,6 +193,12 @@ def get_manifest(case_id: str):
         )
 
     return case["locked_manifest"]
+
+
+@app.get("/cases/{case_id}/audit")
+def get_audit(case_id: str):
+    case = get_case_or_404(case_id)
+    return case.get("audit_log", [])
 
 
 @app.get("/cases/{case_id}/chunks")
@@ -220,6 +245,14 @@ def organize_case(case_id: str):
 
     case["organized"] = organized
 
+    append_audit(
+        case,
+        "case_organized",
+        build_audit_event("case_organized", {
+            "organized": True
+        })
+    )
+
     return organized
 
 
@@ -243,6 +276,14 @@ def decide_case(case_id: str):
     decision = judge_decide_case(decision_context)
     case["decision"] = decision
 
+    append_audit(
+        case,
+        "decision_generated",
+        build_audit_event("decision_generated", {
+            "confidence": decision.get("confidence")
+        })
+    )
+
     return decision
 
 
@@ -260,6 +301,14 @@ def review_case(case_id: str):
 
     review = review_decision(review_payload)
     case["review"] = review
+
+    append_audit(
+        case,
+        "review_generated",
+        build_audit_event("review_generated", {
+            "approved": review.get("approved")
+        })
+    )
 
     return review
 
