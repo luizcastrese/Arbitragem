@@ -38,7 +38,7 @@ def retrieve_by_embedding(query: str, chunks: List[Dict], limit: int = 5) -> Lis
         score = cosine_similarity(query_embedding, embedding)
 
         scored_chunks.append({
-            **chunk,
+            **{key: value for key, value in chunk.items() if key != "embedding"},
             "score": round(score, 4)
         })
 

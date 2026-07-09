@@ -1,105 +1,136 @@
 from typing import Dict, List
 
-from app.core.llm import call_openai_json
+from pydantic import BaseModel
+
+from app.core.config import get_settings
+from app.core.llm import call_openai_structured
 from app.documents.embeddings import retrieve_by_embedding
 from app.documents.retrieval import retrieve_relevant_chunks
 
 
 ORGANIZATION_QUERIES = [
-    "delivery obligations",
-    "payment terms",
-    "deadline compliance",
-    "scope disagreement",
-    "partial fulfillment"
+    "obrigações de entrega",
+    "condições de pagamento",
+    "cumprimento de prazos",
+    "divergência sobre o escopo",
+    "cumprimento parcial",
 ]
 
 
+class OrganizerOutput(BaseModel):
+    summary: str
+    factual_overview: str
+    undisputed_facts: List[str]
+    disputed_facts: List[str]
+    claimant_requests: List[str]
+    respondent_arguments: List[str]
+    relevant_evidence: List[str]
+    relevant_clauses: List[str]
+    timeline: List[str]
+    missing_information: List[str]
+
+
 SYSTEM_PROMPT = """
-You are a procedural organizer for an AI-assisted arbitration system.
+Você é o agente organizador de um sistema de auditoria decisória por IA.
+Não decida a disputa. Organize somente o registro fornecido.
 
-Your job is NOT to decide the dispute.
-Your job is to organize the record.
-
-Return valid JSON only with these fields:
-- summary
-- factual_overview
-- undisputed_facts
-- disputed_facts
-- claimant_requests
-- respondent_arguments
-- relevant_evidence
-- relevant_clauses
-- timeline
-- missing_information
-- retrieved_context_used
-
-Rules:
-- Do not invent facts.
-- Cite document_id and chunk_id whenever possible.
-- Separate facts from allegations.
-- If evidence is weak or missing, say so.
+Regras:
+- Não invente fatos, cláusulas, datas ou pedidos.
+- Separe fatos comprovados de alegações.
+- Use referências no formato document_id/chunk_id sempre que possível.
+- Aponte evidência fraca, contraditória ou ausente.
+- Responda em português do Brasil.
 """
-
 
 
 def _safe_retrieve(query: str, chunks: List[Dict], limit: int = 3) -> List[Dict]:
     try:
-        return retrieve_by_embedding(query=query, chunks=chunks, limit=limit)
+        embedded = retrieve_by_embedding(query=query, chunks=chunks, limit=limit)
+        if embedded:
+            return embedded
     except Exception:
-        return retrieve_relevant_chunks(query=query, chunks=chunks, limit=limit)
+        pass
+    return retrieve_relevant_chunks(query=query, chunks=chunks, limit=limit)
 
+
+def _fallback_organization(
+    documents: List[Dict],
+    retrieved_context: Dict[str, List[Dict]],
+    reason: str,
+) -> Dict:
+    evidence = []
+    for results in retrieved_context.values():
+        for chunk in results:
+            reference = f"{chunk.get('document_id')}/{chunk.get('id')}"
+            if reference not in evidence:
+                evidence.append(reference)
+
+    return {
+        "summary": "Documentos recebidos e indexados; análise semântica indisponível.",
+        "factual_overview": " ".join(
+            document.get("content", "")[:500] for document in documents
+        )[:2000],
+        "undisputed_facts": [],
+        "disputed_facts": [],
+        "claimant_requests": [],
+        "respondent_arguments": [],
+        "relevant_evidence": evidence[:10],
+        "relevant_clauses": [],
+        "timeline": [],
+        "missing_information": [
+            "A organização por IA não foi executada.",
+            "É necessária revisão humana dos documentos.",
+        ],
+        "retrieved_context_used": retrieved_context,
+        "execution": {
+            "mode": "safe_fallback",
+            "model": None,
+            "reason": reason,
+        },
+    }
 
 
 def organize_case(documents: List[Dict], chunks: List[Dict]) -> Dict:
-    combined_text = "\n".join([
-        doc.get("content", "")[:2000] for doc in documents
-    ])
-
-    retrieved_context = {}
-
-    for query in ORGANIZATION_QUERIES:
-        retrieved_context[query] = _safe_retrieve(
-            query=query,
-            chunks=chunks,
-            limit=3
-        )
-
+    retrieved_context = {
+        query: _safe_retrieve(query=query, chunks=chunks, limit=3)
+        for query in ORGANIZATION_QUERIES
+    }
     payload = {
         "documents": [
             {
-                "id": doc.get("id"),
-                "name": doc.get("name"),
-                "sha256": doc.get("sha256"),
-                "content_preview": doc.get("content", "")[:1500]
+                "id": document.get("id"),
+                "name": document.get("name"),
+                "sha256": document.get("sha256"),
+                "submitted_by": document.get("submitted_by"),
+                "material_type": document.get("material_type"),
+                "purpose": document.get("purpose"),
+                "counterparty_response_status": document.get("response_status"),
+                "counterparty_response": document.get("response_text"),
+                "admitted": document.get("admitted"),
+                "content": document.get("content", "")[:8000],
             }
-            for doc in documents
+            for document in documents
         ],
         "retrieved_context": retrieved_context,
-        "combined_preview": combined_text[:4000]
     }
 
     try:
-        return call_openai_json(
+        result = call_openai_structured(
             system_prompt=SYSTEM_PROMPT,
-            user_payload=payload
+            user_payload=payload,
+            response_model=OrganizerOutput,
         )
-    except Exception:
-        return {
-            "summary": "Potential contractual dispute detected.",
-            "factual_overview": combined_text[:1000],
-            "undisputed_facts": [],
-            "disputed_facts": [
-                "delivery status",
-                "payment proportionality"
-            ],
-            "claimant_requests": [],
-            "respondent_arguments": [],
-            "relevant_evidence": [],
-            "relevant_clauses": [],
-            "timeline": [],
-            "missing_information": [
-                "LLM organization failed; fallback organization used."
-            ],
-            "retrieved_context_used": retrieved_context,
-            "documents_analyzed": len(documents)
-        }
+    except Exception as exc:
+        return _fallback_organization(
+            documents,
+            retrieved_context,
+            type(exc).__name__,
+        )
+
+    result["retrieved_context_used"] = retrieved_context
+    result["execution"] = {
+        "mode": "openai",
+        "model": get_settings().openai_model,
+        "reason": None,
+    }
+    return result

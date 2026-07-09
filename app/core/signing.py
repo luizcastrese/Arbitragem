@@ -1,14 +1,12 @@
 import hmac
-import os
 from typing import Any, Dict
 
-from app.core.manifest import canonical_json
-
-DEFAULT_SIGNING_SECRET = "development-only-secret-change-me"
+from app.core.canonical import canonical_json
+from app.core.config import get_settings
 
 
 def get_signing_secret() -> str:
-    return os.getenv("PLATFORM_SIGNING_SECRET", DEFAULT_SIGNING_SECRET)
+    return get_settings().platform_signing_secret
 
 
 def sign_payload(payload: Any) -> str:

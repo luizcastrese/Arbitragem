@@ -1,0 +1,1 @@
+"""Arbitragem application package."""

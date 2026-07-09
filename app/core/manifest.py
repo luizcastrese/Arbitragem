@@ -1,23 +1,13 @@
-import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Dict, List
 
-from app.core.hashing import sha256_text
+from app.core.canonical import canonical_hash
+from app.core.config import get_settings
 from app.core.signing import attach_signature
 
-PLATFORM_VERSION = "0.1.0"
-PROCEDURE_VERSION = "mvp-procedure-0.1"
+PLATFORM_VERSION = "0.4.0"
+PROCEDURE_VERSION = "mvp-procedure-0.4"
 DEFAULT_FRAMEWORK = "commercial_balanced_v1"
-
-
-
-def canonical_json(data: Any) -> str:
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-
-def canonical_hash(data: Any) -> str:
-    return sha256_text(canonical_json(data))
 
 
 
@@ -32,6 +22,19 @@ def build_process_manifest(
             "id": document.get("id"),
             "name": document.get("name"),
             "sha256": document.get("sha256"),
+            "submitted_by": document.get("submitted_by"),
+            "material_type": document.get("material_type"),
+            "purpose": document.get("purpose"),
+            "disclosed_at": document.get("disclosed_at"),
+            "acknowledged_at": document.get("acknowledged_at"),
+            "acknowledged_by": document.get("acknowledged_by"),
+            "response_status": document.get("response_status"),
+            "response_sha256": (
+                canonical_hash({"response": document.get("response_text")})
+                if document.get("response_text")
+                else None
+            ),
+            "admitted": document.get("admitted"),
             "chunks_count": document.get("chunks_count"),
         }
         for document in case.get("documents", [])
@@ -51,6 +54,8 @@ def build_process_manifest(
         "procedure_version": PROCEDURE_VERSION,
         "case_id": case.get("id"),
         "case_title": case.get("title"),
+        "consent": case.get("consent"),
+        "contradictory": case.get("contradictory"),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "framework": framework,
         "model_policy": selected_model_policy,
@@ -61,7 +66,11 @@ def build_process_manifest(
             "initiating_party_cannot_choose_private_prompt": True,
             "initiating_party_cannot_change_framework_after_lock": True,
             "all_documents_are_hashed": True,
+            "all_material_must_be_disclosed_to_counterparty": True,
+            "decision_uses_only_admitted_material": True,
+            "pending_counterparty_response_blocks_lock": True,
             "decision_must_reference_retrieved_evidence": True,
+            "consensual_resolution_screening_precedes_adjudication": True,
             "reviewer_agent_checks_framework_alignment": True,
             "counterparty_can_verify_manifest_hash": True,
             "platform_signature_required": True,
@@ -91,18 +100,23 @@ def lock_case_manifest(case: Dict) -> Dict:
             "vedação ao enriquecimento injusto",
             "análise contextual de atrasos",
             "cumprimento parcial pode justificar pagamento proporcional",
+            "prioridade à solução consensual quando houver convergência de interesses",
         ],
     }
 
+    settings = get_settings()
     model_policy = {
-        "organizer": "configured_by_platform",
-        "judge": "configured_by_platform",
-        "reviewer": "configured_by_platform",
-        "temperature": 0,
+        "conciliator": settings.openai_model,
+        "organizer": settings.openai_model,
+        "judge": settings.openai_model,
+        "reviewer": settings.openai_model,
+        "embedding": settings.embedding_model,
+        "openai_enabled_at_lock": settings.openai_enabled,
         "user_configurable_private_instructions": False,
     }
 
     allowed_agents = [
+        "conciliator",
         "organizer",
         "judge",
         "reviewer",
@@ -115,6 +129,4 @@ def lock_case_manifest(case: Dict) -> Dict:
         allowed_agents=allowed_agents,
     )
 
-    case["locked_manifest"] = manifest
-    case["manifest_locked"] = True
     return manifest

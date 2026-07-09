@@ -36,7 +36,10 @@ def retrieve_relevant_chunks(query: str, chunks: List[Dict], limit: int = 5) -> 
     for chunk in chunks:
         chunk_vector = term_frequency(tokenize(chunk.get("text", "")))
         score = cosine_similarity(query_vector, chunk_vector)
-        scored_chunks.append({**chunk, "score": round(score, 4)})
+        scored_chunks.append({
+            **{key: value for key, value in chunk.items() if key != "embedding"},
+            "score": round(score, 4),
+        })
 
     scored_chunks.sort(key=lambda item: item["score"], reverse=True)
     return scored_chunks[:limit]

@@ -1,189 +1,207 @@
 # Arbitragem
 
-MVP de uma infraestrutura de arbitragem computacional assistida por IA.
+MVP operacional de uma infraestrutura de auditoria decisória de disputas
+documentais por IA.
 
-## Visão
+O sistema cria um procedimento persistente, fixa documentos com SHA-256,
+recupera evidências, conduz quantas rodadas consensuais forem úteis, organiza o
+registro, profere uma decisão computacional e executa uma auditoria independente
+por uma segunda IA. Cada etapa é persistida no SQLite e registrada em uma
+cadeia de auditoria encadeada por hashes.
 
-O projeto investiga se disputas documentais estruturadas podem ser parcialmente organizadas, analisadas e decididas por sistemas multiagentes de IA operando sob frameworks normativos explícitos.
+> Este projeto é experimental. Ele profere uma decisão dentro do procedimento
+> computacional configurado, mas essa saída não constitui, por si só, sentença
+> arbitral ou decisão estatal. Eventual eficácia jurídica depende da estrutura
+> contratual adotada e da legislação aplicável.
 
-O sistema foi pensado para ser:
+## O que funciona
 
-- procedural;
-- auditável;
-- baseado em frameworks;
-- orientado por evidências;
-- aumentado por retrieval/RAG.
+- API FastAPI com validação e documentação OpenAPI;
+- painel React responsivo;
+- casos persistidos em SQLite;
+- credenciais locais separadas para cliente, empresa e gestor em cada caso;
+- aceite individual das duas partes antes da formação do procedimento;
+- upload de texto e PDF;
+- contraditório documentado: disponibilização, ciência, resposta ou renúncia e
+  admissão antes do uso pela IA;
+- hashing SHA-256 e chunking com sobreposição;
+- embeddings OpenAI opcionais;
+- recuperação vetorial com fallback lexical;
+- agentes conciliador, organizador, julgador e revisor;
+- rodadas de composição com respostas separadas da empresa e do cliente;
+- Structured Outputs pela Responses API;
+- manifesto imutável assinado com HMAC-SHA256;
+- verificação do manifesto e da cadeia de auditoria;
+- etapas idempotentes e documentos imutáveis após o lock;
+- modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
+- testes automatizados e imagem Docker.
 
-Ele **não** pretende substituir tribunais ou câmaras arbitrais reais nesta fase.
-
-O objetivo inicial é testar se disputas estruturadas podem ser organizadas e analisadas de forma consistente por um pipeline computacional de adjudicação.
-
----
-
-## Arquitetura atual
-
-### Pipeline
+## Fluxo
 
 ```text
-criação do caso
-↓
-upload de documentos
-↓
-hash SHA-256
-↓
-chunking
-↓
-embeddings OpenAI
-↓
-retrieval / RAG
-↓
-agente organizador
-↓
-agente julgador
-↓
-agente revisor
-↓
-relatório final
+caso
+  -> aceite bilateral
+  -> documentos e argumentos identificados por autor e finalidade
+  -> ciência da contraparte
+  -> resposta, contestação ou renúncia
+  -> admissão do material
+  -> manifesto travado
+  -> rodadas de conciliação ou mediação
+  -> organização
+  -> decisão da IA
+  -> auditoria independente
+  -> relatório
 ```
 
----
+Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
+uma parte, disponibilizado à contraparte, reconhecido como recebido e respondido
+ou expressamente dispensado. O gestor só pode admitir o material depois desse
+percurso, e o lock é bloqueado enquanto houver pendência.
 
-## Componentes
+Depois do lock, novos documentos não são aceitos. Cada rodada de composição
+considera as posições atualizadas das partes. A IA informa se vale continuar,
+quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 
-| Componente | Status |
-|---|---|
-| Backend FastAPI | ✓ |
-| Hashing SHA-256 | ✓ |
-| Chunking de documentos | ✓ |
-| Upload de texto | ✓ |
-| Upload de PDF | ✓ |
-| Parser de PDF | ✓ |
-| Embeddings OpenAI | ✓ |
-| Retrieval lexical | ✓ |
-| Retrieval vetorial | ✓ |
-| Pipeline RAG | ✓ |
-| Agente organizador | ✓ |
-| Agente julgador | ✓ |
-| Agente revisor | ✓ |
-| Integração OpenAI | ✓ |
-| Framework normativo inicial | ✓ |
-| Estrutura orientada à auditabilidade | ✓ |
-| Persistência SQLite/SQLAlchemy inicial | ✓ |
+## Usuários do produto
 
----
+- **cliente reclamante:** apresenta sua versão, documentos, pedidos e respostas
+  às propostas; deve compreender e aceitar o procedimento;
+- **empresa reclamada:** apresenta defesa e documentos, formula contrapropostas
+  e acompanha exposição, acordos e decisões de forma consistente;
+- **gestor do procedimento:** administra convites, acesso, prazos e integridade
+  do rito, sem decidir o mérito;
+- **representantes e advogados:** podem apoiar qualquer parte na preparação e
+  manifestação dentro do caso.
 
-## Framework inicial
+O nicho inicial é a resolução privada de reclamações entre empresas e clientes,
+especialmente situações que já geraram ou poderiam gerar processos. A empresa
+ganha previsibilidade e escala; o cliente ganha um canal inteligível, bilateral
+e baseado em evidências. A composição é voluntária e não pode ser apresentada
+como imposição automática da empresa à contraparte.
 
-### Comercial Equilibrado
+## Rodar localmente
 
-Princípios:
-
-1. prioridade contratual;
-2. proporcionalidade;
-3. boa-fé;
-4. vedação ao enriquecimento injusto;
-5. análise contextual de atrasos;
-6. cumprimento parcial pode justificar pagamento proporcional.
-
----
-
-## Como rodar localmente
+Requisitos: Python 3.9+ e Node.js 20.19+.
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
 cp .env.example .env
+
+cd frontend
+npm install
+npm run build
+cd ..
+
 uvicorn app.main:app --reload
 ```
 
-No Windows, a ativação do ambiente virtual pode ser feita com:
+Acesse:
+
+- painel: <http://127.0.0.1:8000/ui/>
+- documentação: <http://127.0.0.1:8000/docs>
+- saúde: <http://127.0.0.1:8000/health>
+
+Para desenvolver o frontend com hot reload:
 
 ```bash
-.venv\Scripts\activate
+cd frontend
+npm run dev
 ```
 
-Depois, acesse:
+## Rodar com Docker
 
-```text
-http://localhost:8000/docs
+```bash
+cp .env.example .env
+docker compose up --build
 ```
 
----
+O Compose publica a aplicação apenas em `127.0.0.1:8000` e persiste o banco em
+`./data`.
 
-## Variáveis de ambiente
+## Configuração
 
-Crie um arquivo `.env` com:
+Variáveis do arquivo `.env`:
 
-```text
-OPENAI_API_KEY=sua_chave_aqui
+| Variável | Uso |
+|---|---|
+| `OPENAI_API_KEY` | Ativa embeddings e os quatro agentes |
+| `OPENAI_MODEL` | Modelo dos agentes; padrão `gpt-5-mini` |
+| `OPENAI_EMBEDDING_MODEL` | Modelo de embedding |
+| `DATABASE_URL` | Banco SQLAlchemy |
+| `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
+| `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
+| `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
+
+Gere um segredo local:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
----
+Sem `OPENAI_API_KEY`, o sistema continua executável. Ele organiza o material
+com recuperação lexical, mas não profere decisão de mérito: o resultado fica
+explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 
 ## Endpoints principais
 
 | Endpoint | Função |
 |---|---|
-| `POST /cases` | criar disputa |
-| `POST /cases/{id}/documents/text` | adicionar documento em texto |
-| `POST /cases/{id}/documents/pdf` | adicionar documento em PDF |
-| `GET /cases/{id}/chunks` | inspecionar chunks |
-| `GET /cases/{id}/retrieve` | testar retrieval |
-| `POST /cases/{id}/organize` | organizar fatos |
-| `POST /cases/{id}/decide` | gerar decisão |
-| `POST /cases/{id}/review` | revisar decisão |
-| `GET /cases/{id}/report` | obter relatório final |
+| `POST /cases` | Criar caso |
+| `GET /cases` | Listar casos |
+| `GET /cases/{id}` | Reabrir caso completo |
+| `POST /cases/{id}/consent` | Registrar aceite individual da parte |
+| `POST /cases/{id}/documents/text` | Adicionar texto |
+| `POST /cases/{id}/documents/pdf` | Adicionar PDF |
+| `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |
+| `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
+| `POST /cases/{id}/documents/{document_id}/admit` | Admitir material após contraditório |
+| `POST /cases/{id}/lock` | Travar manifesto |
+| `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
+| `GET /cases/{id}/retrieve` | Consultar evidências |
+| `POST /cases/{id}/organize` | Organizar registro |
+| `POST /cases/{id}/decide` | Proferir decisão da IA |
+| `POST /cases/{id}/review` | Auditar decisão |
+| `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
+| `GET /cases/{id}/report` | Obter relatório consolidado |
 
----
+## Testes
 
-## Fluxo de uso
+```bash
+source .venv/bin/activate
+python -m pytest
 
-1. Criar um caso.
-2. Enviar documentos em texto ou PDF.
-3. O sistema gera hashes, chunks e embeddings.
-4. O retrieval recupera trechos relevantes.
-5. O agente organizador estrutura a disputa.
-6. O agente julgador aplica o framework Comercial Equilibrado.
-7. O agente revisor audita a decisão.
-8. O sistema gera relatório final.
+cd frontend
+npm run build
+npm audit --audit-level=moderate
+```
 
----
+Os testes cobrem o fluxo integral, isolamento entre os papéis, contraditório,
+persistência, imutabilidade após o lock, idempotência, PDF, transições inválidas,
+assinatura e auditoria.
 
-## Limitações atuais
+## Limites antes de produção pública
 
-- a API ainda usa memória em parte do fluxo principal;
-- a persistência SQLAlchemy foi iniciada, mas ainda precisa ser integrada a todos os endpoints;
-- ainda não há autenticação;
-- ainda não há frontend;
-- ainda não há banco vetorial externo como pgvector, Chroma ou Pinecone;
-- ainda não há camada blockchain/escrow;
-- ainda não há auditoria de produção;
-- ainda não há versionamento completo de prompts, modelos e frameworks.
+- as credenciais por papel são tokens locais do caso; ainda não há contas,
+  identidade verificada, recuperação de acesso ou autenticação multifator;
+- SQLite é adequado ao MVP local, não a alta concorrência;
+- não há migrations com Alembic;
+- prompts e avaliações ainda precisam de versionamento formal;
+- a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
+- não há observabilidade, rate limiting ou gestão de segredos;
+- não há validação jurídica dos frameworks;
+- decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
----
+Antes de exposição pública, a próxima etapa é identidade verificada, entrega
+segura de convites, autenticação robusta, PostgreSQL, Alembic, armazenamento
+privado de documentos, notificações de prazo, monitoramento e uma bateria de
+avaliações jurídicas.
 
-## Próximos passos técnicos
+## Referências OpenAI
 
-1. Integrar totalmente os endpoints ao banco SQLite/SQLAlchemy.
-2. Persistir decisões, revisões e execuções dos agentes.
-3. Criar camada de logs auditáveis.
-4. Adicionar banco vetorial real.
-5. Criar frontend simples.
-6. Adicionar autenticação e permissões por parte.
-7. Evoluir para PostgreSQL + pgvector.
-8. Futuramente, integrar escrow/smart contracts.
-
----
-
-## Visão de longo prazo
-
-O projeto pode evoluir para um ecossistema de:
-
-- frameworks normativos;
-- motores de arbitragem;
-- reputações institucionais;
-- sistemas computacionais de adjudicação;
-- resolução financeira privada com execução programável.
-
-A tese central é que disputas documentais e financeiras podem ser tratadas por uma infraestrutura institucional computacional, desde que haja consentimento, rastreabilidade, auditabilidade e frameworks explícitos.
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [Embeddings](https://developers.openai.com/api/docs/guides/embeddings)
+- [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini)
