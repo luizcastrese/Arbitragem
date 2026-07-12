@@ -1,4 +1,8 @@
-# Arbitragem
+# Valindor
+
+Plataforma de resolução e auditoria decisória por IA, criada para reduzir
+drasticamente o custo de disputas entre empresas e clientes sem sacrificar
+contraditório, transparência ou integridade.
 
 MVP operacional de uma infraestrutura de auditoria decisória de disputas
 documentais por IA.
@@ -20,6 +24,9 @@ cadeia de auditoria encadeada por hashes.
 - painel React responsivo;
 - casos persistidos em SQLite;
 - credenciais locais separadas para cliente, empresa e gestor em cada caso;
+- contas com senha derivada por PBKDF2 e sessões expiráveis;
+- convites de uso único vinculados ao e-mail e ao papel no caso;
+- agenda processual com responsável, vencimento e notificações internas;
 - aceite individual das duas partes antes da formação do procedimento;
 - upload de texto e PDF;
 - contraditório documentado: disponibilização, ciência, resposta ou renúncia e
@@ -34,6 +41,8 @@ cadeia de auditoria encadeada por hashes.
 - verificação do manifesto e da cadeia de auditoria;
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
+- relatório final Word com o histórico completo, decisão, auditoria e hashes;
+- PostgreSQL e migrações Alembic no ambiente Docker;
 - testes automatizados e imagem Docker.
 
 ## Fluxo
@@ -57,6 +66,11 @@ Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
 uma parte, disponibilizado à contraparte, reconhecido como recebido e respondido
 ou expressamente dispensado. O gestor só pode admitir o material depois desse
 percurso, e o lock é bloqueado enquanto houver pendência.
+
+O aceite registra a versão dos termos exibidos às partes: participação
+voluntária, acesso a todo material, oportunidade de resposta, composição
+consensual, decisão fundamentada por IA, auditoria independente e revisão
+humana quando indicada.
 
 Depois do lock, novos documentos não são aceitos. Cada rodada de composição
 considera as posições atualizadas das partes. A IA informa se vale continuar,
@@ -118,8 +132,15 @@ cp .env.example .env
 docker compose up --build
 ```
 
-O Compose publica a aplicação apenas em `127.0.0.1:8000` e persiste o banco em
-`./data`.
+O Compose publica a aplicação apenas em `127.0.0.1:8000`, inicia PostgreSQL,
+aguarda o banco ficar saudável e executa as migrações antes da API. Troque
+`POSTGRES_PASSWORD` no `.env` antes de usar fora da máquina local.
+
+Para aplicar migrações sem Docker:
+
+```bash
+alembic upgrade head
+```
 
 ## Configuração
 
@@ -131,9 +152,13 @@ Variáveis do arquivo `.env`:
 | `OPENAI_MODEL` | Modelo dos agentes; padrão `gpt-5-mini` |
 | `OPENAI_EMBEDDING_MODEL` | Modelo de embedding |
 | `DATABASE_URL` | Banco SQLAlchemy |
+| `POSTGRES_DB` | Banco criado pelo Docker Compose |
+| `POSTGRES_USER` | Usuário PostgreSQL do Compose |
+| `POSTGRES_PASSWORD` | Senha PostgreSQL do Compose |
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
+| `AUTH_REQUIRED` | Exige conta e participação no caso nas consultas |
 
 Gere um segredo local:
 
@@ -150,6 +175,12 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | Endpoint | Função |
 |---|---|
 | `POST /cases` | Criar caso |
+| `POST /auth/register` | Criar conta e sessão |
+| `POST /auth/login` | Entrar e criar sessão expiráveis |
+| `POST /auth/logout` | Encerrar a sessão atual |
+| `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
+| `POST /invitations/accept` | Aceitar convite na conta correspondente |
+| `POST /cases/{id}/deadlines` | Criar prazo e notificações |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte |
@@ -167,6 +198,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/review` | Auditar decisão |
 | `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
+| `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
 
 ## Testes
 
@@ -179,26 +211,28 @@ npm run build
 npm audit --audit-level=moderate
 ```
 
-Os testes cobrem o fluxo integral, isolamento entre os papéis, contraditório,
+Os testes cobrem o fluxo integral, contas, convites, isolamento entre os papéis, contraditório,
 persistência, imutabilidade após o lock, idempotência, PDF, transições inválidas,
-assinatura e auditoria.
+agenda, relatório Word, assinatura e auditoria.
 
 ## Limites antes de produção pública
 
-- as credenciais por papel são tokens locais do caso; ainda não há contas,
-  identidade verificada, recuperação de acesso ou autenticação multifator;
-- SQLite é adequado ao MVP local, não a alta concorrência;
-- não há migrations com Alembic;
+- contas por e-mail reduzem o risco de compartilhamento indevido, mas ainda não
+  há verificação de e-mail, recuperação de acesso ou autenticação multifator;
+- o modo local mantém tokens por papel para compatibilidade; uma implantação
+  pública deve exigir conta em todas as rotas e desabilitar esse modo;
+- arquivos ainda ficam no banco; produção deve usar armazenamento privado,
+  criptografia e URLs temporárias;
 - prompts e avaliações ainda precisam de versionamento formal;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - não há observabilidade, rate limiting ou gestão de segredos;
 - não há validação jurídica dos frameworks;
 - decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
-Antes de exposição pública, a próxima etapa é identidade verificada, entrega
-segura de convites, autenticação robusta, PostgreSQL, Alembic, armazenamento
-privado de documentos, notificações de prazo, monitoramento e uma bateria de
-avaliações jurídicas.
+Antes de exposição pública, a próxima etapa é verificar e-mails, enviar convites
+por provedor transacional, exigir autenticação em todas as rotas, armazenar
+documentos em serviço privado, adicionar rate limiting e monitoramento e
+concluir uma bateria de avaliações e revisão jurídica.
 
 ## Referências OpenAI
 

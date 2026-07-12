@@ -1,11 +1,14 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
 import hashlib
+from io import BytesIO
 from pathlib import Path
 import secrets
 from typing import Dict, List
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -20,6 +23,23 @@ from app.core.config import get_settings
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
 from app.core.signing import verify_signature
+from app.db.access_repository import (
+    accept_invitation,
+    add_member,
+    authenticate_user,
+    create_deadline,
+    create_invitation,
+    create_notification,
+    create_session,
+    deadline_to_dict,
+    get_user_by_token,
+    invitation_to_dict,
+    register_user,
+    revoke_session,
+    user_case_ids,
+    user_has_role,
+    user_to_dict,
+)
 from app.db.init_db import init_db
 from app.db.repository import (
     add_document as persist_document,
@@ -35,19 +55,27 @@ from app.db.repository import (
     record_consent,
     respond_to_document as persist_response,
     save_stage,
+    append_audit,
 )
+from app.db.models import Deadline, Invitation
 from app.db.session import get_db
 from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
 from app.documents.retrieval import retrieve_relevant_chunks
 from app.reports.report_generator import build_report
+from app.reports.docx_generator import build_docx_report
 from app.schemas import (
+    AcceptInvitationRequest,
     AddDocumentRequest,
     ConciliationRoundRequest,
     ConsentRequest,
     CreateCaseRequest,
+    DeadlineRequest,
     EvidenceActionRequest,
+    InvitationRequest,
+    LoginRequest,
+    RegisterRequest,
 )
 
 
@@ -61,8 +89,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="Arbitragem MVP",
-    version="0.4.0",
+    title="Valindor",
+    version="0.5.0",
     description="Fluxo auditável de decisão de disputas documentais por IA.",
     lifespan=lifespan,
 )
@@ -85,16 +113,17 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _require_actor(case, token: str, expected_party: str) -> None:
+def _require_actor(db: Session, case, token: str, expected_party: str):
     stored_hash = getattr(case, f"{expected_party}_token_hash", None)
-    if not token or not stored_hash or not secrets.compare_digest(
-        _hash_token(token),
-        stored_hash,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Credencial inválida para o papel {expected_party}",
-        )
+    if token and stored_hash and secrets.compare_digest(_hash_token(token), stored_hash):
+        return None
+    user = get_user_by_token(db, token)
+    if user and user_has_role(db, case.id, user.id, expected_party):
+        return user
+    raise HTTPException(
+        status_code=403,
+        detail=f"Credencial inválida para o papel {expected_party}",
+    )
 
 
 def _public_case(case) -> Dict:
@@ -190,18 +219,38 @@ def _process_document(
         material_type=material_type,
         purpose=purpose,
     )
+    counterparty = "respondent" if submitted_by == "claimant" else "claimant"
+    create_notification(
+        db,
+        case.id,
+        counterparty,
+        "evidence_disclosed",
+        "Novo material disponível para manifestação",
+        f"{name} foi apresentado. Confirme a ciência e registre sua resposta.",
+    )
     return document_to_dict(document, include_content=False)
 
 
 @app.get("/")
 def root():
     return {
-        "project": "Arbitragem MVP",
+        "project": "Valindor",
         "version": app.version,
         "status": "running",
         "docs": "/docs",
         "ui": "/ui/",
         "openai_enabled": settings.openai_enabled,
+        "auth_required": settings.auth_required,
+        "procedure_terms": {
+            "version": "2026-07-12",
+            "principles": [
+                "participação voluntária e regras iguais para as partes",
+                "conhecimento e oportunidade de resposta a todo material",
+                "tentativas de composição dependem de aceitação das partes",
+                "decisão por IA fundamentada apenas no registro admitido",
+                "auditoria independente e indicação de revisão humana quando necessária",
+            ],
+        },
         "warnings": [
             warning
             for warning in [
@@ -231,19 +280,99 @@ def health(db: Session = Depends(get_db)):
     }
 
 
+def _session_user_or_401(db: Session, x_session_token: str):
+    user = get_user_by_token(db, x_session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sessão ausente, inválida ou expirada")
+    return user
+
+
+def _require_case_view(db: Session, case, x_session_token: str):
+    if not settings.auth_required:
+        return get_user_by_token(db, x_session_token)
+    user = _session_user_or_401(db, x_session_token)
+    if case.id not in set(user_case_ids(db, user.id)):
+        raise HTTPException(status_code=403, detail="Sua conta não participa deste caso")
+    return user
+
+
+@app.post("/auth/register", status_code=201)
+def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    try:
+        user = register_user(db, payload.display_name, payload.email, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    token, session = create_session(db, user)
+    return {
+        "user": user_to_dict(user),
+        "session_token": token,
+        "expires_at": session.expires_at.isoformat(),
+    }
+
+
+@app.post("/auth/login")
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = authenticate_user(db, payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="E-mail ou senha inválidos")
+    token, session = create_session(db, user)
+    return {
+        "user": user_to_dict(user),
+        "session_token": token,
+        "expires_at": session.expires_at.isoformat(),
+    }
+
+
+@app.get("/auth/me")
+def current_user(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    return user_to_dict(_session_user_or_401(db, x_session_token))
+
+
+@app.post("/auth/logout")
+def logout(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    if not revoke_session(db, x_session_token):
+        raise HTTPException(status_code=401, detail="Sessão inválida")
+    return {"message": "Sessão encerrada"}
+
+
 @app.get("/cases")
-def get_cases(db: Session = Depends(get_db)):
-    return [_public_case(case) for case in list_cases(db)]
+def get_cases(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    cases = list_cases(db)
+    user = get_user_by_token(db, x_session_token)
+    if settings.auth_required and not user:
+        raise HTTPException(status_code=401, detail="Entre para acessar seus casos")
+    if user:
+        allowed_ids = set(user_case_ids(db, user.id))
+        cases = [case for case in cases if case.id in allowed_ids]
+    return [_public_case(case) for case in cases]
 
 
 @app.get("/cases/{case_id}")
-def get_case_detail(case_id: str, db: Session = Depends(get_db)):
+def get_case_detail(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
     return case_to_dict(case, include_content=False, include_embeddings=False)
 
 
 @app.post("/cases", status_code=201)
-def create_case(payload: CreateCaseRequest, db: Session = Depends(get_db)):
+def create_case(
+    payload: CreateCaseRequest,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -258,9 +387,152 @@ def create_case(payload: CreateCaseRequest, db: Session = Depends(get_db)):
         respondent_token_hash=_hash_token(credentials["respondent"]),
         manager_token_hash=_hash_token(credentials["manager"]),
     )
+    user = get_user_by_token(db, x_session_token)
+    if user:
+        add_member(db, case.id, user.id, "manager")
+        db.expire_all()
+        case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
     result["access_credentials"] = credentials
     return result
+
+
+@app.get("/cases/{case_id}/invitations")
+def get_invitations(
+    case_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, "manager")
+    return [invitation_to_dict(item) for item in case.invitations]
+
+
+@app.post("/cases/{case_id}/invitations", status_code=201)
+def invite_participant(
+    case_id: str,
+    payload: InvitationRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    actor = _require_actor(db, case, x_actor_token, "manager")
+    token, invitation = create_invitation(
+        db,
+        case.id,
+        payload.email,
+        payload.role,
+        actor.id if actor else None,
+    )
+    append_audit(
+        db,
+        case,
+        "participant_invited",
+        {"email": invitation.email, "role": invitation.role, "invitation_id": invitation.id},
+    )
+    db.commit()
+    create_notification(
+        db,
+        case.id,
+        payload.role,
+        "invitation_created",
+        "Convite para participar do procedimento",
+        f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
+    )
+    result = invitation_to_dict(invitation)
+    result["acceptance_token"] = token
+    result["acceptance_path"] = f"/ui/?invite={token}"
+    return result
+
+
+@app.post("/invitations/accept")
+def accept_case_invitation(
+    payload: AcceptInvitationRequest,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    user = _session_user_or_401(db, x_session_token)
+    try:
+        invitation = accept_invitation(db, payload.token, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    case = _case_or_404(db, invitation.case_id)
+    append_audit(
+        db,
+        case,
+        "invitation_accepted",
+        {"user_id": user.id, "role": invitation.role, "invitation_id": invitation.id},
+    )
+    db.commit()
+    return {"case_id": case.id, "role": invitation.role, "message": "Convite aceito"}
+
+
+@app.get("/cases/{case_id}/deadlines")
+def get_deadlines(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    return [deadline_to_dict(item) for item in case.deadlines]
+
+
+@app.post("/cases/{case_id}/deadlines", status_code=201)
+def add_deadline(
+    case_id: str,
+    payload: DeadlineRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, "manager")
+    try:
+        due_at = datetime.fromisoformat(payload.due_at.replace("Z", "+00:00"))
+        if due_at.tzinfo is None:
+            due_at = due_at.astimezone()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Data do prazo inválida") from exc
+    deadline = create_deadline(
+        db, case.id, payload.label, payload.kind, payload.assigned_to, due_at
+    )
+    append_audit(
+        db,
+        case,
+        "deadline_created",
+        {"deadline_id": deadline.id, "assigned_to": deadline.assigned_to, "due_at": deadline.due_at.isoformat()},
+    )
+    db.commit()
+    for party in ({"claimant", "respondent", "manager"} if payload.assigned_to == "all" else {payload.assigned_to}):
+        create_notification(
+            db,
+            case.id,
+            party,
+            "deadline_created",
+            "Novo prazo no procedimento",
+            f"{deadline.label}: até {deadline.due_at.isoformat()}.",
+        )
+    return deadline_to_dict(deadline)
+
+
+@app.post("/cases/{case_id}/deadlines/{deadline_id}/complete")
+def complete_deadline(
+    case_id: str,
+    deadline_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, "manager")
+    deadline = db.query(Deadline).filter(
+        Deadline.case_id == case.id, Deadline.id == deadline_id
+    ).one_or_none()
+    if not deadline:
+        raise HTTPException(status_code=404, detail="Prazo não encontrado")
+    deadline.completed_at = datetime.now().astimezone()
+    append_audit(db, case, "deadline_completed", {"deadline_id": deadline.id})
+    db.commit()
+    return deadline_to_dict(deadline)
 
 
 @app.post("/cases/{case_id}/consent")
@@ -271,7 +543,7 @@ def set_case_consent(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, payload.party)
+    _require_actor(db, case, x_actor_token, payload.party)
     if case.manifest_locked:
         raise HTTPException(
             status_code=409,
@@ -282,6 +554,7 @@ def set_case_consent(
         case,
         party=payload.party,
         accepted=payload.accepted,
+        terms_version=payload.terms_version,
     )
     return case_to_dict(updated, include_content=False, include_embeddings=False)[
         "consent"
@@ -296,7 +569,7 @@ def add_text_document(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, payload.submitted_by)
+    _require_actor(db, case, x_actor_token, payload.submitted_by)
     document = _process_document(
         db,
         case,
@@ -327,7 +600,7 @@ async def upload_pdf(
         raise HTTPException(status_code=422, detail="Parte apresentadora inválida")
     if material_type not in {"evidence", "argument"}:
         raise HTTPException(status_code=422, detail="Tipo de material inválido")
-    _require_actor(case, x_actor_token, submitted_by)
+    _require_actor(db, case, x_actor_token, submitted_by)
 
     file_bytes = await file.read(settings.max_upload_bytes + 1)
     if len(file_bytes) > settings.max_upload_bytes:
@@ -379,7 +652,7 @@ def acknowledge_evidence(
     case = _case_or_404(db, case_id)
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
-    _require_actor(case, x_actor_token, expected_party)
+    _require_actor(db, case, x_actor_token, expected_party)
     if payload.party != expected_party:
         raise HTTPException(
             status_code=403,
@@ -406,7 +679,7 @@ def respond_to_evidence(
     case = _case_or_404(db, case_id)
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
-    _require_actor(case, x_actor_token, expected_party)
+    _require_actor(db, case, x_actor_token, expected_party)
     if payload.party != expected_party:
         raise HTTPException(
             status_code=403,
@@ -445,7 +718,7 @@ def admit_evidence(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, "manager")
+    _require_actor(db, case, x_actor_token, "manager")
     document = _document_or_404(db, case_id, document_id)
     if not document.acknowledged_at:
         raise HTTPException(status_code=409, detail="A contraparte ainda não confirmou ciência")
@@ -466,7 +739,7 @@ def lock_manifest(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, "manager")
+    _require_actor(db, case, x_actor_token, "manager")
     if case.manifest_locked:
         return {
             "message": "Manifesto já estava travado",
@@ -496,8 +769,13 @@ def lock_manifest(
 
 
 @app.get("/cases/{case_id}/manifest")
-def get_manifest(case_id: str, db: Session = Depends(get_db)):
+def get_manifest(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
     manifest = case_to_dict(case)["locked_manifest"]
     if not manifest:
         raise HTTPException(status_code=400, detail="Manifesto ainda não foi travado")
@@ -505,8 +783,12 @@ def get_manifest(case_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/cases/{case_id}/manifest/verify")
-def verify_manifest(case_id: str, db: Session = Depends(get_db)):
-    manifest = get_manifest(case_id, db)
+def verify_manifest(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    manifest = get_manifest(case_id, x_session_token, db)
     unsigned = dict(manifest)
     manifest_hash = unsigned.pop("manifest_hash", None)
     unsigned.pop("platform_signature", None)
@@ -521,16 +803,26 @@ def verify_manifest(case_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/cases/{case_id}/audit")
-def get_audit(case_id: str, db: Session = Depends(get_db)):
+def get_audit(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
     events = case_to_dict(case)["audit_log"]
     valid, errors = verify_audit_chain(events)
     return {"valid": valid, "errors": errors, "events": events}
 
 
 @app.get("/cases/{case_id}/chunks")
-def list_chunks(case_id: str, db: Session = Depends(get_db)):
+def list_chunks(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
     return case_to_dict(case, include_embeddings=False)["chunks"]
 
 
@@ -539,11 +831,13 @@ def retrieve_chunks(
     case_id: str,
     query: str,
     method: str = "embedding",
+    x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     if not query.strip():
         raise HTTPException(status_code=400, detail="Consulta não pode ser vazia")
     case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
     return _retrieve(case_to_dict(case), query, method)
 
 
@@ -555,7 +849,7 @@ def assess_case_conciliation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, "manager")
+    _require_actor(db, case, x_actor_token, "manager")
     case_data = case_to_dict(case)
     if not case.manifest_locked:
         raise HTTPException(
@@ -660,7 +954,7 @@ def organize_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, "manager")
+    _require_actor(db, case, x_actor_token, "manager")
     case_data = case_to_dict(case)
     if not case.manifest_locked:
         raise HTTPException(
@@ -698,7 +992,7 @@ def decide_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, "manager")
+    _require_actor(db, case, x_actor_token, "manager")
     case_data = case_to_dict(case)
     if not case_data["organized"]:
         raise HTTPException(
@@ -752,7 +1046,7 @@ def review_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(case, x_actor_token, "manager")
+    _require_actor(db, case, x_actor_token, "manager")
     case_data = case_to_dict(case)
     if not case_data["decision"]:
         raise HTTPException(
@@ -786,10 +1080,33 @@ def review_case(
 
 
 @app.get("/cases/{case_id}/report")
-def report(case_id: str, db: Session = Depends(get_db)):
+def report(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
     return build_report(
         case_to_dict(case, include_content=False, include_embeddings=False)
+    )
+
+
+@app.get("/cases/{case_id}/report.docx")
+def report_docx(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    case_data = case_to_dict(case, include_content=False, include_embeddings=False)
+    output = build_docx_report(case_data)
+    filename = f"relatorio-valindor-{case.id[:8]}.docx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

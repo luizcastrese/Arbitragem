@@ -10,6 +10,7 @@ import {
   Circle,
   CircleDollarSign,
   Clock3,
+  Download,
   FileCheck2,
   FileText,
   FolderOpen,
@@ -18,6 +19,9 @@ import {
   Info,
   LockKeyhole,
   MessagesSquare,
+  LogIn,
+  LogOut,
+  Mail,
   Plus,
   RefreshCw,
   Scale,
@@ -97,6 +101,13 @@ export default function App() {
   const [claimantResponse, setClaimantResponse] = useState('')
   const [respondentResponse, setRespondentResponse] = useState('')
   const [conciliationUpdate, setConciliationUpdate] = useState('')
+  const [sessionToken, setSessionToken] = useState(() => localStorage.getItem('arbitragem_session') || '')
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('arbitragem_user') || 'null') } catch { return null }
+  })
+  const [showAuth, setShowAuth] = useState(false)
+  const [authMode, setAuthMode] = useState('register')
+  const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
   const [caseCredentials, setCaseCredentials] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('arbitragem_case_credentials') || '{}')
@@ -111,7 +122,13 @@ export default function App() {
   )
 
   async function request(path, options = {}) {
-    const response = await fetch(`${API_BASE}${path}`, options)
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
+        ...(options.headers || {})
+      }
+    })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.detail || `Erro HTTP ${response.status}`)
     return data
@@ -119,7 +136,54 @@ export default function App() {
 
   function actorHeaders(caseId, party) {
     const token = caseCredentials[caseId]?.[party]
-    return token ? { 'X-Actor-Token': token } : {}
+    return token || sessionToken ? { 'X-Actor-Token': token || sessionToken } : {}
+  }
+
+  async function authenticate(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setBusy(true)
+    setError('')
+    try {
+      const path = authMode === 'register' ? '/auth/register' : '/auth/login'
+      const payload = authMode === 'register'
+        ? { display_name: form.get('display_name'), email: form.get('email'), password: form.get('password') }
+        : { email: form.get('email'), password: form.get('password') }
+      const data = await request(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      setSessionToken(data.session_token)
+      setUser(data.user)
+      localStorage.setItem('arbitragem_session', data.session_token)
+      localStorage.setItem('arbitragem_user', JSON.stringify(data.user))
+      setShowAuth(false)
+      setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
+      setTimeout(() => window.location.reload(), 100)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function logout() {
+    try { await request('/auth/logout', { method: 'POST' }) } catch { /* sessão local também será removida */ }
+    localStorage.removeItem('arbitragem_session')
+    localStorage.removeItem('arbitragem_user')
+    setSessionToken('')
+    setUser(null)
+    window.location.reload()
+  }
+
+  async function acceptPendingInvite() {
+    await run('Vinculando o convite à sua conta...', () => request('/invitations/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: inviteToken })
+    }))
+    window.history.replaceState({}, '', window.location.pathname)
   }
 
   async function loadCase(caseId) {
@@ -263,15 +327,25 @@ export default function App() {
           <div className="brand">
             <span className="brand-mark"><Scale size={20} /></span>
             <div>
-              <strong>Arbitragem</strong>
+              <strong>Valindor</strong>
               <small>Auditoria decisória por IA</small>
             </div>
           </div>
           <div className="topbar-actions">
             <span className={`system-status ${system?.openai_enabled ? 'online' : 'demo'}`}>
               <span />
-              {system?.openai_enabled ? 'IA conectada' : 'Modo demonstração'}
+              {system?.openai_enabled ? 'Chave de IA configurada' : 'Modo demonstração'}
             </span>
+            {user ? (
+              <span className="account-chip">
+                <UserRound size={15} /> {user.display_name}
+                <button onClick={logout} title="Sair"><LogOut size={14} /></button>
+              </span>
+            ) : (
+              <button className="button ghost compact" onClick={() => setShowAuth(true)}>
+                <LogIn size={16} /> Entrar
+              </button>
+            )}
             <button className="button primary compact" onClick={startNewCase}>
               <Plus size={17} /> Novo caso
             </button>
@@ -282,10 +356,10 @@ export default function App() {
       <main className="page">
         <section className="intro">
           <div>
-            <span className="eyebrow">Menor custo para empresa e cliente</span>
-            <h1>Reduza drasticamente o custo da disputa sem abrir mão da integridade.</h1>
+            <span className="eyebrow">Valindor · justiça, clareza e menor custo</span>
+            <h1>Resolva disputas com serenidade sem abrir mão da integridade.</h1>
             <p>
-              A IA automatiza etapas repetitivas, busca acordos sempre que forem úteis
+              Valindor usa IA para automatizar etapas repetitivas, buscar acordos sempre que forem úteis
               e, se necessário, profere uma decisão fundamentada. As duas partes usam
               as mesmas regras, conhecem todas as provas e podem verificar o processo.
             </p>
@@ -300,6 +374,31 @@ export default function App() {
         </section>
 
         <AudienceValue />
+
+        {showAuth && (
+          <AuthPanel
+            mode={authMode}
+            setMode={setAuthMode}
+            busy={busy}
+            onSubmit={authenticate}
+            onClose={() => setShowAuth(false)}
+          />
+        )}
+
+        {inviteToken && (
+          <div className="invite-banner">
+            <Mail size={20} />
+            <div>
+              <strong>Você recebeu um convite para participar de um caso</strong>
+              <span>{user ? 'Vincule o caso à sua conta para acessar o papel que foi atribuído.' : 'Entre ou crie sua conta com o mesmo e-mail usado no convite.'}</span>
+            </div>
+            {user ? (
+              <button className="button primary" onClick={acceptPendingInvite} disabled={busy}>Aceitar convite</button>
+            ) : (
+              <button className="button primary" onClick={() => setShowAuth(true)}>Entrar para aceitar</button>
+            )}
+          </div>
+        )}
 
         {!system?.openai_enabled && (
           <div className="demo-notice">
@@ -404,6 +503,8 @@ export default function App() {
                 setConciliationUpdate={setConciliationUpdate}
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
+                user={user}
+                sessionToken={sessionToken}
               />
             ) : (
               <LoadingState />
@@ -549,6 +650,41 @@ function Journey({ title, steps }) {
   )
 }
 
+function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
+  return (
+    <section className="auth-panel">
+      <div>
+        <span className="section-label">Acesso protegido</span>
+        <h2>{mode === 'register' ? 'Crie sua conta' : 'Entre na plataforma'}</h2>
+        <p>Uma conta permite receber convites, acessar apenas os casos vinculados e atuar com o papel correto.</p>
+      </div>
+      <form onSubmit={onSubmit} className="auth-form">
+        {mode === 'register' && (
+          <label className="mini-field">
+            <span>Seu nome</span>
+            <input name="display_name" minLength="2" required placeholder="Nome completo" />
+          </label>
+        )}
+        <label className="mini-field">
+          <span>E-mail</span>
+          <input name="email" type="email" required placeholder="voce@empresa.com" />
+        </label>
+        <label className="mini-field">
+          <span>Senha</span>
+          <input name="password" type="password" minLength={mode === 'register' ? 10 : 1} required placeholder="Mínimo de 10 caracteres" />
+        </label>
+        <div className="auth-actions">
+          <button type="button" className="button ghost" onClick={onClose}>Agora não</button>
+          <button className="button primary" disabled={busy}>{mode === 'register' ? 'Criar conta' : 'Entrar'}</button>
+        </div>
+      </form>
+      <button className="auth-switch" onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>
+        {mode === 'register' ? 'Já tenho uma conta' : 'Quero criar uma conta'}
+      </button>
+    </section>
+  )
+}
+
 function CreateCase({ busy, onSubmit, onCancel }) {
   return (
     <section className="surface create-surface">
@@ -626,7 +762,9 @@ function CaseWorkspace({
   setRespondentResponse,
   setConciliationUpdate,
   showTechnical,
-  setShowTechnical
+  setShowTechnical,
+  user,
+  sessionToken
 }) {
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : currentStage
@@ -699,6 +837,16 @@ function CaseWorkspace({
         />
       )}
 
+      <OperationsCard
+        caseData={caseData}
+        busy={busy}
+        run={run}
+        request={request}
+        actorHeaders={actorHeaders}
+        user={user}
+        sessionToken={sessionToken}
+      />
+
       {caseData.status === 'reviewed' && (
         <Conclusion caseData={caseData} />
       )}
@@ -713,6 +861,128 @@ function CaseWorkspace({
         setOpen={setShowTechnical}
       />
     </>
+  )
+}
+
+function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sessionToken }) {
+  const [inviteLink, setInviteLink] = useState('')
+  const deadlines = caseData.deadlines || []
+  const participants = caseData.participants || []
+
+  async function invite(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    await run('Criando convite protegido...', async () => {
+      const data = await request(`/cases/${caseData.id}/invitations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
+        body: JSON.stringify({ email: form.get('email'), role: form.get('role') })
+      })
+      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
+      event.currentTarget?.reset?.()
+      return data
+    })
+  }
+
+  async function addDeadline(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    await run('Registrando prazo e notificações...', () => request(`/cases/${caseData.id}/deadlines`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
+      body: JSON.stringify({
+        label: form.get('label'),
+        assigned_to: form.get('assigned_to'),
+        kind: 'procedural',
+        due_at: new Date(form.get('due_at')).toISOString()
+      })
+    }))
+  }
+
+  async function downloadReport() {
+    await run('Gerando o relatório Word...', async () => {
+      const response = await fetch(`${API_BASE}/cases/${caseData.id}/report.docx`, {
+        headers: sessionToken ? { 'X-Session-Token': sessionToken } : {}
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || 'Não foi possível gerar o relatório')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `relatorio-valindor-${caseData.id.slice(0, 8)}.docx`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    })
+  }
+
+  return (
+    <section className="operations-card">
+      <div className="card-title-row">
+        <div>
+          <span className="section-label">Acesso, agenda e entrega</span>
+          <h3>Administração do procedimento</h3>
+        </div>
+        <button className="button secondary" onClick={downloadReport} disabled={busy}>
+          <Download size={16} /> Baixar relatório Word
+        </button>
+      </div>
+
+      <div className="operations-grid">
+        <div className="operation-block">
+          <div className="operation-title"><Mail size={18} /><strong>Participantes</strong></div>
+          <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
+          {participants.map((participant) => (
+            <span className="participant-row" key={`${participant.email}-${participant.role}`}>
+              <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
+            </span>
+          ))}
+          <form className="compact-form" onSubmit={invite}>
+            <input name="email" type="email" required placeholder="E-mail da parte" />
+            <select name="role" defaultValue="claimant">
+              <option value="claimant">Cliente reclamante</option>
+              <option value="respondent">Empresa reclamada</option>
+              <option value="manager">Gestor</option>
+            </select>
+            <button className="button primary" disabled={busy}>Gerar convite</button>
+          </form>
+          {inviteLink && (
+            <label className="invite-link">
+              <span>Link protegido para envio</span>
+              <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
+            </label>
+          )}
+          {!user && <small>O modo local continua disponível; para convites nominativos, crie uma conta de gestor.</small>}
+        </div>
+
+        <div className="operation-block">
+          <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
+          <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
+          <div className="deadline-list">
+            {deadlines.map((deadline) => (
+              <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
+                <strong>{deadline.label}</strong>
+                <small>{deadline.assigned_to} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
+              </span>
+            ))}
+            {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
+          </div>
+          <form className="compact-form deadline-form" onSubmit={addDeadline}>
+            <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
+            <select name="assigned_to" defaultValue="all">
+              <option value="all">Todas as pessoas</option>
+              <option value="claimant">Cliente</option>
+              <option value="respondent">Empresa</option>
+              <option value="manager">Gestor</option>
+            </select>
+            <input name="due_at" type="datetime-local" required />
+            <button className="button secondary" disabled={busy}>Adicionar prazo</button>
+          </form>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -1100,7 +1370,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
         <ShieldCheck size={20} />
         <div>
           <strong>Adesão ao procedimento</strong>
-          <span>Cada parte deve aceitar as mesmas regras antes da arbitragem.</span>
+          <span>Cada parte deve aceitar as mesmas regras antes do procedimento Valindor.</span>
         </div>
       </div>
       <div className="consent-grid">
@@ -1134,9 +1404,12 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
           </div>
         ))}
       </div>
+      <div className="terms-summary">
+        <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
+        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria independente e possível revisão humana.</span>
+      </div>
       <small>
-        O registro confirma acesso e manifestação de vontade no MVP local. Em produção,
-        deverá ser vinculado à conta autenticada e à versão dos termos aceita.
+        Versão dos termos: 2026-07-12. O aceite fica associado ao papel, ao momento e à cadeia de auditoria.
       </small>
     </div>
   )

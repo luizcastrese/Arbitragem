@@ -1,1 +1,1 @@
-"""Arbitragem application package."""
+"""Valindor application package."""

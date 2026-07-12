@@ -1,6 +1,51 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    display_name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=10, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class InvitationRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def role_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent", "manager"}:
+            raise ValueError("unsupported role")
+        return value
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=300)
+
+
+class DeadlineRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    label: str = Field(min_length=3, max_length=200)
+    kind: str = Field(default="procedural", max_length=50)
+    assigned_to: str
+    due_at: str
+
+    @field_validator("assigned_to")
+    @classmethod
+    def assigned_to_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent", "manager", "all"}:
+            raise ValueError("unsupported assignee")
+        return value
+
+
 class CreateCaseRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -43,6 +88,7 @@ class AddDocumentRequest(BaseModel):
 class ConsentRequest(BaseModel):
     party: str
     accepted: bool
+    terms_version: str = Field(default="2026-07-12", max_length=40)
 
     @field_validator("party")
     @classmethod

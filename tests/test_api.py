@@ -1,5 +1,6 @@
 import io
 import os
+import zipfile
 
 import fitz
 import pytest
@@ -70,6 +71,19 @@ def create_case(client):
 
 def actor_headers(case_id, party):
     return {"X-Actor-Token": CASE_CREDENTIALS[case_id][party]}
+
+
+def register_user(client, name, email):
+    response = client.post(
+        "/auth/register",
+        json={
+            "display_name": name,
+            "email": email,
+            "password": "senha-segura-123",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
 
 
 def add_contract(client, case_id):
@@ -251,6 +265,95 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert len(report["conciliation_rounds"]) == 2
     assert report["review"]["approved"] is False
     assert "decisão computacional" in report["disclaimer"]
+
+
+def test_accounts_invitations_deadlines_and_word_report(client):
+    manager = register_user(client, "Gestora Ana", "gestora@example.com")
+    manager_session = manager["session_token"]
+    session_headers = {"X-Session-Token": manager_session}
+
+    created = client.post(
+        "/cases",
+        headers=session_headers,
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    )
+    assert created.status_code == 201
+    case = created.json()
+    case_id = case["id"]
+    CASE_CREDENTIALS[case_id] = case["access_credentials"]
+    assert case["participants"][0]["role"] == "manager"
+
+    invite = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": manager_session},
+        json={"email": "cliente@example.com", "role": "claimant"},
+    )
+    assert invite.status_code == 201
+    invitation_token = invite.json()["acceptance_token"]
+    assert invite.json()["status"] == "pending"
+
+    customer = register_user(client, "Cliente Carlos", "cliente@example.com")
+    accepted = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": customer["session_token"]},
+        json={"token": invitation_token},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["role"] == "claimant"
+
+    customer_case_list = client.get(
+        "/cases",
+        headers={"X-Session-Token": customer["session_token"]},
+    ).json()
+    assert [item["id"] for item in customer_case_list] == [case_id]
+
+    document = client.post(
+        f"/cases/{case_id}/documents/text",
+        headers={"X-Actor-Token": customer["session_token"]},
+        json={
+            "name": "relato.txt",
+            "content": "O cliente contesta a cobrança porque o serviço foi cancelado.",
+            "submitted_by": "claimant",
+            "material_type": "argument",
+            "purpose": "Explicar a contestação da cobrança.",
+        },
+    )
+    assert document.status_code == 201
+
+    deadline = client.post(
+        f"/cases/{case_id}/deadlines",
+        headers={"X-Actor-Token": manager_session},
+        json={
+            "label": "Resposta da empresa",
+            "kind": "response",
+            "assigned_to": "respondent",
+            "due_at": "2030-01-15T18:00:00Z",
+        },
+    )
+    assert deadline.status_code == 201
+    assert deadline.json()["status"] == "open"
+
+    report = client.get(f"/cases/{case_id}/report.docx")
+    assert report.status_code == 200
+    assert report.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument"
+    )
+    with zipfile.ZipFile(io.BytesIO(report.content)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert "Cobrança contestada" in document_xml
+    assert "Resposta da empresa" in document_xml
+
+    audit_types = [
+        event["event_type"]
+        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
+    ]
+    assert "participant_invited" in audit_types
+    assert "invitation_accepted" in audit_types
+    assert "deadline_created" in audit_types
 
 
 def test_documents_are_immutable_after_manifest_lock(client):

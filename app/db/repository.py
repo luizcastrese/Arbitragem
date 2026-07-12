@@ -7,7 +7,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import build_audit_event
-from app.db.models import AuditEvent, Case, Chunk, Document
+from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
+from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
 
 
 def _json_dump(value: Any) -> Optional[str]:
@@ -151,6 +152,18 @@ def case_to_dict(
             for chunk in case.chunks
         ],
         "audit_log": [audit_to_dict(event) for event in case.audit_events],
+        "participants": [
+            {
+                "role": member.role,
+                "display_name": member.user.display_name,
+                "email": member.user.email,
+                "joined_at": member.joined_at.isoformat(),
+            }
+            for member in case.members
+        ],
+        "invitations": [invitation_to_dict(item) for item in case.invitations],
+        "deadlines": [deadline_to_dict(item) for item in case.deadlines],
+        "notifications": [notification_to_dict(item) for item in case.notifications],
     }
 
 
@@ -169,6 +182,10 @@ def _case_query(db: Session):
         selectinload(Case.documents),
         selectinload(Case.chunks),
         selectinload(Case.audit_events),
+        selectinload(Case.members).selectinload(CaseMember.user),
+        selectinload(Case.invitations),
+        selectinload(Case.deadlines),
+        selectinload(Case.notifications),
     )
 
 
@@ -322,6 +339,7 @@ def record_consent(
     case: Case,
     party: str,
     accepted: bool,
+    terms_version: str = "2026-07-12",
 ) -> Case:
     now = datetime.now(timezone.utc).isoformat()
     setattr(case, f"{party}_consent", accepted)
@@ -330,7 +348,7 @@ def record_consent(
         db,
         case,
         "consent_accepted" if accepted else "consent_withdrawn",
-        {"party": party, "accepted": accepted},
+        {"party": party, "accepted": accepted, "terms_version": terms_version},
     )
     db.commit()
     return get_case(db, case.id)

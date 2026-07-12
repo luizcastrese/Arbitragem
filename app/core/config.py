@@ -22,6 +22,7 @@ class Settings:
     platform_signing_secret: str
     cors_origins: List[str]
     max_upload_bytes: int
+    auth_required: bool
 
     @property
     def openai_enabled(self) -> bool:
@@ -57,4 +58,6 @@ def get_settings() -> Settings:
             )
         ),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))),
+        auth_required=os.getenv("AUTH_REQUIRED", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
     )

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -57,6 +57,10 @@ class Case(Base):
         cascade="all, delete-orphan",
         order_by="AuditEvent.id",
     )
+    members = relationship("CaseMember", back_populates="case", cascade="all, delete-orphan")
+    invitations = relationship("Invitation", back_populates="case", cascade="all, delete-orphan")
+    deadlines = relationship("Deadline", back_populates="case", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="case", cascade="all, delete-orphan")
 
 
 class Document(Base):
@@ -120,3 +124,94 @@ class AuditEvent(Base):
     event_hash = Column(String, nullable=False, index=True)
 
     case = relationship("Case", back_populates="audit_events")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True)
+    email = Column(String, nullable=False, unique=True, index=True)
+    display_name = Column(String, nullable=False)
+    password_hash = Column(Text, nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
+    memberships = relationship("CaseMember", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user")
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    user = relationship("User", back_populates="sessions")
+
+
+class CaseMember(Base):
+    __tablename__ = "case_members"
+    __table_args__ = (UniqueConstraint("case_id", "user_id", "role"),)
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String, nullable=False)
+    joined_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="members")
+    user = relationship("User", back_populates="memberships")
+
+
+class Invitation(Base):
+    __tablename__ = "invitations"
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    email = Column(String, nullable=False, index=True)
+    role = Column(String, nullable=False)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="pending")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    invited_by_user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="invitations")
+
+
+class Deadline(Base):
+    __tablename__ = "deadlines"
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    label = Column(String, nullable=False)
+    kind = Column(String, nullable=False)
+    assigned_to = Column(String, nullable=False)
+    due_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="deadlines")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    party = Column(String, nullable=False)
+    event_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="notifications")
+    user = relationship("User", back_populates="notifications")
