@@ -327,7 +327,7 @@ export default function App() {
           <div className="brand">
             <span className="brand-mark"><Scale size={20} /></span>
             <div>
-              <strong>Valindor</strong>
+              <strong>Valinor</strong>
               <small>Auditoria decisória por IA</small>
             </div>
           </div>
@@ -356,10 +356,10 @@ export default function App() {
       <main className="page">
         <section className="intro">
           <div>
-            <span className="eyebrow">Valindor · justiça, clareza e menor custo</span>
+            <span className="eyebrow">Valinor · justiça, clareza e menor custo</span>
             <h1>Resolva disputas com serenidade sem abrir mão da integridade.</h1>
             <p>
-              Valindor usa IA para automatizar etapas repetitivas, buscar acordos sempre que forem úteis
+              Valinor usa IA para automatizar etapas repetitivas, buscar acordos sempre que forem úteis
               e, se necessário, profere uma decisão fundamentada. As duas partes usam
               as mesmas regras, conhecem todas as provas e podem verificar o processo.
             </p>
@@ -912,7 +912,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `relatorio-valindor-${caseData.id.slice(0, 8)}.docx`
+      anchor.download = `relatorio-valinor-${caseData.id.slice(0, 8)}.docx`
       anchor.click()
       URL.revokeObjectURL(url)
     })
@@ -1370,7 +1370,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
         <ShieldCheck size={20} />
         <div>
           <strong>Adesão ao procedimento</strong>
-          <span>Cada parte deve aceitar as mesmas regras antes do procedimento Valindor.</span>
+          <span>Cada parte deve aceitar as mesmas regras antes do procedimento Valinor.</span>
         </div>
       </div>
       <div className="consent-grid">

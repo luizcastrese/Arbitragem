@@ -145,7 +145,7 @@ h1, h2, h3, p { margin-top: 0; }
   inset: 0;
   z-index: -2;
   content: '';
-  background-image: url('/valindor-hero.webp');
+  background-image: url('/valinor-hero.webp');
   background-position: center;
   background-size: cover;
 }

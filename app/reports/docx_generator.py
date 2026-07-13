@@ -108,7 +108,7 @@ def _configure_page(document: Document) -> None:
     section.footer_distance = Inches(0.3)
 
     header = section.header.paragraphs[0]
-    header.text = "VALINDOR  |  REGISTRO AUDITÁVEL"
+    header.text = "VALINOR  |  REGISTRO AUDITÁVEL"
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run = header.runs[0]
     run.font.name = "Aptos"

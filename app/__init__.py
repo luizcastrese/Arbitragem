@@ -1,1 +1,1 @@
-"""Valindor application package."""
+"""Valinor application package."""

@@ -89,7 +89,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="Valindor",
+    title="Valinor",
     version="0.5.0",
     description="Fluxo auditável de decisão de disputas documentais por IA.",
     lifespan=lifespan,
@@ -234,7 +234,7 @@ def _process_document(
 @app.get("/")
 def root():
     return {
-        "project": "Valindor",
+        "project": "Valinor",
         "version": app.version,
         "status": "running",
         "docs": "/docs",
@@ -1102,7 +1102,7 @@ def report_docx(
     _require_case_view(db, case, x_session_token)
     case_data = case_to_dict(case, include_content=False, include_embeddings=False)
     output = build_docx_report(case_data)
-    filename = f"relatorio-valindor-{case.id[:8]}.docx"
+    filename = f"relatorio-valinor-{case.id[:8]}.docx"
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

@@ -1,4 +1,4 @@
-# Valindor
+# Valinor
 
 Plataforma de resolução e auditoria decisória por IA, criada para reduzir
 drasticamente o custo de disputas entre empresas e clientes sem sacrificar
