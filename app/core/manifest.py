@@ -109,7 +109,7 @@ def lock_case_manifest(case: Dict) -> Dict:
         "conciliator": settings.openai_model,
         "organizer": settings.openai_model,
         "judge": settings.openai_model,
-        "reviewer": settings.openai_model,
+        "reviewer": settings.openai_review_model or settings.openai_model,
         "embedding": settings.embedding_model,
         "openai_enabled_at_lock": settings.openai_enabled,
         "user_configurable_private_instructions": False,

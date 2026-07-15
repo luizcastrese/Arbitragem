@@ -1,6 +1,7 @@
 import io
 import os
 import zipfile
+from dataclasses import replace
 
 import fitz
 import pytest
@@ -12,6 +13,10 @@ from sqlalchemy.pool import StaticPool
 
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["PLATFORM_SIGNING_SECRET"] = "test-signing-secret"
+os.environ["APP_ENV"] = "test"
+os.environ["AUTH_REQUIRED"] = "false"
+os.environ["ALLOW_LEGACY_CASE_TOKENS"] = "true"
+os.environ["EXPOSE_AUTH_TOKENS"] = "true"
 
 from app.core.config import get_settings  # noqa: E402
 
@@ -20,6 +25,7 @@ get_settings.cache_clear()
 from app.db.models import Base  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
+import app.main as main_module  # noqa: E402
 
 CASE_CREDENTIALS = {}
 
@@ -156,7 +162,10 @@ def prepare_locked_case(client):
 
 
 def test_complete_safe_flow_is_persistent_and_auditable(client):
-    assert client.get("/health").json()["status"] == "ok"
+    health = client.get("/health")
+    assert health.json()["status"] == "ok"
+    assert health.headers["x-content-type-options"] == "nosniff"
+    assert health.headers["x-request-id"]
     case = create_case(client)
     case_id = case["id"]
     consent = accept_procedure(client, case_id)
@@ -230,8 +239,23 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert review.json()["approved"] is False
     assert review.json()["requires_human_review"] is True
 
+    blocked_report = client.get(f"/cases/{case_id}/report")
+    assert blocked_report.status_code == 409
+
+    finalized = client.post(
+        f"/cases/{case_id}/finalize",
+        headers=actor_headers(case_id, "manager"),
+        json={
+            "human_override": True,
+            "rationale": "Revisão humana confirmou que o resultado permanece inconclusivo.",
+        },
+    )
+    assert finalized.status_code == 200
+    assert finalized.json()["complete"] is True
+    assert finalized.json()["basis"] == "human_review"
+
     persisted = client.get(f"/cases/{case_id}").json()
-    assert persisted["status"] == "reviewed"
+    assert persisted["status"] == "finalized"
     assert persisted["decision"]["outcome"] == "inconclusive"
     assert persisted["documents"][0]["sha256"] == document["sha256"]
 
@@ -253,10 +277,11 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "case_organized",
         "decision_generated",
         "review_generated",
+        "case_finalized",
     ]
 
     report = client.get(f"/cases/{case_id}/report").json()
-    assert report["status"] == "reviewed"
+    assert report["status"] == "finalized"
     assert report["manifest"]["manifest_hash"]
     assert report["consent"]["complete"] is True
     assert report["contradictory"]["complete"] is True
@@ -337,7 +362,10 @@ def test_accounts_invitations_deadlines_and_word_report(client):
     assert deadline.status_code == 201
     assert deadline.json()["status"] == "open"
 
-    report = client.get(f"/cases/{case_id}/report.docx")
+    report = client.get(
+        f"/cases/{case_id}/report.docx?draft=true",
+        headers=session_headers,
+    )
     assert report.status_code == 200
     assert report.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument"
@@ -511,3 +539,110 @@ def test_decision_cannot_start_with_pending_contradictory(client):
         f"/cases/{case_id}/lock",
         headers=actor_headers(case_id, "manager"),
     ).status_code == 409
+
+
+def test_secure_mode_requires_account_and_hides_legacy_credentials(client, monkeypatch):
+    secure_settings = replace(
+        main_module.settings,
+        auth_required=True,
+        allow_legacy_case_tokens=False,
+        expose_auth_tokens=False,
+    )
+    monkeypatch.setattr(main_module, "settings", secure_settings)
+
+    anonymous = client.post(
+        "/cases",
+        json={"title": "Caso anônimo", "claimant": "Cliente", "respondent": "Empresa"},
+    )
+    assert anonymous.status_code == 401
+
+    registered = client.post(
+        "/auth/register",
+        json={
+            "display_name": "Gestora Segura",
+            "email": "segura@example.com",
+            "password": "senha-segura-123",
+        },
+    )
+    assert registered.status_code == 201
+    assert "session_token" not in registered.json()
+    assert client.cookies.get(secure_settings.session_cookie_name)
+
+    created = client.post(
+        "/cases",
+        json={
+            "title": "Cobrança protegida",
+            "claimant": "Cliente",
+            "respondent": "Empresa",
+        },
+    )
+    assert created.status_code == 201
+    assert "access_credentials" not in created.json()
+    assert created.json()["participants"][0]["role"] == "manager"
+
+
+def test_email_verification_is_required_when_enabled(client, monkeypatch):
+    verification_settings = replace(
+        main_module.settings,
+        email_verification_required=True,
+        expose_auth_tokens=True,
+        smtp_host="smtp.test",
+        smtp_from="contato@valinor.test",
+    )
+    monkeypatch.setattr(main_module, "settings", verification_settings)
+    monkeypatch.setattr(main_module, "send_verification_email", lambda *_args: None)
+
+    registered = client.post(
+        "/auth/register",
+        json={
+            "display_name": "Pessoa Verificada",
+            "email": "verificar@example.com",
+            "password": "senha-segura-123",
+        },
+    )
+    assert registered.status_code == 201
+    assert registered.json()["verification_required"] is True
+    verification_token = registered.json()["verification_token"]
+
+    denied = client.post(
+        "/auth/login",
+        json={"email": "verificar@example.com", "password": "senha-segura-123"},
+    )
+    assert denied.status_code == 403
+
+    verified = client.post(
+        "/auth/verify-email",
+        json={"token": verification_token},
+    )
+    assert verified.status_code == 200
+    assert verified.json()["user"]["email_verified"] is True
+
+
+def test_sensitive_text_encryption_round_trip(monkeypatch):
+    from cryptography.fernet import Fernet
+
+    from app.core.encryption import PREFIX, decrypt_text, encrypt_text
+
+    monkeypatch.setenv("DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    get_settings.cache_clear()
+    try:
+        encrypted = encrypt_text("conteúdo confidencial do caso")
+        assert encrypted.startswith(PREFIX)
+        assert "confidencial" not in encrypted
+        assert decrypt_text(encrypted) == "conteúdo confidencial do caso"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_configuration_fails_closed():
+    unsafe = replace(
+        main_module.settings,
+        app_env="production",
+        auth_required=False,
+        allow_legacy_case_tokens=True,
+        platform_signing_secret="development-only-secret-change-me",
+        data_encryption_key="",
+        secure_cookies=False,
+    )
+    with pytest.raises(RuntimeError, match="Configuração de produção inválida"):
+        unsafe.validate_for_startup()

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RegisterRequest(BaseModel):
@@ -12,6 +12,19 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     email: str = Field(min_length=5, max_length=254)
     password: str = Field(min_length=1, max_length=200)
+
+
+class EmailTokenRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=300)
+
+
+class EmailAddressRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class PasswordResetConfirmRequest(EmailTokenRequest):
+    password: str = Field(min_length=10, max_length=200)
 
 
 class InvitationRequest(BaseModel):
@@ -125,3 +138,16 @@ class ConciliationRoundRequest(BaseModel):
     claimant_response: str = Field(default="", max_length=10_000)
     respondent_response: str = Field(default="", max_length=10_000)
     new_information: str = Field(default="", max_length=10_000)
+
+
+class FinalizeCaseRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    human_override: bool = False
+    rationale: str = Field(default="", max_length=5_000)
+
+    @model_validator(mode="after")
+    def rationale_is_required_for_override(self):
+        if self.human_override and len(self.rationale) < 20:
+            raise ValueError("A revisão humana exige justificativa com ao menos 20 caracteres")
+        return self

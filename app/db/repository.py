@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import build_audit_event
+from app.core.encryption import decrypt_text, encrypt_text
 from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
 from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
 
@@ -14,13 +15,13 @@ from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
 def _json_dump(value: Any) -> Optional[str]:
     if value is None:
         return None
-    return json.dumps(value, ensure_ascii=False)
+    return encrypt_text(json.dumps(value, ensure_ascii=False))
 
 
 def _json_load(value: Optional[str], default: Any = None) -> Any:
     if not value:
         return default
-    return json.loads(value)
+    return json.loads(decrypt_text(value))
 
 
 def _conciliation_rounds(value: Any) -> List[Dict[str, Any]]:
@@ -46,7 +47,7 @@ def _chunk_to_dict(chunk: Chunk, include_embedding: bool = True) -> Dict[str, An
     result = {
         "id": chunk.id,
         "document_id": chunk.document_id,
-        "text": chunk.text,
+        "text": decrypt_text(chunk.text),
         "sha256": chunk.sha256,
         "embedding_error": chunk.embedding_error,
     }
@@ -71,7 +72,7 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         "acknowledged_at": document.acknowledged_at,
         "acknowledged_by": document.acknowledged_by,
         "response_status": document.response_status,
-        "response_text": document.response_text,
+        "response_text": decrypt_text(document.response_text) or "",
         "responded_at": document.responded_at,
         "admitted": document.admitted,
         "admitted_at": document.admitted_at,
@@ -85,7 +86,7 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         "created_at": document.created_at.isoformat(),
     }
     if include_content:
-        result["content"] = document.content
+        result["content"] = decrypt_text(document.content)
     return result
 
 
@@ -144,6 +145,13 @@ def case_to_dict(
         "organized": _json_load(case.organized_json),
         "decision": _json_load(case.decision_json),
         "review": _json_load(case.review_json),
+        "finalization": {
+            "complete": bool(case.finalized_at),
+            "finalized_at": case.finalized_at.isoformat() if case.finalized_at else None,
+            "finalized_by_user_id": case.finalized_by_user_id,
+            "basis": case.finalization_basis,
+            "note": decrypt_text(case.finalization_note) or "",
+        },
         "created_at": case.created_at.isoformat(),
         "updated_at": case.updated_at.isoformat(),
         "documents": documents,
@@ -282,7 +290,7 @@ def add_document(
         id=document_id,
         case_id=case.id,
         name=name,
-        content=content,
+        content=encrypt_text(content),
         sha256=document_hash,
         submitted_by=submitted_by,
         material_type=material_type,
@@ -297,7 +305,7 @@ def add_document(
                 id=f"{document_id}-C{index}",
                 case_id=case.id,
                 document_id=document.id,
-                text=record["text"],
+                text=encrypt_text(record["text"]),
                 sha256=record["sha256"],
                 embedding_json=_json_dump(record.get("embedding")),
                 embedding_error=record.get("embedding_error", False),
@@ -383,7 +391,7 @@ def respond_to_document(
     response_text: str,
 ) -> Document:
     document.response_status = response_status
-    document.response_text = response_text
+    document.response_text = encrypt_text(response_text) or ""
     document.responded_at = datetime.now(timezone.utc).isoformat()
     append_audit(
         db,
@@ -452,5 +460,31 @@ def save_stage(
     setattr(case, field, _json_dump(value))
     case.status = status
     append_audit(db, case, event_type, event_payload)
+    db.commit()
+    return get_case(db, case.id)
+
+
+def finalize_case(
+    db: Session,
+    case: Case,
+    reviewer_id: str,
+    basis: str,
+    note: str,
+) -> Case:
+    case.finalized_at = datetime.now(timezone.utc)
+    case.finalized_by_user_id = reviewer_id
+    case.finalization_basis = basis
+    case.finalization_note = encrypt_text(note) or ""
+    case.status = "finalized"
+    append_audit(
+        db,
+        case,
+        "case_finalized",
+        {
+            "reviewer_id": reviewer_id,
+            "basis": basis,
+            "note_sha256": hashlib.sha256(note.encode("utf-8")).hexdigest() if note else None,
+        },
+    )
     db.commit()
     return get_case(db, case.id)

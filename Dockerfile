@@ -17,7 +17,11 @@ COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY --from=frontend /build/frontend/dist ./frontend/dist
-RUN mkdir -p /app/data
+RUN useradd --create-home --uid 10001 valinor \
+    && mkdir -p /app/data \
+    && chown -R valinor:valinor /app
+
+USER valinor
 
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers"]

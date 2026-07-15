@@ -31,6 +31,10 @@ class Case(Base):
     organized_json = Column(Text, nullable=True)
     decision_json = Column(Text, nullable=True)
     review_json = Column(Text, nullable=True)
+    finalized_at = Column(DateTime(timezone=True), nullable=True)
+    finalized_by_user_id = Column(String, nullable=True)
+    finalization_basis = Column(String, nullable=True)
+    finalization_note = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(
         DateTime(timezone=True),
@@ -133,6 +137,7 @@ class User(Base):
     email = Column(String, nullable=False, unique=True, index=True)
     display_name = Column(String, nullable=False)
     password_hash = Column(Text, nullable=False)
+    email_verified = Column(Boolean, nullable=False, default=False)
     active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
@@ -152,6 +157,18 @@ class AuthSession(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     user = relationship("User", back_populates="sessions")
+
+
+class UserActionToken(Base):
+    __tablename__ = "user_action_tokens"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    purpose = Column(String, nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class CaseMember(Base):
