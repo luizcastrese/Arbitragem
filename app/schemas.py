@@ -125,3 +125,14 @@ class ConciliationRoundRequest(BaseModel):
     claimant_response: str = Field(default="", max_length=10_000)
     respondent_response: str = Field(default="", max_length=10_000)
     new_information: str = Field(default="", max_length=10_000)
+
+
+class ContestRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reason: str = Field(min_length=10, max_length=10_000)
+
+
+class AttestationVerifyRequest(BaseModel):
+    attestation: dict
+    public_key_b64: str = ""

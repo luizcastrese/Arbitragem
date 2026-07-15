@@ -31,6 +31,10 @@ class Case(Base):
     organized_json = Column(Text, nullable=True)
     decision_json = Column(Text, nullable=True)
     review_json = Column(Text, nullable=True)
+    attestation_json = Column(Text, nullable=True)
+    escrow_id = Column(String, nullable=True)
+    contested_at = Column(String, nullable=True)
+    contested_by = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(
         DateTime(timezone=True),

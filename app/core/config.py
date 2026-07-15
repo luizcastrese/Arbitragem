@@ -20,6 +20,9 @@ class Settings:
     openai_model: str
     embedding_model: str
     platform_signing_secret: str
+    platform_ed25519_private_key: str
+    contest_window_days: int
+    app_env: str
     cors_origins: List[str]
     max_upload_bytes: int
     auth_required: bool
@@ -35,11 +38,27 @@ class Settings:
     def using_development_signing_secret(self) -> bool:
         return self.platform_signing_secret == "development-only-secret-change-me"
 
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+    @property
+    def attestation_enabled(self) -> bool:
+        return bool(self.platform_ed25519_private_key)
+
 
 @lru_cache
 def get_settings() -> Settings:
+    app_env = os.getenv("APP_ENV", "development").strip().lower()
+
     signing_secret = os.getenv("PLATFORM_SIGNING_SECRET", "").strip()
     if not signing_secret or signing_secret == "replace-with-a-long-random-secret":
+        if app_env == "production":
+            raise RuntimeError(
+                "PLATFORM_SIGNING_SECRET é obrigatório em produção: toda a "
+                "garantia de assinatura do manifesto depende desse segredo. "
+                "Gere um valor longo e aleatório antes de subir o serviço."
+            )
         signing_secret = "development-only-secret-change-me"
 
     return Settings(
@@ -51,6 +70,11 @@ def get_settings() -> Settings:
             "text-embedding-3-small",
         ),
         platform_signing_secret=signing_secret,
+        platform_ed25519_private_key=os.getenv(
+            "PLATFORM_ED25519_PRIVATE_KEY", ""
+        ).strip(),
+        contest_window_days=int(os.getenv("CONTEST_WINDOW_DAYS", "7")),
+        app_env=app_env,
         cors_origins=_split_csv(
             os.getenv(
                 "CORS_ORIGINS",

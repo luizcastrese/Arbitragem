@@ -144,6 +144,13 @@ def case_to_dict(
         "organized": _json_load(case.organized_json),
         "decision": _json_load(case.decision_json),
         "review": _json_load(case.review_json),
+        "attestation": _json_load(case.attestation_json),
+        "escrow_id": case.escrow_id,
+        "contest": {
+            "contested": bool(case.contested_at),
+            "contested_at": case.contested_at,
+            "contested_by": case.contested_by,
+        },
         "created_at": case.created_at.isoformat(),
         "updated_at": case.updated_at.isoformat(),
         "documents": documents,
@@ -452,5 +459,29 @@ def save_stage(
     setattr(case, field, _json_dump(value))
     case.status = status
     append_audit(db, case, event_type, event_payload)
+    db.commit()
+    return get_case(db, case.id)
+
+
+def register_contest(
+    db: Session,
+    case: Case,
+    contested_by: str,
+    reason: str,
+) -> Case:
+    contested_at = datetime.now(timezone.utc).isoformat()
+    case.contested_at = contested_at
+    case.contested_by = contested_by
+    case.status = "contested"
+    append_audit(
+        db,
+        case,
+        "contest_registered",
+        {
+            "contested_by": contested_by,
+            "contested_at": contested_at,
+            "reason": reason,
+        },
+    )
     db.commit()
     return get_case(db, case.id)

@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,15 @@ from app.core.llm import call_openai_structured
 class DecisionOutput(BaseModel):
     framework: str
     outcome: Literal["claimant", "respondent", "partial", "inconclusive"]
+    partial_claimant_bps: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=10000,
+        description=(
+            "Obrigatório quando outcome for 'partial': fração do valor em "
+            "disputa atribuída ao reclamante, em basis points (10000 = 100%)."
+        ),
+    )
     decision: str
     reasoning: List[str]
     evidence_cited: List[str]
@@ -27,6 +36,10 @@ Regras obrigatórias:
 - Não invente fatos, valores, percentuais, cláusulas ou provas.
 - Toda conclusão material deve citar evidência recuperada.
 - Se a evidência for insuficiente ou contraditória, use outcome "inconclusive".
+- Quando o outcome for "partial", preencha partial_claimant_bps com a fração
+  do valor em disputa devida ao reclamante, em basis points (10000 = 100%),
+  fundamentando o percentual nas evidências citadas. Nunca invente o número:
+  se a proporção não puder ser sustentada por evidência, use "inconclusive".
 - Quando o outcome não for "inconclusive", apresente uma decisão clara sobre
   o pedido e seus fundamentos, sem tratá-la como mera recomendação.
 - Não chame o resultado de sentença judicial ou sentença arbitral com eficácia
