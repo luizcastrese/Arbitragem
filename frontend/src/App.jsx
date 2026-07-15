@@ -70,7 +70,13 @@ const steps = [
     key: 'reviewed',
     title: 'Auditoria',
     short: 'Valide a decisão',
-    description: 'Uma segunda IA procura falhas, contradições e desvios das regras.'
+    description: 'Um agente auditor separado procura falhas, contradições e desvios das regras.'
+  },
+  {
+    key: 'finalized',
+    title: 'Finalização',
+    short: 'Libere o relatório',
+    description: 'O gestor confirma a auditoria ou registra a revisão humana necessária.'
   }
 ]
 
@@ -80,7 +86,8 @@ const statusLabels = {
   conciliation: 'Composição avaliada',
   organized: 'Fatos organizados',
   decided: 'Decisão proferida',
-  reviewed: 'Decisão auditada'
+  reviewed: 'Decisão auditada',
+  finalized: 'Procedimento finalizado'
 }
 
 export default function App() {
@@ -101,20 +108,14 @@ export default function App() {
   const [claimantResponse, setClaimantResponse] = useState('')
   const [respondentResponse, setRespondentResponse] = useState('')
   const [conciliationUpdate, setConciliationUpdate] = useState('')
-  const [sessionToken, setSessionToken] = useState(() => localStorage.getItem('arbitragem_session') || '')
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('arbitragem_user') || 'null') } catch { return null }
-  })
+  const [user, setUser] = useState(null)
   const [showAuth, setShowAuth] = useState(false)
-  const [authMode, setAuthMode] = useState('register')
+  const [authMode, setAuthMode] = useState(() => (
+    new URLSearchParams(window.location.search).get('reset') ? 'reset-confirm' : 'register'
+  ))
   const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
-  const [caseCredentials, setCaseCredentials] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('arbitragem_case_credentials') || '{}')
-    } catch {
-      return {}
-    }
-  })
+  const [verifyToken] = useState(() => new URLSearchParams(window.location.search).get('verify') || '')
+  const [resetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '')
 
   const currentStage = useMemo(
     () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
@@ -124,20 +125,21 @@ export default function App() {
   async function request(path, options = {}) {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
+      credentials: 'include',
       headers: {
-        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
         ...(options.headers || {})
       }
     })
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(data.detail || `Erro HTTP ${response.status}`)
+    if (!response.ok) {
+      const error = new Error(data.detail || `Erro HTTP ${response.status}`)
+      error.status = response.status
+      throw error
+    }
     return data
   }
 
-  function actorHeaders(caseId, party) {
-    const token = caseCredentials[caseId]?.[party]
-    return token || sessionToken ? { 'X-Actor-Token': token || sessionToken } : {}
-  }
+  function actorHeaders() { return {} }
 
   async function authenticate(event) {
     event.preventDefault()
@@ -145,6 +147,27 @@ export default function App() {
     setBusy(true)
     setError('')
     try {
+      if (authMode === 'reset-request') {
+        const data = await request('/auth/password-reset/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: form.get('email') })
+        })
+        setStatus(data.message)
+        setShowAuth(false)
+        return
+      }
+      if (authMode === 'reset-confirm') {
+        const data = await request('/auth/password-reset/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: resetToken, password: form.get('password') })
+        })
+        window.history.replaceState({}, '', window.location.pathname)
+        setStatus(data.message)
+        setAuthMode('login')
+        return
+      }
       const path = authMode === 'register' ? '/auth/register' : '/auth/login'
       const payload = authMode === 'register'
         ? { display_name: form.get('display_name'), email: form.get('email'), password: form.get('password') }
@@ -154,10 +177,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      setSessionToken(data.session_token)
+      if (data.verification_required) {
+        setStatus('Conta criada. Confira seu e-mail para confirmar o acesso.')
+        setAuthMode('login')
+        setShowAuth(false)
+        return
+      }
       setUser(data.user)
-      localStorage.setItem('arbitragem_session', data.session_token)
-      localStorage.setItem('arbitragem_user', JSON.stringify(data.user))
       setShowAuth(false)
       setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
       setTimeout(() => window.location.reload(), 100)
@@ -169,10 +195,7 @@ export default function App() {
   }
 
   async function logout() {
-    try { await request('/auth/logout', { method: 'POST' }) } catch { /* sessão local também será removida */ }
-    localStorage.removeItem('arbitragem_session')
-    localStorage.removeItem('arbitragem_user')
-    setSessionToken('')
+    try { await request('/auth/logout', { method: 'POST' }) } catch { /* a sessão expirada já está encerrada */ }
     setUser(null)
     window.location.reload()
   }
@@ -206,8 +229,21 @@ export default function App() {
   useEffect(() => {
     async function bootstrap() {
       try {
-        const [root, items] = await Promise.all([request('/'), request('/cases')])
+        const root = await request('/')
         setSystem(root)
+        if (verifyToken) {
+          const verified = await request('/auth/verify-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: verifyToken })
+          })
+          setUser(verified.user)
+          window.history.replaceState({}, '', window.location.pathname)
+          setStatus('E-mail confirmado. Sua conta está ativa.')
+        }
+        const currentUser = await request('/auth/me')
+        setUser(currentUser)
+        const items = await request('/cases')
         setCases(items)
         if (items[0]) {
           await loadCase(items[0].id)
@@ -215,6 +251,12 @@ export default function App() {
           setShowCreate(true)
         }
       } catch (err) {
+        if (err.status === 401) {
+          setShowAuth(true)
+          setCases([])
+          setCaseData(null)
+          return
+        }
         setError(err.message)
       }
     }
@@ -255,14 +297,6 @@ export default function App() {
           respondent: form.get('respondent')
         })
       })
-      const credentials = data.access_credentials
-      delete data.access_credentials
-      const updatedCredentials = { ...caseCredentials, [data.id]: credentials }
-      setCaseCredentials(updatedCredentials)
-      localStorage.setItem(
-        'arbitragem_case_credentials',
-        JSON.stringify(updatedCredentials)
-      )
       formElement.reset()
       await loadCases(data.id)
       setStatus('Caso criado. Agora adicione os documentos da disputa.')
@@ -504,7 +538,6 @@ export default function App() {
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
                 user={user}
-                sessionToken={sessionToken}
               />
             ) : (
               <LoadingState />
@@ -651,36 +684,59 @@ function Journey({ title, steps }) {
 }
 
 function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
+  const isRegister = mode === 'register'
+  const isResetRequest = mode === 'reset-request'
+  const isResetConfirm = mode === 'reset-confirm'
+  const title = isRegister
+    ? 'Crie sua conta'
+    : isResetRequest
+      ? 'Recupere seu acesso'
+      : isResetConfirm
+        ? 'Defina uma nova senha'
+        : 'Entre na plataforma'
   return (
     <section className="auth-panel">
       <div>
         <span className="section-label">Acesso protegido</span>
-        <h2>{mode === 'register' ? 'Crie sua conta' : 'Entre na plataforma'}</h2>
+        <h2>{title}</h2>
         <p>Uma conta permite receber convites, acessar apenas os casos vinculados e atuar com o papel correto.</p>
       </div>
       <form onSubmit={onSubmit} className="auth-form">
-        {mode === 'register' && (
+        {isRegister && (
           <label className="mini-field">
             <span>Seu nome</span>
             <input name="display_name" minLength="2" required placeholder="Nome completo" />
           </label>
         )}
-        <label className="mini-field">
-          <span>E-mail</span>
-          <input name="email" type="email" required placeholder="voce@empresa.com" />
-        </label>
-        <label className="mini-field">
-          <span>Senha</span>
-          <input name="password" type="password" minLength={mode === 'register' ? 10 : 1} required placeholder="Mínimo de 10 caracteres" />
-        </label>
+        {!isResetConfirm && (
+          <label className="mini-field">
+            <span>E-mail</span>
+            <input name="email" type="email" required placeholder="voce@empresa.com" />
+          </label>
+        )}
+        {!isResetRequest && (
+          <label className="mini-field">
+            <span>{isResetConfirm ? 'Nova senha' : 'Senha'}</span>
+            <input name="password" type="password" minLength={isRegister || isResetConfirm ? 10 : 1} required placeholder="Mínimo de 10 caracteres" />
+          </label>
+        )}
         <div className="auth-actions">
           <button type="button" className="button ghost" onClick={onClose}>Agora não</button>
-          <button className="button primary" disabled={busy}>{mode === 'register' ? 'Criar conta' : 'Entrar'}</button>
+          <button className="button primary" disabled={busy}>
+            {isRegister ? 'Criar conta' : isResetRequest ? 'Enviar instruções' : isResetConfirm ? 'Redefinir senha' : 'Entrar'}
+          </button>
         </div>
       </form>
-      <button className="auth-switch" onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>
-        {mode === 'register' ? 'Já tenho uma conta' : 'Quero criar uma conta'}
-      </button>
+      <div className="auth-switch">
+        <button onClick={() => setMode(isRegister ? 'login' : 'register')}>
+          {isRegister ? 'Já tenho uma conta' : 'Quero criar uma conta'}
+        </button>
+        {!isRegister && !isResetConfirm && (
+          <button onClick={() => setMode(isResetRequest ? 'login' : 'reset-request')}>
+            {isResetRequest ? 'Voltar ao acesso' : 'Esqueci minha senha'}
+          </button>
+        )}
+      </div>
     </section>
   )
 }
@@ -763,11 +819,10 @@ function CaseWorkspace({
   setConciliationUpdate,
   showTechnical,
   setShowTechnical,
-  user,
-  sessionToken
+  user
 }) {
   const unavailable = hasUnavailableAI(caseData)
-  const displayedStage = unavailable ? 2 : currentStage
+  const displayedStage = unavailable && caseData.status !== 'finalized' ? 2 : currentStage
 
   return (
     <>
@@ -792,7 +847,7 @@ function CaseWorkspace({
 
       <ProcessSteps currentStage={displayedStage} blockedByAI={unavailable} />
 
-      {caseData.status !== 'reviewed' && (
+      {!['reviewed', 'finalized'].includes(caseData.status) && (
         <NextAction
           caseData={caseData}
           busy={busy}
@@ -844,10 +899,9 @@ function CaseWorkspace({
         request={request}
         actorHeaders={actorHeaders}
         user={user}
-        sessionToken={sessionToken}
       />
 
-      {caseData.status === 'reviewed' && (
+      {['reviewed', 'finalized'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
 
@@ -864,8 +918,9 @@ function CaseWorkspace({
   )
 }
 
-function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sessionToken }) {
+function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
   const [inviteLink, setInviteLink] = useState('')
+  const [finalizationNote, setFinalizationNote] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
 
@@ -878,7 +933,14 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
         headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
         body: JSON.stringify({ email: form.get('email'), role: form.get('role') })
       })
-      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
+      setInviteLink(
+        data.acceptance_token
+          ? `${window.location.origin}/ui/?invite=${data.acceptance_token}`
+          : ''
+      )
+      if (data.delivery === 'email') {
+        setStatus('Convite enviado diretamente ao e-mail informado.')
+      }
       event.currentTarget?.reset?.()
       return data
     })
@@ -902,7 +964,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
   async function downloadReport() {
     await run('Gerando o relatório Word...', async () => {
       const response = await fetch(`${API_BASE}/cases/${caseData.id}/report.docx`, {
-        headers: sessionToken ? { 'X-Session-Token': sessionToken } : {}
+        credentials: 'include'
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
@@ -918,6 +980,21 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
     })
   }
 
+  async function finalizeProcedure() {
+    const requiresHuman = !caseData.review?.approved || caseData.review?.requires_human_review
+    await run('Registrando a finalização do procedimento...', () => request(
+      `/cases/${caseData.id}/finalize`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
+        body: JSON.stringify({
+          human_override: requiresHuman,
+          rationale: finalizationNote
+        })
+      }
+    ))
+  }
+
   return (
     <section className="operations-card">
       <div className="card-title-row">
@@ -925,10 +1002,46 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
           <span className="section-label">Acesso, agenda e entrega</span>
           <h3>Administração do procedimento</h3>
         </div>
-        <button className="button secondary" onClick={downloadReport} disabled={busy}>
-          <Download size={16} /> Baixar relatório Word
+        <button
+          className="button secondary"
+          onClick={downloadReport}
+          disabled={busy || caseData.status !== 'finalized'}
+        >
+          <Download size={16} /> {caseData.status === 'finalized' ? 'Baixar relatório Word' : 'Relatório ainda bloqueado'}
         </button>
       </div>
+
+      {caseData.status === 'reviewed' && (
+        <div className="finalization-panel">
+          <div>
+            <strong>Finalização controlada</strong>
+            <p>
+              {caseData.review?.approved && !caseData.review?.requires_human_review
+                ? 'A auditoria aprovou a decisão. Confirme para liberar o relatório final.'
+                : 'A auditoria apontou ressalvas. Registre a análise humana antes de liberar o relatório.'}
+            </p>
+          </div>
+          {(!caseData.review?.approved || caseData.review?.requires_human_review) && (
+            <textarea
+              value={finalizationNote}
+              onChange={(event) => setFinalizationNote(event.target.value)}
+              placeholder="Explique a revisão humana, os riscos considerados e por que o procedimento pode ser finalizado."
+              minLength="20"
+            />
+          )}
+          <button
+            className="button primary"
+            disabled={
+              busy
+              || ((!caseData.review?.approved || caseData.review?.requires_human_review)
+                && finalizationNote.trim().length < 20)
+            }
+            onClick={finalizeProcedure}
+          >
+            Finalizar e liberar relatório <FileCheck2 size={17} />
+          </button>
+        </div>
+      )}
 
       <div className="operations-grid">
         <div className="operation-block">
@@ -1406,7 +1519,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria independente e possível revisão humana.</span>
+        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria separada e possível revisão humana.</span>
       </div>
       <small>
         Versão dos termos: 2026-07-12. O aceite fica associado ao papel, ao momento e à cadeia de auditoria.
@@ -1778,7 +1891,7 @@ function AnalysisDetails({ caseData }) {
       <div className="analysis-heading">
         <span className="section-label">O que o sistema encontrou</span>
         <h2>Resumo da análise</h2>
-        <p>Veja os fatos organizados, a decisão do agente julgador e sua auditoria independente.</p>
+        <p>Veja os fatos organizados, a decisão do agente julgador e a auditoria separada por IA.</p>
       </div>
 
       <div className="analysis-grid">
@@ -1802,7 +1915,7 @@ function AnalysisDetails({ caseData }) {
         )}
 
         {review && (
-          <SummaryCard icon={<ShieldCheck size={19} />} title="Auditoria independente">
+          <SummaryCard icon={<ShieldCheck size={19} />} title="Auditoria separada por IA">
             <p>{review.framework_alignment}</p>
             <ListBlock title="Riscos identificados" items={auditDisplayRisks(review)} tone="warning" />
             <ListBlock title="Questões encontradas" items={auditDisplayIssues(review)} />
@@ -2019,7 +2132,7 @@ function auditDisplayRisks(review = {}) {
 
 function auditDisplayIssues(review = {}) {
   if (review.execution?.mode === 'safe_fallback') {
-    return ['A auditoria independente por IA não foi executada.']
+    return ['A auditoria separada por IA não foi executada.']
   }
   return review.issues
 }

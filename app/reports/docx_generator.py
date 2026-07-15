@@ -216,6 +216,8 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
         document,
         (
             ("Status", case.get("status", "")),
+            ("Finalizado em", _format_timestamp((case.get("finalization") or {}).get("finalized_at"))),
+            ("Base da finalização", str((case.get("finalization") or {}).get("basis") or "Não finalizado")),
             ("Criado em", _format_timestamp(case.get("created_at"))),
             ("Atualizado em", _format_timestamp(case.get("updated_at"))),
             ("Cliente", case.get("claimant", "")),
@@ -324,7 +326,7 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
     else:
         document.add_paragraph("A decisão por IA ainda não foi gerada.")
     if review:
-        document.add_heading("Auditoria independente", level=2)
+        document.add_heading("Auditoria separada por IA", level=2)
         _add_key_value_table(
             document,
             (

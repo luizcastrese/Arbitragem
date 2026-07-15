@@ -2,13 +2,17 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import hashlib
 from io import BytesIO
+import json
+import logging
 from pathlib import Path
 import secrets
+from time import perf_counter
 from typing import Dict, List
+import uuid
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -20,8 +24,10 @@ from app.agents.reviewer import review_decision
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
+from app.core.encryption import decrypt_text, encrypt_text
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
+from app.core.rate_limit import SlidingWindowRateLimiter
 from app.core.signing import verify_signature
 from app.db.access_repository import (
     accept_invitation,
@@ -31,10 +37,15 @@ from app.db.access_repository import (
     create_invitation,
     create_notification,
     create_session,
+    create_user_action_token,
+    consume_user_action_token,
     deadline_to_dict,
     get_user_by_token,
+    get_user_by_email,
     invitation_to_dict,
+    mark_email_verified,
     register_user,
+    reset_password,
     revoke_session,
     user_case_ids,
     user_has_role,
@@ -50,6 +61,7 @@ from app.db.repository import (
     document_to_dict,
     get_document,
     get_case,
+    finalize_case as persist_finalization,
     list_cases,
     lock_manifest as persist_manifest,
     record_consent,
@@ -72,26 +84,44 @@ from app.schemas import (
     ConsentRequest,
     CreateCaseRequest,
     DeadlineRequest,
+    EmailAddressRequest,
+    EmailTokenRequest,
     EvidenceActionRequest,
+    FinalizeCaseRequest,
     InvitationRequest,
     LoginRequest,
+    PasswordResetConfirmRequest,
     RegisterRequest,
+)
+from app.services.email import (
+    send_invitation_email,
+    send_password_reset_email,
+    send_verification_email,
 )
 
 
 settings = get_settings()
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger("valinor")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings.validate_for_startup()
+    if settings.data_encryption_key:
+        probe = encrypt_text("valinor-startup-check")
+        if decrypt_text(probe) != "valinor-startup-check":
+            raise RuntimeError("Falha ao validar DATA_ENCRYPTION_KEY")
     init_db()
     yield
 
 
 app = FastAPI(
     title="Valinor",
-    version="0.5.0",
+    version="0.6.0",
     description="Fluxo auditável de decisão de disputas documentais por IA.",
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -101,6 +131,74 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+rate_limiter = SlidingWindowRateLimiter(settings.rate_limit_per_minute)
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", "")[:100] or str(uuid.uuid4())
+    started_at = perf_counter()
+    cookie_token = request.cookies.get(settings.session_cookie_name, "")
+    if cookie_token:
+        headers = list(request.scope.get("headers", []))
+        names = {name.lower() for name, _ in headers}
+        encoded = cookie_token.encode("latin-1")
+        if b"x-session-token" not in names:
+            headers.append((b"x-session-token", encoded))
+        if b"x-actor-token" not in names:
+            headers.append((b"x-actor-token", encoded))
+        request.scope["headers"] = headers
+
+    client_ip = request.client.host if request.client else "unknown"
+    path = request.url.path
+    limit = 10 if path in {"/auth/login", "/auth/register"} else None
+    bucket = f"{client_ip}:{path}"
+    if not rate_limiter.allow(bucket, limit=limit):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Muitas solicitações. Aguarde um minuto e tente novamente."},
+            headers={"Retry-After": "60", "X-Request-ID": request_id},
+        )
+
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; connect-src 'self' https://api.openai.com"
+    )
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    logger.info(
+        json.dumps(
+            {
+                "event": "http_request",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+            },
+            ensure_ascii=True,
+        )
+    )
+    return response
+
+
+def _set_session_cookie(response: Response, token: str, max_age: int = 7 * 24 * 60 * 60) -> None:
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=token,
+        max_age=max_age,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="strict",
+        path="/",
+    )
 
 def _case_or_404(db: Session, case_id: str):
     case = get_case(db, case_id)
@@ -115,7 +213,12 @@ def _hash_token(token: str) -> str:
 
 def _require_actor(db: Session, case, token: str, expected_party: str):
     stored_hash = getattr(case, f"{expected_party}_token_hash", None)
-    if token and stored_hash and secrets.compare_digest(_hash_token(token), stored_hash):
+    if (
+        settings.allow_legacy_case_tokens
+        and token
+        and stored_hash
+        and secrets.compare_digest(_hash_token(token), stored_hash)
+    ):
         return None
     user = get_user_by_token(db, token)
     if user and user_has_role(db, case.id, user.id, expected_party):
@@ -237,7 +340,7 @@ def root():
         "project": "Valinor",
         "version": app.version,
         "status": "running",
-        "docs": "/docs",
+        "docs": None if settings.is_production else "/docs",
         "ui": "/ui/",
         "openai_enabled": settings.openai_enabled,
         "auth_required": settings.auth_required,
@@ -248,7 +351,7 @@ def root():
                 "conhecimento e oportunidade de resposta a todo material",
                 "tentativas de composição dependem de aceitação das partes",
                 "decisão por IA fundamentada apenas no registro admitido",
-                "auditoria independente e indicação de revisão humana quando necessária",
+                "auditoria separada por IA e indicação de revisão humana quando necessária",
             ],
         },
         "warnings": [
@@ -296,31 +399,172 @@ def _require_case_view(db: Session, case, x_session_token: str):
     return user
 
 
+def _require_final_report_access(
+    db: Session,
+    case,
+    x_session_token: str,
+    draft: bool,
+):
+    user = _require_case_view(db, case, x_session_token)
+    if case.finalized_at:
+        case_data = case_to_dict(case)
+        audit_valid, _ = verify_audit_chain(case_data.get("audit_log", []))
+        manifest = case_data.get("locked_manifest") or {}
+        unsigned = dict(manifest)
+        manifest_hash = unsigned.pop("manifest_hash", None)
+        unsigned.pop("platform_signature", None)
+        unsigned.pop("signature_algorithm", None)
+        integrity_valid = (
+            audit_valid
+            and manifest_hash == canonical_hash(unsigned)
+            and verify_signature(manifest)
+        )
+        if not integrity_valid:
+            raise HTTPException(
+                status_code=409,
+                detail="A integridade do procedimento falhou; o relatório foi bloqueado",
+            )
+        return user
+    if not draft:
+        raise HTTPException(
+            status_code=409,
+            detail="O relatório final só é liberado depois da finalização do procedimento",
+        )
+    if not user or not user_has_role(db, case.id, user.id, "manager"):
+        raise HTTPException(
+            status_code=403,
+            detail="Somente o gestor pode gerar uma prévia antes da finalização",
+        )
+    return user
+
+
 @app.post("/auth/register", status_code=201)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     try:
-        user = register_user(db, payload.display_name, payload.email, payload.password)
+        user = register_user(
+            db,
+            payload.display_name,
+            payload.email,
+            payload.password,
+            email_verified=not settings.email_verification_required,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if settings.email_verification_required:
+        verification_token, _ = create_user_action_token(db, user, "verify_email")
+        try:
+            send_verification_email(user.email, verification_token)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Conta criada, mas o e-mail de verificação não pôde ser enviado",
+            ) from exc
+        result = {
+            "user": user_to_dict(user),
+            "verification_required": True,
+        }
+        if settings.expose_auth_tokens:
+            result["verification_token"] = verification_token
+        return result
+
     token, session = create_session(db, user)
-    return {
+    _set_session_cookie(response, token)
+    result = {
         "user": user_to_dict(user),
-        "session_token": token,
         "expires_at": session.expires_at.isoformat(),
     }
+    if settings.expose_auth_tokens:
+        result["session_token"] = token
+    return result
 
 
 @app.post("/auth/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = authenticate_user(db, payload.email, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos")
+    if settings.email_verification_required and not user.email_verified:
+        raise HTTPException(status_code=403, detail="Confirme seu e-mail antes de entrar")
     token, session = create_session(db, user)
-    return {
+    _set_session_cookie(response, token)
+    result = {
         "user": user_to_dict(user),
-        "session_token": token,
         "expires_at": session.expires_at.isoformat(),
     }
+    if settings.expose_auth_tokens:
+        result["session_token"] = token
+    return result
+
+
+@app.post("/auth/verify-email")
+def verify_email(
+    payload: EmailTokenRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    try:
+        user = consume_user_action_token(db, payload.token, "verify_email")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    mark_email_verified(db, user)
+    token, session = create_session(db, user)
+    _set_session_cookie(response, token)
+    result = {
+        "user": user_to_dict(user),
+        "expires_at": session.expires_at.isoformat(),
+    }
+    if settings.expose_auth_tokens:
+        result["session_token"] = token
+    return result
+
+
+@app.post("/auth/verify-email/request")
+def request_email_verification(
+    payload: EmailAddressRequest,
+    db: Session = Depends(get_db),
+):
+    user = get_user_by_email(db, payload.email)
+    result = {"message": "Se a conta existir e precisar de confirmação, enviaremos um e-mail."}
+    if user and not user.email_verified:
+        token, _ = create_user_action_token(db, user, "verify_email")
+        try:
+            send_verification_email(user.email, token)
+        except RuntimeError:
+            pass
+        if settings.expose_auth_tokens:
+            result["verification_token"] = token
+    return result
+
+
+@app.post("/auth/password-reset/request")
+def request_password_reset(
+    payload: EmailAddressRequest,
+    db: Session = Depends(get_db),
+):
+    user = get_user_by_email(db, payload.email)
+    result = {"message": "Se a conta existir, enviaremos as instruções de redefinição."}
+    if user:
+        token, _ = create_user_action_token(db, user, "reset_password")
+        try:
+            send_password_reset_email(user.email, token)
+        except RuntimeError:
+            pass
+        if settings.expose_auth_tokens:
+            result["reset_token"] = token
+    return result
+
+
+@app.post("/auth/password-reset/confirm")
+def confirm_password_reset(
+    payload: PasswordResetConfirmRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        user = consume_user_action_token(db, payload.token, "reset_password")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    reset_password(db, user, payload.password)
+    return {"message": "Senha redefinida. Entre novamente com a nova senha."}
 
 
 @app.get("/auth/me")
@@ -333,11 +577,19 @@ def current_user(
 
 @app.post("/auth/logout")
 def logout(
+    response: Response,
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     if not revoke_session(db, x_session_token):
         raise HTTPException(status_code=401, detail="Sessão inválida")
+    response.delete_cookie(
+        settings.session_cookie_name,
+        path="/",
+        secure=settings.secure_cookies,
+        httponly=True,
+        samesite="strict",
+    )
     return {"message": "Sessão encerrada"}
 
 
@@ -373,27 +625,34 @@ def create_case(
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    credentials = {
-        "claimant": secrets.token_urlsafe(24),
-        "respondent": secrets.token_urlsafe(24),
-        "manager": secrets.token_urlsafe(24),
-    }
+    user = get_user_by_token(db, x_session_token)
+    if settings.auth_required and not user:
+        raise HTTPException(status_code=401, detail="Entre para criar um caso")
+    credentials = (
+        {
+            "claimant": secrets.token_urlsafe(24),
+            "respondent": secrets.token_urlsafe(24),
+            "manager": secrets.token_urlsafe(24),
+        }
+        if settings.allow_legacy_case_tokens
+        else {}
+    )
     case = persist_case(
         db,
         title=payload.title,
         claimant=payload.claimant,
         respondent=payload.respondent,
-        claimant_token_hash=_hash_token(credentials["claimant"]),
-        respondent_token_hash=_hash_token(credentials["respondent"]),
-        manager_token_hash=_hash_token(credentials["manager"]),
+        claimant_token_hash=_hash_token(credentials["claimant"]) if credentials else None,
+        respondent_token_hash=_hash_token(credentials["respondent"]) if credentials else None,
+        manager_token_hash=_hash_token(credentials["manager"]) if credentials else None,
     )
-    user = get_user_by_token(db, x_session_token)
     if user:
         add_member(db, case.id, user.id, "manager")
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
-    result["access_credentials"] = credentials
+    if credentials:
+        result["access_credentials"] = credentials
     return result
 
 
@@ -440,8 +699,22 @@ def invite_participant(
         f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
     )
     result = invitation_to_dict(invitation)
-    result["acceptance_token"] = token
-    result["acceptance_path"] = f"/ui/?invite={token}"
+    if settings.smtp_host:
+        try:
+            send_invitation_email(invitation.email, token, case.title, invitation.role)
+            result["delivery"] = "email"
+        except RuntimeError as exc:
+            if settings.is_production:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Convite criado, mas o e-mail não pôde ser enviado",
+                ) from exc
+            result["delivery"] = "manual"
+    else:
+        result["delivery"] = "manual"
+    if not settings.is_production:
+        result["acceptance_token"] = token
+        result["acceptance_path"] = f"/ui/?invite={token}"
     return result
 
 
@@ -605,6 +878,8 @@ async def upload_pdf(
     file_bytes = await file.read(settings.max_upload_bytes + 1)
     if len(file_bytes) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="PDF excede o limite configurado")
+    if not file_bytes.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="O arquivo não possui assinatura válida de PDF")
 
     try:
         extracted_text = extract_text_from_pdf_bytes(file_bytes)
@@ -1079,14 +1354,70 @@ def review_case(
     return review
 
 
+@app.post("/cases/{case_id}/finalize")
+def finalize_case(
+    case_id: str,
+    payload: FinalizeCaseRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    actor = _require_actor(db, case, x_actor_token, "manager")
+    case_data = case_to_dict(case)
+    review = case_data.get("review") or {}
+    if not review:
+        raise HTTPException(status_code=409, detail="Audite a decisão antes de finalizar")
+    if case.finalized_at:
+        return case_data["finalization"]
+
+    audit_valid, _ = verify_audit_chain(case_data.get("audit_log", []))
+    manifest = case_data.get("locked_manifest") or {}
+    unsigned = dict(manifest)
+    manifest_hash = unsigned.pop("manifest_hash", None)
+    unsigned.pop("platform_signature", None)
+    unsigned.pop("signature_algorithm", None)
+    if not (
+        audit_valid
+        and manifest_hash == canonical_hash(unsigned)
+        and verify_signature(manifest)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A integridade do manifesto ou da auditoria precisa ser restaurada antes da finalização",
+        )
+
+    human_review_required = (
+        not review.get("approved", False)
+        or review.get("requires_human_review", False)
+    )
+    if human_review_required and not payload.human_override:
+        raise HTTPException(
+            status_code=409,
+            detail="A auditoria exige revisão humana e uma justificativa antes da finalização",
+        )
+    basis = "human_review" if human_review_required else "ai_audit_approved"
+    reviewer_id = actor.id if actor else "legacy-manager"
+    updated = persist_finalization(
+        db,
+        case,
+        reviewer_id=reviewer_id,
+        basis=basis,
+        note=payload.rationale,
+    )
+    return case_to_dict(updated, include_content=False, include_embeddings=False)[
+        "finalization"
+    ]
+
+
 @app.get("/cases/{case_id}/report")
 def report(
     case_id: str,
+    draft: bool = False,
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_case_view(db, case, x_session_token)
+    _require_final_report_access(db, case, x_session_token, draft)
     return build_report(
         case_to_dict(case, include_content=False, include_embeddings=False)
     )
@@ -1095,11 +1426,12 @@ def report(
 @app.get("/cases/{case_id}/report.docx")
 def report_docx(
     case_id: str,
+    draft: bool = False,
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_case_view(db, case, x_session_token)
+    _require_final_report_access(db, case, x_session_token, draft)
     case_data = case_to_dict(case, include_content=False, include_embeddings=False)
     output = build_docx_report(case_data)
     filename = f"relatorio-valinor-{case.id[:8]}.docx"

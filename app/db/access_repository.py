@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.auth import hash_access_token, hash_password, verify_password
+from app.core.encryption import decrypt_text, encrypt_text
 from app.db.models import (
     AuthSession,
     CaseMember,
@@ -13,6 +14,7 @@ from app.db.models import (
     Invitation,
     Notification,
     User,
+    UserActionToken,
 )
 
 
@@ -29,11 +31,18 @@ def user_to_dict(user: User) -> dict:
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
+        "email_verified": user.email_verified,
         "created_at": user.created_at.isoformat(),
     }
 
 
-def register_user(db: Session, display_name: str, email: str, password: str) -> User:
+def register_user(
+    db: Session,
+    display_name: str,
+    email: str,
+    password: str,
+    email_verified: bool = False,
+) -> User:
     normalized_email = email.strip().lower()
     if db.query(User).filter(User.email == normalized_email).first():
         raise ValueError("Já existe uma conta com este e-mail")
@@ -42,6 +51,7 @@ def register_user(db: Session, display_name: str, email: str, password: str) -> 
         email=normalized_email,
         display_name=display_name.strip(),
         password_hash=hash_password(password),
+        email_verified=email_verified,
     )
     db.add(user)
     db.commit()
@@ -54,6 +64,66 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     if not user or not user.active or not verify_password(password, user.password_hash):
         return None
     return user
+
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    return db.query(User).filter(User.email == email.strip().lower()).one_or_none()
+
+
+def create_user_action_token(
+    db: Session,
+    user: User,
+    purpose: str,
+    duration_minutes: int = 30,
+) -> tuple[str, UserActionToken]:
+    token = secrets.token_urlsafe(40)
+    record = UserActionToken(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        token_hash=hash_access_token(token),
+        purpose=purpose,
+        expires_at=utc_now() + timedelta(minutes=duration_minutes),
+    )
+    db.add(record)
+    db.commit()
+    return token, record
+
+
+def consume_user_action_token(
+    db: Session,
+    token: str,
+    purpose: str,
+) -> User:
+    record = (
+        db.query(UserActionToken)
+        .filter(
+            UserActionToken.token_hash == hash_access_token(token),
+            UserActionToken.purpose == purpose,
+        )
+        .one_or_none()
+    )
+    if not record or record.used_at or _as_utc(record.expires_at) <= utc_now():
+        raise ValueError("Token inválido ou expirado")
+    user = db.query(User).filter(User.id == record.user_id).one()
+    record.used_at = utc_now()
+    db.commit()
+    return user
+
+
+def mark_email_verified(db: Session, user: User) -> User:
+    user.email_verified = True
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def reset_password(db: Session, user: User, password: str) -> None:
+    user.password_hash = hash_password(password)
+    db.query(AuthSession).filter(
+        AuthSession.user_id == user.id,
+        AuthSession.revoked_at.is_(None),
+    ).update({AuthSession.revoked_at: utc_now()}, synchronize_session=False)
+    db.commit()
 
 
 def create_session(db: Session, user: User, duration_days: int = 7) -> tuple[str, AuthSession]:
@@ -253,8 +323,8 @@ def create_notification(
         user_id=membership.user_id if membership else None,
         party=party,
         event_type=event_type,
-        title=title,
-        message=message,
+        title=encrypt_text(title),
+        message=encrypt_text(message),
     )
     db.add(notification)
     db.commit()
@@ -267,8 +337,8 @@ def notification_to_dict(notification: Notification) -> dict:
         "id": notification.id,
         "party": notification.party,
         "event_type": notification.event_type,
-        "title": notification.title,
-        "message": notification.message,
+        "title": decrypt_text(notification.title),
+        "message": decrypt_text(notification.message),
         "read_at": notification.read_at.isoformat() if notification.read_at else None,
         "created_at": notification.created_at.isoformat(),
     }

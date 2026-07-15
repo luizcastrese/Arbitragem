@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-arbitragem}
       POSTGRES_USER: ${POSTGRES_USER:-arbitragem}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -21,8 +21,13 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arbitragem}:${POSTGRES_PASSWORD:-change-this-password}@database:5432/${POSTGRES_DB:-arbitragem}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arbitragem}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}@database:5432/${POSTGRES_DB:-arbitragem}
+      APP_ENV: production
       AUTH_REQUIRED: "true"
+      ALLOW_LEGACY_CASE_TOKENS: "false"
+      EXPOSE_AUTH_TOKENS: "false"
+      SECURE_COOKIES: "true"
+      EMAIL_VERIFICATION_REQUIRED: "true"
     depends_on:
       database:
         condition: service_healthy
@@ -36,6 +41,9 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
 
 volumes:
   postgres_data:

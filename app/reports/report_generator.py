@@ -38,6 +38,7 @@ def build_report(case: Dict) -> Dict:
         "organized": case.get("organized"),
         "decision": case.get("decision"),
         "review": case.get("review"),
+        "finalization": case.get("finalization"),
         "audit_log": case.get("audit_log", []),
         "disclaimer": (
             "O sistema profere uma decisão computacional conforme o procedimento "

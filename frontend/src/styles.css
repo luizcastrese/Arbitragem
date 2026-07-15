@@ -319,7 +319,8 @@ h1, h2, h3, p { margin-top: 0; }
 .auth-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .auth-form .mini-field:first-child { grid-column: 1 / -1; }
 .auth-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.auth-switch { position: absolute; left: 24px; bottom: 19px; color: var(--green-700); background: transparent; border: 0; font-size: 11px; font-weight: 750; cursor: pointer; }
+.auth-switch { position: absolute; left: 24px; bottom: 16px; display: flex; gap: 12px; }
+.auth-switch button { padding: 3px 0; color: var(--green-700); background: transparent; border: 0; font-size: 11px; font-weight: 750; cursor: pointer; }
 .invite-banner { margin: 18px 0; padding: 16px 18px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; border-color: #cbdcc7; }
 .invite-banner > svg { color: var(--green-700); }
 .invite-banner div { display: grid; gap: 3px; }
@@ -693,6 +694,21 @@ input:focus, textarea:focus, select:focus { border-color: #71917a; box-shadow: 0
 .operations-card { padding: 21px; }
 .operations-card .card-title-row { display: flex; align-items: center; }
 .operations-card .card-title-row h3 { margin: 5px 0 0; font-size: 18px; }
+.finalization-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.4fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 15px;
+  color: #445047;
+  background: #f2f7ef;
+  border: 1px solid #d5e3d2;
+  border-radius: 13px;
+}
+.finalization-panel strong { color: var(--green-800); font-size: 12px; }
+.finalization-panel p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.finalization-panel textarea { min-height: 72px; background: white; font-size: 10px; }
 .operations-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 16px; }
 .operation-block { padding: 16px; background: #f8faf7; border: 1px solid #dfe6dc; border-radius: 13px; }
 .operation-title { display: flex; align-items: center; gap: 8px; color: var(--green-800); }
@@ -923,6 +939,7 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .upload-divider::before, .upload-divider::after { width: 100%; height: 1px; }
   .analysis-grid { grid-template-columns: 1fr; }
   .operations-grid { grid-template-columns: 1fr; }
+  .finalization-panel { grid-template-columns: 1fr; }
   .lock-explanation { grid-template-columns: auto 1fr; }
   .lock-explanation .button { grid-column: 1 / -1; }
 }
