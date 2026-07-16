@@ -232,6 +232,59 @@ h1, h2, h3, p { margin-top: 0; }
 .trust-note div { display: grid; gap: 5px; }
 .trust-note span { color: #b9c8bc; font-size: 13px; line-height: 1.5; }
 
+.how-it-works {
+  margin-bottom: 26px;
+  padding: 28px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow-card);
+  animation: rise .55s var(--ease) backwards;
+}
+.how-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: how;
+}
+.how-steps li {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 18px 17px;
+  background: var(--green-50);
+  border: 1px solid #dce7d8;
+  border-radius: 13px;
+  transition: transform .3s var(--ease), box-shadow .3s var(--ease);
+}
+.how-steps li:hover { transform: translateY(-2px); box-shadow: var(--shadow-card); }
+.how-steps li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 12px;
+  height: 1px;
+  background: #c4d3bf;
+}
+.how-number {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--green-950);
+  background: var(--lime);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 850;
+}
+.how-steps strong { font-size: 14px; letter-spacing: -.01em; }
+.how-steps p { margin: 0; color: #56635a; font-size: 12px; line-height: 1.55; }
+
 .audience-value {
   margin-bottom: 26px;
   padding: 28px;
@@ -975,6 +1028,8 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .intro::after { background: linear-gradient(90deg, rgba(247, 248, 242, .97) 0%, rgba(247, 248, 242, .88) 62%, rgba(247, 248, 242, .25) 100%); }
   .trust-note { max-width: 550px; }
   .economy-strip, .role-strip, .journey-columns { grid-template-columns: 1fr; }
+  .how-steps { grid-template-columns: 1fr 1fr; }
+  .how-steps li::after { display: none; }
   .workspace { grid-template-columns: 230px minmax(0, 1fr); }
   .upload-options { grid-template-columns: 1fr; }
   .upload-divider { grid-template-columns: 1fr auto 1fr; grid-template-rows: auto; }
@@ -1006,7 +1061,7 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .case-brief-grid { grid-template-columns: 1fr; }
   .progress-summary { display: none; }
   .guided-form { grid-template-columns: 1fr; }
-  .audience-cards, .party-response-grid, .consent-grid, .submission-context { grid-template-columns: 1fr; }
+  .audience-cards, .party-response-grid, .consent-grid, .submission-context, .how-steps { grid-template-columns: 1fr; }
   .auth-panel { grid-template-columns: 1fr; }
   .auth-switch { position: static; justify-self: start; }
   .invite-banner { grid-template-columns: auto 1fr; }

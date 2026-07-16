@@ -356,22 +356,25 @@ export default function App() {
       <main className="page">
         <section className="intro">
           <div>
-            <span className="eyebrow">Valinor · justiça, clareza e menor custo</span>
-            <h1>Resolva disputas com serenidade sem abrir mão da integridade.</h1>
+            <span className="eyebrow">Resolução de disputas conduzida por IA</span>
+            <h1>Resolva a disputa em dias — não em anos de processo.</h1>
             <p>
-              Valinor usa IA para automatizar etapas repetitivas, buscar acordos sempre que forem úteis
-              e, se necessário, profere uma decisão fundamentada. As duas partes usam
-              as mesmas regras, conhecem todas as provas e podem verificar o processo.
+              O Valinor é uma alternativa ao litígio para conflitos documentais entre empresa e cliente.
+              As duas partes apresentam suas provas, a IA busca um acordo e, se não houver,
+              profere uma decisão fundamentada — auditada por uma segunda IA e verificável
+              pelas duas partes, do primeiro documento ao resultado.
             </p>
           </div>
           <div className="trust-note">
             <ShieldCheck size={22} />
             <div>
-              <strong>Economia com contraditório preservado</strong>
-              <span>Menos trabalho manual e menos demora, sem provas ocultas ou decisão sem fundamentação.</span>
+              <strong>Fração do custo, com garantias de processo</strong>
+              <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
             </div>
           </div>
         </section>
+
+        <HowItWorks />
 
         <AudienceValue />
 
@@ -516,17 +519,55 @@ export default function App() {
   )
 }
 
+function HowItWorks() {
+  const steps = [
+    {
+      title: 'As duas partes aderem',
+      text: 'Empresa e cliente aceitam as mesmas regras, com convite e consentimento registrados.'
+    },
+    {
+      title: 'Provas com contraditório',
+      text: 'Cada documento enviado é visto e respondido pela outra parte antes de contar para qualquer coisa.'
+    },
+    {
+      title: 'A IA busca acordo primeiro',
+      text: 'Propostas de conciliação fundamentadas, que cada parte pode aceitar, recusar ou ajustar.'
+    },
+    {
+      title: 'Sem acordo, decisão fundamentada',
+      text: 'A IA decide citando as provas; uma segunda IA audita a decisão. Tudo verificável por hash.'
+    }
+  ]
+  return (
+    <section className="how-it-works">
+      <div className="value-heading">
+        <span className="section-label">Como funciona</span>
+        <h2>Quatro etapas, as mesmas regras para os dois lados.</h2>
+      </div>
+      <ol className="how-steps">
+        {steps.map((step, index) => (
+          <li key={step.title}>
+            <span className="how-number">{index + 1}</span>
+            <strong>{step.title}</strong>
+            <p>{step.text}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
 function AudienceValue() {
   return (
     <section className="audience-value">
       <div className="value-heading">
-        <span className="section-label">O principal benefício</span>
-        <h2>Uma estrutura decisória muito mais econômica para as duas partes.</h2>
+        <span className="section-label">Por que usar</span>
+        <h2>O custo de resolver deixa de ser maior que o valor da disputa.</h2>
         <p>
-          O custo cai porque a IA organiza documentos, identifica convergências,
-          conduz novas tentativas de composição e fundamenta a análise. A economia
-          não elimina garantias: autoria, ciência, resposta, admissão e auditoria
-          continuam registradas do início ao fim.
+          A IA faz o trabalho que consome tempo e honorários: organiza documentos,
+          identifica convergências, conduz rodadas de acordo e fundamenta a análise.
+          As garantias ficam: autoria, ciência, resposta, admissão e auditoria
+          registradas do início ao fim.
         </p>
       </div>
 
@@ -534,22 +575,22 @@ function AudienceValue() {
         <div>
           <CircleDollarSign size={22} />
           <span>
-            <strong>Menor custo do procedimento</strong>
-            Reduz trabalho repetitivo, horas profissionais e estrutura operacional.
+            <strong>Fração do custo</strong>
+            Sem custas, audiências ou anos de honorários. A IA absorve o trabalho repetitivo.
           </span>
         </div>
         <div>
           <Clock3 size={22} />
           <span>
-            <strong>Menos tempo de conflito</strong>
-            Acordos são buscados cedo e podem ser retomados quando surgirem novas convergências.
+            <strong>Dias, não anos</strong>
+            O procedimento inteiro — adesão, provas, acordo, decisão — corre na plataforma, sem pauta.
           </span>
         </div>
         <div>
           <ShieldCheck size={22} />
           <span>
-            <strong>Integridade preservada</strong>
-            Nenhuma prova entra na decisão sem publicidade, contraditório e registro auditável.
+            <strong>Verificável, não é caixa-preta</strong>
+            Decisão com provas citadas, auditoria independente e histórico lacrado por hash.
           </span>
         </div>
       </div>
