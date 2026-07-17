@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Valinor">
+  <defs>
+    <radialGradient id="v-disc" cx="50%" cy="42%" r="62%">
+      <stop offset="0%" stop-color="#1d4630"/>
+      <stop offset="70%" stop-color="#123420"/>
+      <stop offset="100%" stop-color="#0c2417"/>
+    </radialGradient>
+    <linearGradient id="v-silver" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="45%" stop-color="#d5dcdc"/>
+      <stop offset="100%" stop-color="#eef3f3"/>
+    </linearGradient>
+    <linearGradient id="v-gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f6e3a4"/>
+      <stop offset="48%" stop-color="#d9a53f"/>
+      <stop offset="100%" stop-color="#f2d488"/>
+    </linearGradient>
+  </defs>
+
+  <!-- disc -->
+  <circle cx="128" cy="128" r="122" fill="url(#v-disc)"/>
+
+  <!-- outer ring: silver left half, gold right half -->
+  <path d="M128 12 A116 116 0 0 0 128 244" fill="none" stroke="url(#v-silver)" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M128 12 A116 116 0 0 1 128 244" fill="none" stroke="url(#v-gold)" stroke-width="2.4" stroke-linecap="round"/>
+
+  <!-- top & bottom sparkles on the ring -->
+  <path d="M128 2 L131 20 L128 34 L125 20 Z" fill="url(#v-silver)"/>
+  <path d="M128 2 L131 20 L128 34 L125 20 Z" fill="url(#v-gold)" opacity="0.5"/>
+  <path d="M128 232 l3 11 l-3 9 l-3 -9 z" fill="url(#v-gold)"/>
+
+  <!-- ===== roots (intertwined) ===== -->
+  <g fill="none" stroke-linecap="round">
+    <!-- silver strand -->
+    <path d="M124 120 C 136 146, 118 164, 130 188 C 134 198, 120 204, 108 220" stroke="url(#v-silver)" stroke-width="7"/>
+    <path d="M126 196 C 116 206, 104 210, 92 224" stroke="url(#v-silver)" stroke-width="4.5"/>
+    <path d="M129 190 C 128 206, 126 214, 126 226" stroke="url(#v-silver)" stroke-width="4"/>
+    <!-- gold strand -->
+    <path d="M132 120 C 120 146, 138 164, 126 188 C 122 198, 136 204, 148 220" stroke="url(#v-gold)" stroke-width="7"/>
+    <path d="M130 196 C 140 206, 152 210, 164 224" stroke="url(#v-gold)" stroke-width="4.5"/>
+    <path d="M127 190 C 128 206, 130 214, 130 226" stroke="url(#v-gold)" stroke-width="4"/>
+  </g>
+
+  <!-- ===== branches ===== -->
+  <g fill="none" stroke-linecap="round">
+    <!-- silver (left) -->
+    <path d="M126 122 C 108 108, 92 96, 72 62" stroke="url(#v-silver)" stroke-width="5.5"/>
+    <path d="M104 100 C 92 92, 78 92, 60 78" stroke="url(#v-silver)" stroke-width="3.4"/>
+    <path d="M120 108 C 112 92, 108 78, 104 54" stroke="url(#v-silver)" stroke-width="3.8"/>
+    <path d="M96 88 C 84 84, 74 80, 58 66" stroke="url(#v-silver)" stroke-width="2.6"/>
+    <path d="M86 74 C 80 66, 78 58, 78 44" stroke="url(#v-silver)" stroke-width="2.6"/>
+    <!-- gold (right) -->
+    <path d="M130 122 C 148 108, 164 96, 184 62" stroke="url(#v-gold)" stroke-width="5.5"/>
+    <path d="M152 100 C 164 92, 178 92, 196 78" stroke="url(#v-gold)" stroke-width="3.4"/>
+    <path d="M136 108 C 144 92, 148 78, 152 54" stroke="url(#v-gold)" stroke-width="3.8"/>
+    <path d="M160 88 C 172 84, 182 80, 198 66" stroke="url(#v-gold)" stroke-width="2.6"/>
+    <path d="M170 74 C 176 66, 178 58, 178 44" stroke="url(#v-gold)" stroke-width="2.6"/>
+  </g>
+
+  <!-- ===== leaves ===== -->
+  <g>
+    <!-- silver leaves -->
+    <g fill="url(#v-silver)">
+      <path d="M72 62 C 62 56, 58 46, 62 38 C 72 44, 76 54, 72 62 Z"/>
+      <path d="M60 78 C 49 76, 42 68, 42 58 C 53 60, 60 68, 60 78 Z"/>
+      <path d="M104 54 C 96 46, 94 36, 98 27 C 107 34, 110 45, 104 54 Z"/>
+      <path d="M58 66 C 47 66, 39 59, 38 49 C 49 50, 57 57, 58 66 Z"/>
+      <path d="M78 44 C 71 35, 71 25, 76 17 C 84 25, 85 36, 78 44 Z"/>
+      <path d="M90 92 C 79 91, 71 84, 70 74 C 81 75, 89 82, 90 92 Z"/>
+      <path d="M118 84 C 111 74, 111 64, 117 56 C 124 65, 124 76, 118 84 Z"/>
+    </g>
+    <!-- gold leaves -->
+    <g fill="url(#v-gold)">
+      <path d="M184 62 C 194 56, 198 46, 194 38 C 184 44, 180 54, 184 62 Z"/>
+      <path d="M196 78 C 207 76, 214 68, 214 58 C 203 60, 196 68, 196 78 Z"/>
+      <path d="M152 54 C 160 46, 162 36, 158 27 C 149 34, 146 45, 152 54 Z"/>
+      <path d="M198 66 C 209 66, 217 59, 218 49 C 207 50, 199 57, 198 66 Z"/>
+      <path d="M178 44 C 185 35, 185 25, 180 17 C 172 25, 171 36, 178 44 Z"/>
+      <path d="M166 92 C 177 91, 185 84, 186 74 C 175 75, 167 82, 166 92 Z"/>
+      <path d="M138 84 C 145 74, 145 64, 139 56 C 132 65, 132 76, 138 84 Z"/>
+    </g>
+  </g>
+
+  <!-- ===== canopy sparkles ===== -->
+  <g fill="#fff6d8">
+    <path d="M128 96 l2.4 6 l6 2.4 l-6 2.4 l-2.4 6 l-2.4 -6 l-6 -2.4 l6 -2.4 z"/>
+    <path d="M92 70 l1.7 4.4 l4.4 1.7 l-4.4 1.7 l-1.7 4.4 l-1.7 -4.4 l-4.4 -1.7 l4.4 -1.7 z"/>
+    <path d="M176 84 l1.7 4.4 l4.4 1.7 l-4.4 1.7 l-1.7 4.4 l-1.7 -4.4 l-4.4 -1.7 l4.4 -1.7 z"/>
+    <path d="M156 62 l1.3 3.4 l3.4 1.3 l-3.4 1.3 l-1.3 3.4 l-1.3 -3.4 l-3.4 -1.3 l3.4 -1.3 z"/>
+    <path d="M74 100 l1.3 3.4 l3.4 1.3 l-3.4 1.3 l-1.3 3.4 l-1.3 -3.4 l-3.4 -1.3 l3.4 -1.3 z"/>
+  </g>
+</svg>

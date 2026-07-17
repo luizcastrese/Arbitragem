@@ -7,7 +7,6 @@ import {
   Mail,
   Plus,
   RefreshCw,
-  Scale,
   ShieldCheck,
   Sparkles,
   UserRound
@@ -262,7 +261,9 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <span className="brand-mark"><Scale size={20} /></span>
+            <span className="brand-mark">
+              <img src={`${import.meta.env.BASE_URL}valinor-logo.svg`} alt="Valinor" width="40" height="40" />
+            </span>
             <div>
               <strong>Valinor</strong>
               <small>Auditoria decisória por IA</small>
