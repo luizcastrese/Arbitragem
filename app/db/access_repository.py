@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.auth import hash_access_token, hash_password, verify_password
+from app.core.mailer import send_email
 from app.db.models import (
     AuthSession,
     CaseMember,
@@ -247,6 +248,11 @@ def create_notification(
         .filter(CaseMember.case_id == case_id, CaseMember.role == party)
         .first()
     )
+    recipient = (
+        db.query(User).filter(User.id == membership.user_id).one_or_none()
+        if membership
+        else None
+    )
     notification = Notification(
         id=str(uuid.uuid4()),
         case_id=case_id,
@@ -259,6 +265,16 @@ def create_notification(
     db.add(notification)
     db.commit()
     db.refresh(notification)
+
+    # Entrega best-effort: só há e-mail se a parte já tiver conta vinculada ao
+    # caso. Uma falha aqui nunca interrompe o fluxo do procedimento.
+    if recipient and recipient.email:
+        send_email(
+            to=recipient.email,
+            subject=f"[Valinor] {title}",
+            text_body=f"{message}\n\n— Valinor",
+        )
+
     return notification
 
 

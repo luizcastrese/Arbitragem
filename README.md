@@ -26,6 +26,8 @@ cadeia de auditoria encadeada por hashes.
 - credenciais locais separadas para cliente, empresa e gestor em cada caso;
 - contas com senha derivada por PBKDF2 e sessões expiráveis;
 - convites de uso único vinculados ao e-mail e ao papel no caso;
+- entrega de convites e notificações por e-mail (SMTP), com modo `logged`
+  quando o SMTP não está configurado;
 - agenda processual com responsável, vencimento e notificações internas;
 - aceite individual das duas partes antes da formação do procedimento;
 - upload de texto e PDF;
@@ -159,6 +161,15 @@ Variáveis do arquivo `.env`:
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
 | `AUTH_REQUIRED` | Exige conta e participação no caso nas consultas |
+| `APP_BASE_URL` | URL base usada nos links de convite por e-mail |
+| `SMTP_HOST` | Servidor SMTP; vazio ativa o modo `logged` |
+| `SMTP_PORT` | Porta SMTP (587 STARTTLS ou 465 SSL) |
+| `SMTP_USER` | Usuário SMTP autenticado |
+| `SMTP_PASSWORD` | Senha SMTP |
+| `EMAIL_FROM` | Remetente dos e-mails transacionais |
+| `SMTP_STARTTLS` | Usa STARTTLS na porta 587 (padrão) |
+| `SMTP_USE_SSL` | Usa TLS direto na porta 465 |
+| `SMTP_TIMEOUT` | Tempo limite da conexão SMTP em segundos |
 
 Gere um segredo local:
 
@@ -229,10 +240,11 @@ agenda, relatório Word, assinatura e auditoria.
 - não há validação jurídica dos frameworks;
 - decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
-Antes de exposição pública, a próxima etapa é verificar e-mails, enviar convites
-por provedor transacional, exigir autenticação em todas as rotas, armazenar
-documentos em serviço privado, adicionar rate limiting e monitoramento e
-concluir uma bateria de avaliações e revisão jurídica.
+A entrega de convites e notificações já sai por SMTP (com modo `logged` como
+fallback), mas antes de exposição pública a próxima etapa é verificar e-mails,
+exigir autenticação em todas as rotas, armazenar documentos em serviço privado,
+adicionar rate limiting e monitoramento e concluir uma bateria de avaliações e
+revisão jurídica.
 
 ## Referências OpenAI
 

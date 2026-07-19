@@ -26,6 +26,15 @@ class Settings:
     cors_origins: List[str]
     max_upload_bytes: int
     auth_required: bool
+    app_base_url: str
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    email_from: str
+    smtp_starttls: bool
+    smtp_use_ssl: bool
+    smtp_timeout: int
 
     @property
     def openai_enabled(self) -> bool:
@@ -50,6 +59,9 @@ class Settings:
 @lru_cache
 def get_settings() -> Settings:
     app_env = os.getenv("APP_ENV", "development").strip().lower()
+
+    def _flag(name: str, default: str = "false") -> bool:
+        return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
     signing_secret = os.getenv("PLATFORM_SIGNING_SECRET", "").strip()
     if not signing_secret or signing_secret == "replace-with-a-long-random-secret":
@@ -82,6 +94,14 @@ def get_settings() -> Settings:
             )
         ),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))),
-        auth_required=os.getenv("AUTH_REQUIRED", "false").strip().lower()
-        in {"1", "true", "yes", "on"},
+        auth_required=_flag("AUTH_REQUIRED"),
+        app_base_url=os.getenv("APP_BASE_URL", "http://127.0.0.1:8000").strip().rstrip("/"),
+        smtp_host=os.getenv("SMTP_HOST", "").strip(),
+        smtp_port=int(os.getenv("SMTP_PORT", "587")),
+        smtp_user=os.getenv("SMTP_USER", "").strip(),
+        smtp_password=os.getenv("SMTP_PASSWORD", ""),
+        email_from=os.getenv("EMAIL_FROM", "").strip(),
+        smtp_starttls=_flag("SMTP_STARTTLS", "true"),
+        smtp_use_ssl=_flag("SMTP_USE_SSL"),
+        smtp_timeout=int(os.getenv("SMTP_TIMEOUT", "10")),
     )

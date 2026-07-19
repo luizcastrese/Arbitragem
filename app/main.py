@@ -27,6 +27,7 @@ from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
 from app.core.hashing import sha256_text
+from app.core.mailer import build_invitation_email, send_email
 from app.core.manifest import lock_case_manifest
 from app.core.signing import verify_signature
 from app.db.access_repository import (
@@ -449,9 +450,27 @@ def invite_participant(
         "Convite para participar do procedimento",
         f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
     )
+
+    acceptance_path = f"/ui/?invite={token}"
+    acceptance_url = f"{settings.app_base_url}{acceptance_path}"
+    email = build_invitation_email(
+        case_title=case.title,
+        role=invitation.role,
+        acceptance_url=acceptance_url,
+        inviter_name=actor.display_name if actor else None,
+    )
+    delivery = send_email(
+        to=invitation.email,
+        subject=email["subject"],
+        text_body=email["text"],
+        html_body=email["html"],
+    )
+
     result = invitation_to_dict(invitation)
     result["acceptance_token"] = token
-    result["acceptance_path"] = f"/ui/?invite={token}"
+    result["acceptance_path"] = acceptance_path
+    result["acceptance_url"] = acceptance_url
+    result["email_delivery"] = delivery.to_dict()
     return result
 
 

@@ -295,6 +295,12 @@ def test_accounts_invitations_deadlines_and_word_report(client):
     assert invite.status_code == 201
     invitation_token = invite.json()["acceptance_token"]
     assert invite.json()["status"] == "pending"
+    # Sem SMTP configurado nos testes, a entrega entra em modo "logged" e o
+    # link de aceite continua disponível na resposta da API.
+    assert invite.json()["email_delivery"]["status"] == "logged"
+    assert invite.json()["acceptance_url"].endswith(
+        f"/ui/?invite={invitation_token}"
+    )
 
     customer = register_user(client, "Cliente Carlos", "cliente@example.com")
     accepted = client.post(
