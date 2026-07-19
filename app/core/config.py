@@ -35,6 +35,9 @@ class Settings:
     smtp_starttls: bool
     smtp_use_ssl: bool
     smtp_timeout: int
+    deadline_scheduler_enabled: bool
+    deadline_scheduler_interval_seconds: int
+    deadline_reminder_lead_hours: int
 
     @property
     def openai_enabled(self) -> bool:
@@ -104,4 +107,11 @@ def get_settings() -> Settings:
         smtp_starttls=_flag("SMTP_STARTTLS", "true"),
         smtp_use_ssl=_flag("SMTP_USE_SSL"),
         smtp_timeout=int(os.getenv("SMTP_TIMEOUT", "10")),
+        deadline_scheduler_enabled=_flag("DEADLINE_SCHEDULER_ENABLED", "true"),
+        deadline_scheduler_interval_seconds=int(
+            os.getenv("DEADLINE_SCHEDULER_INTERVAL_SECONDS", "300")
+        ),
+        deadline_reminder_lead_hours=int(
+            os.getenv("DEADLINE_REMINDER_LEAD_HOURS", "24")
+        ),
     )

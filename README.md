@@ -29,6 +29,8 @@ cadeia de auditoria encadeada por hashes.
 - entrega de convites e notificações por e-mail (SMTP), com modo `logged`
   quando o SMTP não está configurado;
 - agenda processual com responsável, vencimento e notificações internas;
+- agendador automático que notifica prazos próximos do vencimento e vencidos,
+  rodando em background dentro do próprio serviço;
 - aceite individual das duas partes antes da formação do procedimento;
 - upload de texto e PDF;
 - contraditório documentado: disponibilização, ciência, resposta ou renúncia e
@@ -170,6 +172,9 @@ Variáveis do arquivo `.env`:
 | `SMTP_STARTTLS` | Usa STARTTLS na porta 587 (padrão) |
 | `SMTP_USE_SSL` | Usa TLS direto na porta 465 |
 | `SMTP_TIMEOUT` | Tempo limite da conexão SMTP em segundos |
+| `DEADLINE_SCHEDULER_ENABLED` | Liga o agendador automático de prazos |
+| `DEADLINE_SCHEDULER_INTERVAL_SECONDS` | Intervalo entre varreduras de prazos |
+| `DEADLINE_REMINDER_LEAD_HOURS` | Antecedência do lembrete antes do vencimento |
 
 Gere um segredo local:
 

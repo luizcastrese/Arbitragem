@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["PLATFORM_SIGNING_SECRET"] = "test-signing-secret"
+os.environ["DEADLINE_SCHEDULER_ENABLED"] = "false"
 
 from app.core.config import get_settings  # noqa: E402
 

@@ -199,6 +199,8 @@ class Deadline(Base):
     assigned_to = Column(String, nullable=False)
     due_at = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
+    overdue_sent_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     case = relationship("Case", back_populates="deadlines")

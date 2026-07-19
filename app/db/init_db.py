@@ -8,10 +8,16 @@ def _upgrade_sqlite_schema():
     if engine.dialect.name != "sqlite":
         return
 
-    case_columns = {column["name"] for column in inspect(engine).get_columns("cases")}
+    inspector = inspect(engine)
+    case_columns = {column["name"] for column in inspector.get_columns("cases")}
     document_columns = {
-        column["name"] for column in inspect(engine).get_columns("documents")
+        column["name"] for column in inspector.get_columns("documents")
     }
+    deadline_columns = (
+        {column["name"] for column in inspector.get_columns("deadlines")}
+        if inspector.has_table("deadlines")
+        else set()
+    )
     case_additions = {
         "conciliation_json": "TEXT",
         "claimant_consent": "BOOLEAN NOT NULL DEFAULT 1",
@@ -35,6 +41,10 @@ def _upgrade_sqlite_schema():
         "admitted": "BOOLEAN NOT NULL DEFAULT 1",
         "admitted_at": "TEXT",
     }
+    deadline_additions = {
+        "reminder_sent_at": "TIMESTAMP",
+        "overdue_sent_at": "TIMESTAMP",
+    }
     with engine.begin() as connection:
         for name, definition in case_additions.items():
             if name not in case_columns:
@@ -46,6 +56,12 @@ def _upgrade_sqlite_schema():
                 connection.exec_driver_sql(
                     f"ALTER TABLE documents ADD COLUMN {name} {definition}"
                 )
+        if deadline_columns:
+            for name, definition in deadline_additions.items():
+                if name not in deadline_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE deadlines ADD COLUMN {name} {definition}"
+                    )
         if document_additions.keys() - document_columns:
             connection.exec_driver_sql(
                 "UPDATE documents SET "

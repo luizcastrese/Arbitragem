@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 import hashlib
 from io import BytesIO
@@ -29,6 +30,7 @@ from app.core.config import get_settings
 from app.core.hashing import sha256_text
 from app.core.mailer import build_invitation_email, send_email
 from app.core.manifest import lock_case_manifest
+from app.core.scheduler import run_scheduler_loop
 from app.core.signing import verify_signature
 from app.db.access_repository import (
     accept_invitation,
@@ -95,7 +97,16 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    yield
+    scheduler_task = None
+    if settings.deadline_scheduler_enabled:
+        scheduler_task = asyncio.create_task(run_scheduler_loop())
+    try:
+        yield
+    finally:
+        if scheduler_task:
+            scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
 
 
 app = FastAPI(
