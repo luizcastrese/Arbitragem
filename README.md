@@ -45,6 +45,7 @@ cadeia de auditoria encadeada por hashes.
 - convites por e-mail transacional (SMTP) com fallback para log quando não configurado;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
+- documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
 - PostgreSQL e migrações Alembic no ambiente Docker;
 - testes automatizados e imagem Docker.
 
@@ -170,6 +171,10 @@ Variáveis do arquivo `.env`:
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | Credenciais SMTP |
 | `SMTP_FROM` | Remetente dos convites |
 | `SMTP_USE_TLS` | Usa STARTTLS na conexão SMTP |
+| `DOCUMENT_STORAGE_BACKEND` | `local`, `s3` ou `memory` (testes) |
+| `DOCUMENT_STORAGE_DIR` | Diretório do backend local |
+| `DOCUMENT_S3_BUCKET` / `DOCUMENT_S3_PREFIX` | Bucket e prefixo no backend S3 |
+| `DOCUMENT_S3_ENDPOINT_URL` / `DOCUMENT_S3_REGION` | Endpoint e região S3-compatíveis |
 
 Gere um segredo local:
 
@@ -200,6 +205,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |
 | `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
 | `POST /cases/{id}/documents/{document_id}/admit` | Admitir material após contraditório |
+| `GET /cases/{id}/documents/{document_id}/original` | Baixar o arquivo original armazenado |
 | `POST /cases/{id}/lock` | Travar manifesto |
 | `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
@@ -235,8 +241,10 @@ agenda, relatório Word, assinatura e auditoria.
   apenas em desenvolvimento;
 - o envio de convites por SMTP já existe, mas depende de um provedor
   transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
-- arquivos ainda ficam no banco; produção deve usar armazenamento privado,
-  criptografia e URLs temporárias;
+- os documentos ficam fora do banco (object store); ainda faltam criptografia
+  por objeto e URLs temporárias assinadas, e o texto derivado em chunks
+  permanece no banco para a recuperação — um passo seguinte é cifrá-lo ou
+  tokenizá-lo;
 - prompts e avaliações ainda precisam de versionamento formal;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
@@ -246,9 +254,10 @@ agenda, relatório Word, assinatura e auditoria.
 - decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
 Antes de exposição pública, a próxima etapa é verificar e-mails, configurar o
-provedor SMTP com um domínio autenticado, armazenar documentos em serviço
-privado, migrar o rate limiting para um backend compartilhado, adicionar cofre
-de segredos e concluir uma bateria de avaliações e revisão jurídica.
+provedor SMTP com um domínio autenticado, ativar criptografia por objeto e URLs
+temporárias no armazenamento de documentos, migrar o rate limiting para um
+backend compartilhado, adicionar cofre de segredos e concluir uma bateria de
+avaliações e revisão jurídica.
 
 ## Referências OpenAI
 

@@ -34,7 +34,17 @@ def _upgrade_sqlite_schema():
         "responded_at": "TEXT",
         "admitted": "BOOLEAN NOT NULL DEFAULT 1",
         "admitted_at": "TEXT",
+        "content_key": "TEXT",
+        "original_key": "TEXT",
+        "original_media_type": "TEXT",
+        "byte_size": "INTEGER NOT NULL DEFAULT 0",
     }
+    # Bancos legados guardavam o texto inline em `content`. Se a coluna existe
+    # e ainda não migramos para referências, movemos cada conteúdo para o
+    # object store e preenchemos `content_key`.
+    needs_content_backfill = (
+        "content" in document_columns and "content_key" not in document_columns
+    )
     with engine.begin() as connection:
         for name, definition in case_additions.items():
             if name not in case_columns:
@@ -55,6 +65,22 @@ def _upgrade_sqlite_schema():
                 "responded_at = COALESCE(responded_at, created_at), "
                 "admitted_at = COALESCE(admitted_at, created_at)"
             )
+
+        if needs_content_backfill:
+            from app.documents.storage import build_content_key, get_document_storage
+
+            storage = get_document_storage()
+            rows = connection.exec_driver_sql(
+                "SELECT id, case_id, content FROM documents"
+            ).fetchall()
+            for document_id, case_id, content in rows:
+                content_bytes = (content or "").encode("utf-8")
+                key = build_content_key(case_id, document_id)
+                storage.put(key, content_bytes, "text/plain; charset=utf-8")
+                connection.exec_driver_sql(
+                    "UPDATE documents SET content_key = ?, byte_size = ? WHERE id = ?",
+                    (key, len(content_bytes), document_id),
+                )
 
 
 def init_db():

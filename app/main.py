@@ -63,6 +63,7 @@ from app.db.repository import (
     get_document,
     get_case,
     list_cases,
+    load_document_original,
     lock_manifest as persist_manifest,
     record_consent,
     register_contest,
@@ -264,6 +265,9 @@ def _process_document(
     submitted_by: str,
     material_type: str,
     purpose: str,
+    original_bytes: bytes | None = None,
+    original_filename: str | None = None,
+    original_media_type: str | None = None,
 ) -> Dict:
     if case.manifest_locked:
         raise HTTPException(
@@ -300,6 +304,9 @@ def _process_document(
         submitted_by=submitted_by,
         material_type=material_type,
         purpose=purpose,
+        original_bytes=original_bytes,
+        original_filename=original_filename,
+        original_media_type=original_media_type,
     )
     counterparty = "respondent" if submitted_by == "claimant" else "claimant"
     create_notification(
@@ -715,6 +722,9 @@ async def upload_pdf(
         submitted_by,
         material_type,
         purpose,
+        original_bytes=file_bytes,
+        original_filename=filename,
+        original_media_type="application/pdf",
     )
     return {
         "message": "PDF processado",
@@ -825,6 +835,31 @@ def admit_evidence(
     )
 
 
+@app.get("/cases/{case_id}/documents/{document_id}/original")
+def download_document_original(
+    case_id: str,
+    document_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    document = _document_or_404(db, case_id, document_id)
+    original = load_document_original(document)
+    if original is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Este documento não possui arquivo original armazenado",
+        )
+    return StreamingResponse(
+        BytesIO(original),
+        media_type=document.original_media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{document.name}"'
+        },
+    )
+
+
 @app.post("/cases/{case_id}/lock")
 def lock_manifest(
     case_id: str,
@@ -869,7 +904,7 @@ def get_manifest(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    manifest = case_to_dict(case)["locked_manifest"]
+    manifest = case_to_dict(case, include_content=False)["locked_manifest"]
     if not manifest:
         raise HTTPException(status_code=400, detail="Manifesto ainda não foi travado")
     return manifest
@@ -903,7 +938,7 @@ def get_audit(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    events = case_to_dict(case)["audit_log"]
+    events = case_to_dict(case, include_content=False)["audit_log"]
     valid, errors = verify_audit_chain(events)
     return {"valid": valid, "errors": errors, "events": events}
 
@@ -916,7 +951,9 @@ def list_chunks(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    return case_to_dict(case, include_embeddings=False)["chunks"]
+    return case_to_dict(
+        case, include_content=False, include_embeddings=False
+    )["chunks"]
 
 
 @app.get("/cases/{case_id}/retrieve")
@@ -931,7 +968,7 @@ def retrieve_chunks(
         raise HTTPException(status_code=400, detail="Consulta não pode ser vazia")
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    return _retrieve(case_to_dict(case), query, method)
+    return _retrieve(case_to_dict(case, include_content=False), query, method)
 
 
 @app.post("/cases/{case_id}/conciliation")
@@ -1262,7 +1299,7 @@ def get_attestation(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    attestation = case_to_dict(case)["attestation"]
+    attestation = case_to_dict(case, include_content=False)["attestation"]
     if not attestation:
         raise HTTPException(status_code=404, detail="Attestation ainda não emitida")
     return attestation

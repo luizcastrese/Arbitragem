@@ -6,6 +6,7 @@ __pycache__/
 .coverage
 htmlcov/
 data/*.db
+data/documents/
 arbitragem.db
 frontend/node_modules/
 frontend/dist/
