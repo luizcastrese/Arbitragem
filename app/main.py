@@ -2,14 +2,18 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import hashlib
 from io import BytesIO
+import logging
 from pathlib import Path
 import secrets
+import time
 from typing import Dict, List
+import uuid
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -26,8 +30,10 @@ from app.core.attestation import (
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
+from app.core.email import deliver_invitation_email
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
+from app.core.ratelimit import SlidingWindowRateLimiter
 from app.core.signing import verify_signature
 from app.db.access_repository import (
     accept_invitation,
@@ -90,6 +96,18 @@ from app.schemas import (
 
 settings = get_settings()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("valinor.request")
+
+rate_limiter = SlidingWindowRateLimiter(
+    max_requests=settings.rate_limit_max_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+    enabled=settings.rate_limit_enabled,
+)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -111,6 +129,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def observability_and_rate_limit(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+
+    if rate_limiter.enabled:
+        client_key = request.client.host if request.client else "unknown"
+        allowed, retry_after = rate_limiter.allow(client_key)
+        if not allowed:
+            logger.warning(
+                "rate_limited request_id=%s client=%s path=%s",
+                request_id,
+                client_key,
+                request.url.path,
+            )
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Limite de requisições excedido. Tente novamente em instantes."
+                },
+            )
+            response.headers["Retry-After"] = str(int(retry_after) + 1)
+            response.headers["X-Request-ID"] = request_id
+            return response
+
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.exception(
+            "request_failed request_id=%s method=%s path=%s elapsed_ms=%.1f",
+            request_id,
+            request.method,
+            request.url.path,
+            elapsed_ms,
+        )
+        raise
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "request request_id=%s method=%s path=%s status=%s elapsed_ms=%.1f",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 def _case_or_404(db: Session, case_id: str):
     case = get_case(db, case_id)
     if not case:
@@ -123,9 +192,12 @@ def _hash_token(token: str) -> str:
 
 
 def _require_actor(db: Session, case, token: str, expected_party: str):
-    stored_hash = getattr(case, f"{expected_party}_token_hash", None)
-    if token and stored_hash and secrets.compare_digest(_hash_token(token), stored_hash):
-        return None
+    if settings.allow_role_tokens:
+        stored_hash = getattr(case, f"{expected_party}_token_hash", None)
+        if token and stored_hash and secrets.compare_digest(
+            _hash_token(token), stored_hash
+        ):
+            return None
     user = get_user_by_token(db, token)
     if user and user_has_role(db, case.id, user.id, expected_party):
         return user
@@ -449,9 +521,20 @@ def invite_participant(
         "Convite para participar do procedimento",
         f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
     )
+    email_delivery = deliver_invitation_email(
+        to_email=invitation.email,
+        role=invitation.role,
+        case_title=case.title,
+        token=token,
+    )
     result = invitation_to_dict(invitation)
-    result["acceptance_token"] = token
-    result["acceptance_path"] = f"/ui/?invite={token}"
+    result["email_delivery"] = email_delivery
+    # O token de aceite só é exposto na resposta no modo local. Em produção o
+    # convite chega exclusivamente pelo e-mail transacional, evitando que o
+    # segredo trafegue por outro canal.
+    if settings.allow_role_tokens:
+        result["acceptance_token"] = token
+        result["acceptance_path"] = f"/ui/?invite={token}"
     return result
 
 

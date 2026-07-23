@@ -42,6 +42,9 @@ cadeia de auditoria encadeada por hashes.
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
+- convites por e-mail transacional (SMTP) com fallback para log quando não configurado;
+- autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
+- rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - PostgreSQL e migrações Alembic no ambiente Docker;
 - testes automatizados e imagem Docker.
 
@@ -158,7 +161,15 @@ Variáveis do arquivo `.env`:
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
-| `AUTH_REQUIRED` | Exige conta e participação no caso nas consultas |
+| `AUTH_REQUIRED` | Exige conta e participação no caso nas consultas (forçado em produção) |
+| `RATE_LIMIT_ENABLED` | Liga o rate limiting por IP; padrão ligado em produção |
+| `RATE_LIMIT_MAX_REQUESTS` | Requisições permitidas por janela e por IP |
+| `RATE_LIMIT_WINDOW_SECONDS` | Tamanho da janela de rate limiting em segundos |
+| `PUBLIC_BASE_URL` | URL pública usada no link de aceite do convite |
+| `SMTP_HOST` / `SMTP_PORT` | Servidor de e-mail transacional para convites |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | Credenciais SMTP |
+| `SMTP_FROM` | Remetente dos convites |
+| `SMTP_USE_TLS` | Usa STARTTLS na conexão SMTP |
 
 Gere um segredo local:
 
@@ -219,20 +230,25 @@ agenda, relatório Word, assinatura e auditoria.
 
 - contas por e-mail reduzem o risco de compartilhamento indevido, mas ainda não
   há verificação de e-mail, recuperação de acesso ou autenticação multifator;
-- o modo local mantém tokens por papel para compatibilidade; uma implantação
-  pública deve exigir conta em todas as rotas e desabilitar esse modo;
+- em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e
+  os tokens por papel são desabilitados; o modo local com tokens permanece
+  apenas em desenvolvimento;
+- o envio de convites por SMTP já existe, mas depende de um provedor
+  transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
 - arquivos ainda ficam no banco; produção deve usar armazenamento privado,
   criptografia e URLs temporárias;
 - prompts e avaliações ainda precisam de versionamento formal;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
-- não há observabilidade, rate limiting ou gestão de segredos;
+- o rate limiting é em memória, adequado a uma instância; várias réplicas
+  exigem um backend compartilhado (por exemplo Redis);
+- a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
 - decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
-Antes de exposição pública, a próxima etapa é verificar e-mails, enviar convites
-por provedor transacional, exigir autenticação em todas as rotas, armazenar
-documentos em serviço privado, adicionar rate limiting e monitoramento e
-concluir uma bateria de avaliações e revisão jurídica.
+Antes de exposição pública, a próxima etapa é verificar e-mails, configurar o
+provedor SMTP com um domínio autenticado, armazenar documentos em serviço
+privado, migrar o rate limiting para um backend compartilhado, adicionar cofre
+de segredos e concluir uma bateria de avaliações e revisão jurídica.
 
 ## Referências OpenAI
 
