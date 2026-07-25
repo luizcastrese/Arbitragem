@@ -108,6 +108,30 @@ class LocalDiskStorage:
         self._path(key).unlink(missing_ok=True)
 
 
+class EncryptedStorage:
+    """Envelope que cifra/decifra transparentemente sobre qualquer backend."""
+
+    def __init__(self, inner: "DocumentStorage", cipher) -> None:
+        self.inner = inner
+        self.cipher = cipher
+
+    def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        self.inner.put(key, self.cipher.encrypt(data), content_type)
+
+    def get(self, key: str) -> bytes:
+        blob = self.inner.get(key)
+        try:
+            return self.cipher.decrypt(blob)
+        except Exception as exc:  # noqa: BLE001 - inclui InvalidTag
+            raise StorageError(f"Falha ao decifrar objeto: {key}") from exc
+
+    def exists(self, key: str) -> bool:
+        return self.inner.exists(key)
+
+    def delete(self, key: str) -> None:
+        self.inner.delete(key)
+
+
 class S3Storage:  # pragma: no cover - depende de serviço externo
     def __init__(
         self,
@@ -154,8 +178,7 @@ class S3Storage:  # pragma: no cover - depende de serviço externo
         self.client.delete_object(Bucket=self.bucket, Key=self._key(key))
 
 
-@lru_cache(maxsize=1)
-def get_document_storage() -> DocumentStorage:
+def _build_backend() -> DocumentStorage:
     backend = os.getenv("DOCUMENT_STORAGE_BACKEND", "local").strip().lower()
     if backend == "memory":
         return InMemoryStorage()
@@ -172,3 +195,15 @@ def get_document_storage() -> DocumentStorage:
             region=os.getenv("DOCUMENT_S3_REGION", "").strip() or None,
         )
     return LocalDiskStorage(os.getenv("DOCUMENT_STORAGE_DIR", "./data/documents"))
+
+
+@lru_cache(maxsize=1)
+def get_document_storage() -> DocumentStorage:
+    backend = _build_backend()
+    # Importado sob demanda para evitar acoplar o storage à criptografia.
+    from app.core.encryption import get_document_cipher
+
+    cipher = get_document_cipher()
+    if cipher is not None:
+        return EncryptedStorage(backend, cipher)
+    return backend

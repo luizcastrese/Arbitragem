@@ -43,6 +43,7 @@ class Settings:
     smtp_password: str
     smtp_from: str
     smtp_use_tls: bool
+    download_url_ttl_seconds: int
 
     @property
     def openai_enabled(self) -> bool:
@@ -128,4 +129,5 @@ def get_settings() -> Settings:
         smtp_password=os.getenv("SMTP_PASSWORD", ""),
         smtp_from=os.getenv("SMTP_FROM", "").strip(),
         smtp_use_tls=_env_flag("SMTP_USE_TLS", True),
+        download_url_ttl_seconds=int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "300")),
     )

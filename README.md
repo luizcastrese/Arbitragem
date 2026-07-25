@@ -46,6 +46,7 @@ cadeia de auditoria encadeada por hashes.
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
+- criptografia dos documentos em repouso (AES-256-GCM) e download por link temporário assinado que dispensa nova autenticação e expira sozinho;
 - PostgreSQL e migrações Alembic no ambiente Docker;
 - testes automatizados e imagem Docker.
 
@@ -175,6 +176,8 @@ Variáveis do arquivo `.env`:
 | `DOCUMENT_STORAGE_DIR` | Diretório do backend local |
 | `DOCUMENT_S3_BUCKET` / `DOCUMENT_S3_PREFIX` | Bucket e prefixo no backend S3 |
 | `DOCUMENT_S3_ENDPOINT_URL` / `DOCUMENT_S3_REGION` | Endpoint e região S3-compatíveis |
+| `DOCUMENT_ENCRYPTION_KEY` | Chave AES-256-GCM (base64 de 32 bytes) para cifrar documentos |
+| `DOWNLOAD_URL_TTL_SECONDS` | Validade dos links de download assinados |
 
 Gere um segredo local:
 
@@ -206,6 +209,8 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
 | `POST /cases/{id}/documents/{document_id}/admit` | Admitir material após contraditório |
 | `GET /cases/{id}/documents/{document_id}/original` | Baixar o arquivo original armazenado |
+| `POST /cases/{id}/documents/{document_id}/original-url` | Emitir link temporário e assinado do original |
+| `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/lock` | Travar manifesto |
 | `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
@@ -241,10 +246,10 @@ agenda, relatório Word, assinatura e auditoria.
   apenas em desenvolvimento;
 - o envio de convites por SMTP já existe, mas depende de um provedor
   transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
-- os documentos ficam fora do banco (object store); ainda faltam criptografia
-  por objeto e URLs temporárias assinadas, e o texto derivado em chunks
-  permanece no banco para a recuperação — um passo seguinte é cifrá-lo ou
-  tokenizá-lo;
+- os documentos ficam fora do banco (object store), cifrados em repouso com
+  AES-256-GCM e acessíveis por link temporário assinado; ainda falta rotação de
+  chaves e um cofre dedicado, e o texto derivado em chunks permanece no banco
+  em claro para a recuperação — um passo seguinte é cifrá-lo ou tokenizá-lo;
 - prompts e avaliações ainda precisam de versionamento formal;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
@@ -254,10 +259,9 @@ agenda, relatório Word, assinatura e auditoria.
 - decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
 Antes de exposição pública, a próxima etapa é verificar e-mails, configurar o
-provedor SMTP com um domínio autenticado, ativar criptografia por objeto e URLs
-temporárias no armazenamento de documentos, migrar o rate limiting para um
-backend compartilhado, adicionar cofre de segredos e concluir uma bateria de
-avaliações e revisão jurídica.
+provedor SMTP com um domínio autenticado, adicionar rotação de chaves e cofre de
+segredos, cifrar ou tokenizar o texto dos chunks, migrar o rate limiting para um
+backend compartilhado e concluir uma bateria de avaliações e revisão jurídica.
 
 ## Referências OpenAI
 

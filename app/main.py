@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
 import logging
@@ -31,9 +31,15 @@ from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
 from app.core.email import deliver_invitation_email
+from app.core.encryption import get_document_cipher
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
 from app.core.ratelimit import SlidingWindowRateLimiter
+from app.core.signed_url import (
+    SignedUrlError,
+    sign_download_token,
+    verify_download_token,
+)
 from app.core.signing import verify_signature
 from app.db.access_repository import (
     accept_invitation,
@@ -77,6 +83,7 @@ from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
 from app.documents.retrieval import retrieve_relevant_chunks
+from app.documents.storage import StorageError, get_document_storage
 from app.reports.report_generator import build_report
 from app.reports.docx_generator import build_docx_report
 from app.schemas import (
@@ -351,6 +358,11 @@ def root():
                 (
                     "PLATFORM_SIGNING_SECRET usa valor de desenvolvimento."
                     if settings.using_development_signing_secret
+                    else None
+                ),
+                (
+                    "DOCUMENT_ENCRYPTION_KEY ausente: documentos são gravados sem criptografia."
+                    if settings.is_production and get_document_cipher() is None
                     else None
                 ),
             ]
@@ -857,6 +869,57 @@ def download_document_original(
         headers={
             "Content-Disposition": f'attachment; filename="{document.name}"'
         },
+    )
+
+
+@app.post("/cases/{case_id}/documents/{document_id}/original-url")
+def issue_original_download_url(
+    case_id: str,
+    document_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Emite um link temporário e assinado para o arquivo original. O link
+    expira em `DOWNLOAD_URL_TTL_SECONDS` e dispensa nova autenticação."""
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    document = _document_or_404(db, case_id, document_id)
+    if not document.original_key:
+        raise HTTPException(
+            status_code=404,
+            detail="Este documento não possui arquivo original armazenado",
+        )
+    ttl = settings.download_url_ttl_seconds
+    token, expires_at = sign_download_token(
+        key=document.original_key,
+        filename=document.name,
+        media_type=document.original_media_type or "application/octet-stream",
+        expires_in=ttl,
+    )
+    return {
+        "url": f"{settings.public_base_url}/documents/download?token={token}",
+        "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(),
+        "expires_in": ttl,
+    }
+
+
+@app.get("/documents/download")
+def download_via_signed_url(token: str):
+    """Endpoint público: valida o token assinado e devolve o objeto (decifrado
+    pela camada de storage). Sem token válido e não expirado, nega o acesso."""
+    try:
+        claims = verify_download_token(token)
+    except SignedUrlError as exc:
+        raise HTTPException(status_code=403, detail=f"Link inválido: {exc}") from exc
+    try:
+        data = get_document_storage().get(claims["k"])
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail="Objeto não encontrado") from exc
+    filename = claims.get("n") or "documento"
+    return StreamingResponse(
+        BytesIO(data),
+        media_type=claims.get("m") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
