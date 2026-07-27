@@ -819,6 +819,12 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #71
 .invite-link { display: grid; gap: 5px; margin-top: 9px; }
 .invite-link span { color: var(--green-700); font-size: 9px; font-weight: 750; }
 .invite-link input { min-height: 35px; color: #4f5d53; background: #eef5ec; font-size: 9px; }
+.invite-notice { display: block; margin-top: 9px; color: var(--green-700); font-size: 9px; }
+.invitation-list { margin-top: 9px; max-height: 120px; overflow: auto; }
+.invitation-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 9px; padding: 8px 9px; margin-bottom: 6px; color: #5b675f; background: white; border: 1px solid #e0e6de; border-radius: 8px; font-size: 9px; }
+.invitation-row strong { color: var(--ink); font-size: 10px; }
+.invitation-row small { grid-column: 1; color: var(--muted); font-size: 8px; }
+.invitation-row button { grid-row: 1 / span 2; grid-column: 2; min-height: 28px; padding: 0 10px; font-size: 9px; }
 .deadline-list { max-height: 155px; overflow: auto; }
 .deadline-row.overdue { border-color: #e7c8c3; background: #fff7f5; }
 .deadline-row.completed { opacity: .7; }

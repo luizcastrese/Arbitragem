@@ -1,3 +1,4 @@
+import dataclasses
 import importlib
 import os
 
@@ -192,3 +193,169 @@ def test_production_forces_auth_and_disables_role_tokens(monkeypatch):
         assert settings.rate_limit_enabled is True
     finally:
         config.get_settings.cache_clear()
+
+
+# --- Entrega do convite -------------------------------------------------------
+
+
+def _as_production(settings):
+    """Settings é um dataclass congelado; a postura de produção vira uma cópia."""
+    return dataclasses.replace(settings, app_env="production", auth_required=True)
+
+
+def _manager_session(client):
+    return client.post(
+        "/auth/register",
+        json={
+            "display_name": "Gestora Ana",
+            "email": "gestora-convites@example.com",
+            "password": "senha-segura-123",
+        },
+    ).json()["session_token"]
+
+
+def _case_for(client, session_token):
+    return client.post(
+        "/cases",
+        headers={"X-Session-Token": session_token},
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    ).json()["id"]
+
+
+def test_acceptance_link_is_returned_when_email_was_not_delivered():
+    # Sem SMTP o convite não chega a ninguém; devolver o link é o que impede
+    # que o caso trave sem nenhuma das partes conseguir entrar.
+    fields = main._acceptance_fields("tok", {"delivered": False, "transport": "log"})
+    assert fields["acceptance_token"] == "tok"
+    assert fields["acceptance_path"] == "/ui/?invite=tok"
+
+
+def test_acceptance_link_is_withheld_in_production_when_email_was_delivered(monkeypatch):
+    monkeypatch.setattr(main, "settings", _as_production(main.settings))
+    assert main._acceptance_fields("tok", {"delivered": True, "transport": "smtp"}) == {}
+
+
+def test_resend_invitation_issues_a_new_usable_token(client):
+    session = _manager_session(client)
+    case_id = _case_for(client, session)
+    created = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": session},
+        json={"email": "cliente@example.com", "role": "claimant"},
+    ).json()
+
+    resent = client.post(
+        f"/cases/{case_id}/invitations/{created['id']}/resend",
+        headers={"X-Actor-Token": session},
+    )
+    assert resent.status_code == 200
+    body = resent.json()
+    assert body["id"] == created["id"]
+    assert body["status"] == "pending"
+    assert body["acceptance_token"] != created["acceptance_token"]
+
+    invitee = client.post(
+        "/auth/register",
+        json={
+            "display_name": "Cliente Carlos",
+            "email": "cliente@example.com",
+            "password": "senha-segura-123",
+        },
+    ).json()["session_token"]
+
+    # O token antigo morre com o reenvio; só o novo abre o caso.
+    stale = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": invitee},
+        json={"token": created["acceptance_token"]},
+    )
+    assert stale.status_code == 409
+    accepted = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": invitee},
+        json={"token": body["acceptance_token"]},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["role"] == "claimant"
+
+
+def test_resend_rejects_an_already_accepted_invitation(client):
+    session = _manager_session(client)
+    case_id = _case_for(client, session)
+    created = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": session},
+        json={"email": "cliente@example.com", "role": "claimant"},
+    ).json()
+    invitee = client.post(
+        "/auth/register",
+        json={
+            "display_name": "Cliente Carlos",
+            "email": "cliente@example.com",
+            "password": "senha-segura-123",
+        },
+    ).json()["session_token"]
+    client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": invitee},
+        json={"token": created["acceptance_token"]},
+    )
+
+    blocked = client.post(
+        f"/cases/{case_id}/invitations/{created['id']}/resend",
+        headers={"X-Actor-Token": session},
+    )
+    assert blocked.status_code == 409
+
+
+def test_resend_requires_the_manager_role(client):
+    session = _manager_session(client)
+    case_id = _case_for(client, session)
+    created = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": session},
+        json={"email": "cliente@example.com", "role": "claimant"},
+    ).json()
+    outsider = client.post(
+        "/auth/register",
+        json={
+            "display_name": "Terceiro",
+            "email": "terceiro@example.com",
+            "password": "senha-segura-123",
+        },
+    ).json()["session_token"]
+
+    denied = client.post(
+        f"/cases/{case_id}/invitations/{created['id']}/resend",
+        headers={"X-Actor-Token": outsider},
+    )
+    assert denied.status_code == 403
+
+
+# --- Criação de caso ----------------------------------------------------------
+
+
+def test_case_creation_requires_a_session_when_auth_is_required(client, monkeypatch):
+    # Um caso sem gestor vinculado nasceria órfão: em produção os tokens por
+    # papel não valem e ninguém conseguiria voltar a ele.
+    monkeypatch.setattr(main, "settings", _as_production(main.settings))
+    anonymous = client.post(
+        "/cases",
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    )
+    assert anonymous.status_code == 401
+
+
+def test_case_creation_binds_the_authenticated_manager(client):
+    session = _manager_session(client)
+    case_id = _case_for(client, session)
+    listed = client.get("/cases", headers={"X-Session-Token": session}).json()
+    assert case_id in [item["id"] for item in listed]

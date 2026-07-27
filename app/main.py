@@ -50,10 +50,12 @@ from app.db.access_repository import (
     create_notification,
     create_session,
     deadline_to_dict,
+    get_invitation,
     get_user_by_token,
     invitation_to_dict,
     register_user,
     revoke_session,
+    rotate_invitation_token,
     user_case_ids,
     user_has_role,
     user_to_dict,
@@ -120,6 +122,18 @@ rate_limiter = SlidingWindowRateLimiter(
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    if settings.is_production:
+        if not get_document_cipher():
+            logger.warning(
+                "startup_warning DOCUMENT_ENCRYPTION_KEY ausente: os documentos "
+                "serão gravados em claro no object store."
+            )
+        if not settings.email_enabled:
+            logger.warning(
+                "startup_warning SMTP não configurado: os convites não serão "
+                "entregues por e-mail e o link de aceite voltará na resposta da "
+                "API para repasse manual pelo gestor."
+            )
     yield
 
 
@@ -213,6 +227,24 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
     )
+
+
+def _acceptance_fields(token: str, email_delivery: Dict) -> Dict:
+    """Decide se o link de aceite volta na resposta da API.
+
+    O caminho preferencial é o e-mail transacional: quando a entrega acontece,
+    o segredo não trafega por nenhum outro canal. Mas sem SMTP configurado — ou
+    diante de uma falha de envio — o convite ficaria inacessível e o caso
+    travado, então devolvemos o link ao gestor para que ele o repasse. O token
+    continua vinculado ao endereço convidado: só é resgatável por uma conta com
+    aquele e-mail.
+    """
+    if email_delivery.get("delivered") and not settings.allow_role_tokens:
+        return {}
+    return {
+        "acceptance_token": token,
+        "acceptance_path": f"/ui/?invite={token}",
+    }
 
 
 def _public_case(case) -> Dict:
@@ -474,6 +506,14 @@ def create_case(
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    # Sem uma conta vinculada como gestor, o caso nasce sem nenhum membro: em
+    # produção os tokens por papel não valem, então ninguém conseguiria voltar
+    # a ele. Exigir a sessão evita esses casos órfãos.
+    user = (
+        _session_user_or_401(db, x_session_token)
+        if settings.auth_required
+        else get_user_by_token(db, x_session_token)
+    )
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -488,13 +528,15 @@ def create_case(
         respondent_token_hash=_hash_token(credentials["respondent"]),
         manager_token_hash=_hash_token(credentials["manager"]),
     )
-    user = get_user_by_token(db, x_session_token)
     if user:
         add_member(db, case.id, user.id, "manager")
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
-    result["access_credentials"] = credentials
+    # Em produção os tokens por papel estão desabilitados; devolvê-los só
+    # distribuiria segredos inúteis.
+    if settings.allow_role_tokens:
+        result["access_credentials"] = credentials
     return result
 
 
@@ -548,12 +590,46 @@ def invite_participant(
     )
     result = invitation_to_dict(invitation)
     result["email_delivery"] = email_delivery
-    # O token de aceite só é exposto na resposta no modo local. Em produção o
-    # convite chega exclusivamente pelo e-mail transacional, evitando que o
-    # segredo trafegue por outro canal.
-    if settings.allow_role_tokens:
-        result["acceptance_token"] = token
-        result["acceptance_path"] = f"/ui/?invite={token}"
+    result.update(_acceptance_fields(token, email_delivery))
+    return result
+
+
+@app.post("/cases/{case_id}/invitations/{invitation_id}/resend")
+def resend_invitation(
+    case_id: str,
+    invitation_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, "manager")
+    invitation = get_invitation(db, case.id, invitation_id)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Convite não encontrado")
+    if invitation.status == "accepted":
+        raise HTTPException(status_code=409, detail="Este convite já foi aceito")
+
+    token = rotate_invitation_token(db, invitation)
+    append_audit(
+        db,
+        case,
+        "invitation_resent",
+        {
+            "email": invitation.email,
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+        },
+    )
+    db.commit()
+    email_delivery = deliver_invitation_email(
+        to_email=invitation.email,
+        role=invitation.role,
+        case_title=case.title,
+        token=token,
+    )
+    result = invitation_to_dict(invitation)
+    result["email_delivery"] = email_delivery
+    result.update(_acceptance_fields(token, email_delivery))
     return result
 
 
