@@ -42,7 +42,9 @@ cadeia de auditoria encadeada por hashes.
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
-- convites por e-mail transacional (SMTP) com fallback para log quando não configurado;
+- convites por e-mail transacional (SMTP), com reenvio por convite; quando o
+  envio não acontece, o link de aceite volta ao gestor para repasse manual, de
+  modo que o caso nunca fica travado por falta de SMTP;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
@@ -134,12 +136,21 @@ npm run dev
 
 ```bash
 cp .env.example .env
+
+# O Compose sobe em APP_ENV=production, onde o segredo de assinatura é
+# obrigatório: sem ele o serviço se recusa a iniciar.
+python -c "import secrets; print('PLATFORM_SIGNING_SECRET=' + secrets.token_urlsafe(48))" >> .env
+python -m app.core.encryption | sed 's/^/DOCUMENT_ENCRYPTION_KEY=/' >> .env
+
 docker compose up --build
 ```
 
 O Compose publica a aplicação apenas em `127.0.0.1:8000`, inicia PostgreSQL,
 aguarda o banco ficar saudável e executa as migrações antes da API. Troque
 `POSTGRES_PASSWORD` no `.env` antes de usar fora da máquina local.
+
+Os documentos ficam no volume `app_data`, montado em `/app/data`, e sobrevivem
+ao restart do container. O banco fica no volume `postgres_data`.
 
 Para aplicar migrações sem Docker:
 
@@ -198,6 +209,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /auth/login` | Entrar e criar sessão expiráveis |
 | `POST /auth/logout` | Encerrar a sessão atual |
 | `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
+| `POST /cases/{id}/invitations/{invitation_id}/resend` | Reemitir o token e reenviar o convite |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
 | `POST /cases/{id}/deadlines` | Criar prazo e notificações |
 | `GET /cases` | Listar casos |
@@ -246,6 +258,8 @@ agenda, relatório Word, assinatura e auditoria.
   apenas em desenvolvimento;
 - o envio de convites por SMTP já existe, mas depende de um provedor
   transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
+  sem SMTP o link de aceite é devolvido ao gestor, que precisa repassá-lo por
+  um canal próprio;
 - os documentos ficam fora do banco (object store), cifrados em repouso com
   AES-256-GCM e acessíveis por link temporário assinado; ainda falta rotação de
   chaves e um cofre dedicado, e o texto derivado em chunks permanece no banco

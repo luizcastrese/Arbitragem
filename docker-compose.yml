@@ -22,7 +22,14 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arbitragem}:${POSTGRES_PASSWORD:-change-this-password}@database:5432/${POSTGRES_DB:-arbitragem}
+      APP_ENV: ${APP_ENV:-production}
       AUTH_REQUIRED: "true"
+      # Os documentos precisam viver no volume; o filesystem do container é
+      # descartado a cada restart.
+      DOCUMENT_STORAGE_BACKEND: ${DOCUMENT_STORAGE_BACKEND:-local}
+      DOCUMENT_STORAGE_DIR: /app/data/documents
+    volumes:
+      - app_data:/app/data
     depends_on:
       database:
         condition: service_healthy
@@ -39,3 +46,4 @@ services:
 
 volumes:
   postgres_data:
+  app_data:

@@ -907,21 +907,49 @@ function CaseWorkspace({
 
 function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sessionToken }) {
   const [inviteLink, setInviteLink] = useState('')
+  const [inviteNotice, setInviteNotice] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
+  const invitations = (caseData.invitations || []).filter((item) => item.status !== 'accepted')
+
+  // O token só volta na resposta quando o e-mail não foi entregue. Nesse caso o
+  // gestor precisa repassar o link; quando o envio funciona, não há segredo a
+  // exibir na tela.
+  function applyInviteResult(data) {
+    if (data.acceptance_token) {
+      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
+      setInviteNotice(data.email_delivery?.delivered
+        ? 'Convite enviado por e-mail. O link abaixo serve como cópia.'
+        : 'O e-mail não pôde ser entregue. Repasse o link abaixo à pessoa convidada.')
+    } else {
+      setInviteLink('')
+      setInviteNotice(`Convite enviado por e-mail para ${data.email}.`)
+    }
+    return data
+  }
 
   async function invite(event) {
     event.preventDefault()
-    const form = new FormData(event.currentTarget)
+    const form = event.currentTarget
+    const payload = new FormData(form)
     await run('Criando convite protegido...', async () => {
       const data = await request(`/cases/${caseData.id}/invitations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
-        body: JSON.stringify({ email: form.get('email'), role: form.get('role') })
+        body: JSON.stringify({ email: payload.get('email'), role: payload.get('role') })
       })
-      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
-      event.currentTarget?.reset?.()
-      return data
+      form.reset()
+      return applyInviteResult(data)
+    })
+  }
+
+  async function resendInvite(invitationId) {
+    await run('Reenviando o convite...', async () => {
+      const data = await request(`/cases/${caseData.id}/invitations/${invitationId}/resend`, {
+        method: 'POST',
+        headers: actorHeaders(caseData.id, 'manager')
+      })
+      return applyInviteResult(data)
     })
   }
 
@@ -989,11 +1017,30 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
           </form>
+          {inviteNotice && <small className="invite-notice">{inviteNotice}</small>}
           {inviteLink && (
             <label className="invite-link">
               <span>Link protegido para envio</span>
               <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
             </label>
+          )}
+          {invitations.length > 0 && (
+            <div className="invitation-list">
+              {invitations.map((invitation) => (
+                <span className="invitation-row" key={invitation.id}>
+                  <strong>{invitation.email}</strong>
+                  <small>{invitation.role} · {invitation.status}</small>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    disabled={busy}
+                    onClick={() => resendInvite(invitation.id)}
+                  >
+                    Reenviar
+                  </button>
+                </span>
+              ))}
+            </div>
           )}
           {!user && <small>O modo local continua disponível; para convites nominativos, crie uma conta de gestor.</small>}
         </div>

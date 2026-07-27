@@ -159,6 +159,30 @@ def create_invitation(
     return token, invitation
 
 
+def get_invitation(db: Session, case_id: str, invitation_id: str) -> Optional[Invitation]:
+    return (
+        db.query(Invitation)
+        .filter(Invitation.id == invitation_id, Invitation.case_id == case_id)
+        .one_or_none()
+    )
+
+
+def rotate_invitation_token(db: Session, invitation: Invitation) -> str:
+    """Emite um token novo para um convite ainda não aceito.
+
+    O token anterior deixa de valer, o prazo recomeça e o convite volta a
+    `pending` mesmo que já tivesse expirado. É o que permite reenviar um
+    convite cuja entrega por e-mail falhou sem criar um registro duplicado.
+    """
+    token = secrets.token_urlsafe(40)
+    invitation.token_hash = hash_access_token(token)
+    invitation.expires_at = utc_now() + timedelta(days=7)
+    invitation.status = "pending"
+    db.commit()
+    db.refresh(invitation)
+    return token
+
+
 def invitation_to_dict(invitation: Invitation) -> dict:
     return {
         "id": invitation.id,
