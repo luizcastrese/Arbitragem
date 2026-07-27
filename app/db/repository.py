@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.audit import build_audit_event
 from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
 from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
+from app.documents.storage import (
+    StorageError,
+    build_content_key,
+    build_original_key,
+    get_document_storage,
+)
 
 
 def _json_dump(value: Any) -> Optional[str]:
@@ -55,6 +61,26 @@ def _chunk_to_dict(chunk: Chunk, include_embedding: bool = True) -> Dict[str, An
     return result
 
 
+def load_document_content(document: Document) -> str:
+    """Carrega o texto canônico do documento a partir do object store."""
+    if not document.content_key:
+        return ""
+    try:
+        return get_document_storage().get(document.content_key).decode("utf-8")
+    except StorageError:
+        return ""
+
+
+def load_document_original(document: Document) -> Optional[bytes]:
+    """Carrega o arquivo original (por exemplo o PDF) do object store."""
+    if not document.original_key:
+        return None
+    try:
+        return get_document_storage().get(document.original_key)
+    except StorageError:
+        return None
+
+
 def _document_to_dict(document: Document, include_content: bool = True) -> Dict[str, Any]:
     counterparty = (
         "respondent" if document.submitted_by == "claimant" else "claimant"
@@ -63,6 +89,8 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         "id": document.id,
         "name": document.name,
         "sha256": document.sha256,
+        "byte_size": document.byte_size,
+        "has_original": bool(document.original_key),
         "submitted_by": document.submitted_by,
         "counterparty": counterparty,
         "material_type": document.material_type,
@@ -85,7 +113,7 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         "created_at": document.created_at.isoformat(),
     }
     if include_content:
-        result["content"] = document.content
+        result["content"] = load_document_content(document)
     return result
 
 
@@ -282,14 +310,40 @@ def add_document(
     submitted_by: str,
     material_type: str,
     purpose: str,
+    original_bytes: Optional[bytes] = None,
+    original_filename: Optional[str] = None,
+    original_media_type: Optional[str] = None,
 ) -> Document:
     sequence = len(case.documents) + 1
     document_id = f"{case.id[:8]}-D{sequence}"
+
+    # Grava os bytes no object store antes de persistir a referência. Uma
+    # eventual falha após esta etapa deixa apenas um objeto órfão (coletável),
+    # nunca uma linha apontando para conteúdo inexistente.
+    storage = get_document_storage()
+    content_bytes = content.encode("utf-8")
+    content_key = build_content_key(case.id, document_id)
+    storage.put(content_key, content_bytes, "text/plain; charset=utf-8")
+
+    original_key = None
+    if original_bytes is not None:
+        original_key = build_original_key(
+            case.id, document_id, original_filename or name
+        )
+        storage.put(
+            original_key,
+            original_bytes,
+            original_media_type or "application/octet-stream",
+        )
+
     document = Document(
         id=document_id,
         case_id=case.id,
         name=name,
-        content=content,
+        content_key=content_key,
+        original_key=original_key,
+        original_media_type=original_media_type,
+        byte_size=len(content_bytes),
         sha256=document_hash,
         submitted_by=submitted_by,
         material_type=material_type,

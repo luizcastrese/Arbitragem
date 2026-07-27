@@ -1,15 +1,19 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
+import logging
 from pathlib import Path
 import secrets
+import time
 from typing import Dict, List
+import uuid
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -26,8 +30,16 @@ from app.core.attestation import (
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
+from app.core.email import deliver_invitation_email
+from app.core.encryption import get_document_cipher
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
+from app.core.ratelimit import SlidingWindowRateLimiter
+from app.core.signed_url import (
+    SignedUrlError,
+    sign_download_token,
+    verify_download_token,
+)
 from app.core.signing import verify_signature
 from app.db.access_repository import (
     accept_invitation,
@@ -57,6 +69,7 @@ from app.db.repository import (
     get_document,
     get_case,
     list_cases,
+    load_document_original,
     lock_manifest as persist_manifest,
     record_consent,
     register_contest,
@@ -70,6 +83,7 @@ from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
 from app.documents.retrieval import retrieve_relevant_chunks
+from app.documents.storage import StorageError, get_document_storage
 from app.reports.report_generator import build_report
 from app.reports.docx_generator import build_docx_report
 from app.schemas import (
@@ -89,6 +103,18 @@ from app.schemas import (
 
 
 settings = get_settings()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("valinor.request")
+
+rate_limiter = SlidingWindowRateLimiter(
+    max_requests=settings.rate_limit_max_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+    enabled=settings.rate_limit_enabled,
+)
 
 
 @asynccontextmanager
@@ -111,6 +137,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def observability_and_rate_limit(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+
+    if rate_limiter.enabled:
+        client_key = request.client.host if request.client else "unknown"
+        allowed, retry_after = rate_limiter.allow(client_key)
+        if not allowed:
+            logger.warning(
+                "rate_limited request_id=%s client=%s path=%s",
+                request_id,
+                client_key,
+                request.url.path,
+            )
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Limite de requisições excedido. Tente novamente em instantes."
+                },
+            )
+            response.headers["Retry-After"] = str(int(retry_after) + 1)
+            response.headers["X-Request-ID"] = request_id
+            return response
+
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.exception(
+            "request_failed request_id=%s method=%s path=%s elapsed_ms=%.1f",
+            request_id,
+            request.method,
+            request.url.path,
+            elapsed_ms,
+        )
+        raise
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "request request_id=%s method=%s path=%s status=%s elapsed_ms=%.1f",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 def _case_or_404(db: Session, case_id: str):
     case = get_case(db, case_id)
     if not case:
@@ -123,9 +200,12 @@ def _hash_token(token: str) -> str:
 
 
 def _require_actor(db: Session, case, token: str, expected_party: str):
-    stored_hash = getattr(case, f"{expected_party}_token_hash", None)
-    if token and stored_hash and secrets.compare_digest(_hash_token(token), stored_hash):
-        return None
+    if settings.allow_role_tokens:
+        stored_hash = getattr(case, f"{expected_party}_token_hash", None)
+        if token and stored_hash and secrets.compare_digest(
+            _hash_token(token), stored_hash
+        ):
+            return None
     user = get_user_by_token(db, token)
     if user and user_has_role(db, case.id, user.id, expected_party):
         return user
@@ -192,6 +272,9 @@ def _process_document(
     submitted_by: str,
     material_type: str,
     purpose: str,
+    original_bytes: bytes | None = None,
+    original_filename: str | None = None,
+    original_media_type: str | None = None,
 ) -> Dict:
     if case.manifest_locked:
         raise HTTPException(
@@ -228,6 +311,9 @@ def _process_document(
         submitted_by=submitted_by,
         material_type=material_type,
         purpose=purpose,
+        original_bytes=original_bytes,
+        original_filename=original_filename,
+        original_media_type=original_media_type,
     )
     counterparty = "respondent" if submitted_by == "claimant" else "claimant"
     create_notification(
@@ -272,6 +358,11 @@ def root():
                 (
                     "PLATFORM_SIGNING_SECRET usa valor de desenvolvimento."
                     if settings.using_development_signing_secret
+                    else None
+                ),
+                (
+                    "DOCUMENT_ENCRYPTION_KEY ausente: documentos são gravados sem criptografia."
+                    if settings.is_production and get_document_cipher() is None
                     else None
                 ),
             ]
@@ -449,9 +540,20 @@ def invite_participant(
         "Convite para participar do procedimento",
         f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
     )
+    email_delivery = deliver_invitation_email(
+        to_email=invitation.email,
+        role=invitation.role,
+        case_title=case.title,
+        token=token,
+    )
     result = invitation_to_dict(invitation)
-    result["acceptance_token"] = token
-    result["acceptance_path"] = f"/ui/?invite={token}"
+    result["email_delivery"] = email_delivery
+    # O token de aceite só é exposto na resposta no modo local. Em produção o
+    # convite chega exclusivamente pelo e-mail transacional, evitando que o
+    # segredo trafegue por outro canal.
+    if settings.allow_role_tokens:
+        result["acceptance_token"] = token
+        result["acceptance_path"] = f"/ui/?invite={token}"
     return result
 
 
@@ -632,6 +734,9 @@ async def upload_pdf(
         submitted_by,
         material_type,
         purpose,
+        original_bytes=file_bytes,
+        original_filename=filename,
+        original_media_type="application/pdf",
     )
     return {
         "message": "PDF processado",
@@ -742,6 +847,82 @@ def admit_evidence(
     )
 
 
+@app.get("/cases/{case_id}/documents/{document_id}/original")
+def download_document_original(
+    case_id: str,
+    document_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    document = _document_or_404(db, case_id, document_id)
+    original = load_document_original(document)
+    if original is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Este documento não possui arquivo original armazenado",
+        )
+    return StreamingResponse(
+        BytesIO(original),
+        media_type=document.original_media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{document.name}"'
+        },
+    )
+
+
+@app.post("/cases/{case_id}/documents/{document_id}/original-url")
+def issue_original_download_url(
+    case_id: str,
+    document_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Emite um link temporário e assinado para o arquivo original. O link
+    expira em `DOWNLOAD_URL_TTL_SECONDS` e dispensa nova autenticação."""
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    document = _document_or_404(db, case_id, document_id)
+    if not document.original_key:
+        raise HTTPException(
+            status_code=404,
+            detail="Este documento não possui arquivo original armazenado",
+        )
+    ttl = settings.download_url_ttl_seconds
+    token, expires_at = sign_download_token(
+        key=document.original_key,
+        filename=document.name,
+        media_type=document.original_media_type or "application/octet-stream",
+        expires_in=ttl,
+    )
+    return {
+        "url": f"{settings.public_base_url}/documents/download?token={token}",
+        "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(),
+        "expires_in": ttl,
+    }
+
+
+@app.get("/documents/download")
+def download_via_signed_url(token: str):
+    """Endpoint público: valida o token assinado e devolve o objeto (decifrado
+    pela camada de storage). Sem token válido e não expirado, nega o acesso."""
+    try:
+        claims = verify_download_token(token)
+    except SignedUrlError as exc:
+        raise HTTPException(status_code=403, detail=f"Link inválido: {exc}") from exc
+    try:
+        data = get_document_storage().get(claims["k"])
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail="Objeto não encontrado") from exc
+    filename = claims.get("n") or "documento"
+    return StreamingResponse(
+        BytesIO(data),
+        media_type=claims.get("m") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/cases/{case_id}/lock")
 def lock_manifest(
     case_id: str,
@@ -786,7 +967,7 @@ def get_manifest(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    manifest = case_to_dict(case)["locked_manifest"]
+    manifest = case_to_dict(case, include_content=False)["locked_manifest"]
     if not manifest:
         raise HTTPException(status_code=400, detail="Manifesto ainda não foi travado")
     return manifest
@@ -820,7 +1001,7 @@ def get_audit(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    events = case_to_dict(case)["audit_log"]
+    events = case_to_dict(case, include_content=False)["audit_log"]
     valid, errors = verify_audit_chain(events)
     return {"valid": valid, "errors": errors, "events": events}
 
@@ -833,7 +1014,9 @@ def list_chunks(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    return case_to_dict(case, include_embeddings=False)["chunks"]
+    return case_to_dict(
+        case, include_content=False, include_embeddings=False
+    )["chunks"]
 
 
 @app.get("/cases/{case_id}/retrieve")
@@ -848,7 +1031,7 @@ def retrieve_chunks(
         raise HTTPException(status_code=400, detail="Consulta não pode ser vazia")
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    return _retrieve(case_to_dict(case), query, method)
+    return _retrieve(case_to_dict(case, include_content=False), query, method)
 
 
 @app.post("/cases/{case_id}/conciliation")
@@ -1179,7 +1362,7 @@ def get_attestation(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    attestation = case_to_dict(case)["attestation"]
+    attestation = case_to_dict(case, include_content=False)["attestation"]
     if not attestation:
         raise HTTPException(status_code=404, detail="Attestation ainda não emitida")
     return attestation

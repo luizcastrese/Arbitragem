@@ -13,6 +13,13 @@ def _split_csv(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -26,6 +33,17 @@ class Settings:
     cors_origins: List[str]
     max_upload_bytes: int
     auth_required: bool
+    rate_limit_enabled: bool
+    rate_limit_max_requests: int
+    rate_limit_window_seconds: int
+    public_base_url: str
+    smtp_host: str
+    smtp_port: int
+    smtp_username: str
+    smtp_password: str
+    smtp_from: str
+    smtp_use_tls: bool
+    download_url_ttl_seconds: int
 
     @property
     def openai_enabled(self) -> bool:
@@ -33,6 +51,16 @@ class Settings:
             self.openai_api_key
             and self.openai_api_key != "your_key_here"
         )
+
+    @property
+    def allow_role_tokens(self) -> bool:
+        """Tokens por papel são um atalho de operação local. Em produção o
+        acesso deve depender exclusivamente de conta autenticada."""
+        return not self.is_production
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from)
 
     @property
     def using_development_signing_secret(self) -> bool:
@@ -61,6 +89,14 @@ def get_settings() -> Settings:
             )
         signing_secret = "development-only-secret-change-me"
 
+    is_production = app_env == "production"
+    # Em produção a autenticação por conta é obrigatória em todas as rotas;
+    # o modo de tokens por papel só existe para operação local.
+    auth_required = _env_flag("AUTH_REQUIRED", False) or is_production
+    # Rate limiting fica ligado por padrão em produção; em desenvolvimento só
+    # entra se explicitamente configurado, para não atrapalhar os testes.
+    rate_limit_enabled = _env_flag("RATE_LIMIT_ENABLED", is_production)
+
     return Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite:///./data/arbitragem.db"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
@@ -82,6 +118,16 @@ def get_settings() -> Settings:
             )
         ),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))),
-        auth_required=os.getenv("AUTH_REQUIRED", "false").strip().lower()
-        in {"1", "true", "yes", "on"},
+        auth_required=auth_required,
+        rate_limit_enabled=rate_limit_enabled,
+        rate_limit_max_requests=int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120")),
+        rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
+        public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
+        smtp_host=os.getenv("SMTP_HOST", "").strip(),
+        smtp_port=int(os.getenv("SMTP_PORT", "587")),
+        smtp_username=os.getenv("SMTP_USERNAME", "").strip(),
+        smtp_password=os.getenv("SMTP_PASSWORD", ""),
+        smtp_from=os.getenv("SMTP_FROM", "").strip(),
+        smtp_use_tls=_env_flag("SMTP_USE_TLS", True),
+        download_url_ttl_seconds=int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "300")),
     )

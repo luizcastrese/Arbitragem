@@ -74,7 +74,11 @@ class Document(Base):
     case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
 
     name = Column(String, nullable=False)
-    content = Column(Text, nullable=False)
+    # Os bytes ficam no object store; o banco guarda apenas as referências.
+    content_key = Column(String, nullable=False)
+    original_key = Column(String, nullable=True)
+    original_media_type = Column(String, nullable=True)
+    byte_size = Column(Integer, nullable=False, default=0)
     sha256 = Column(String, nullable=False)
     submitted_by = Column(String, nullable=False, default="claimant")
     material_type = Column(String, nullable=False, default="evidence")
