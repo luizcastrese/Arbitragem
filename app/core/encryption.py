@@ -75,5 +75,39 @@ def generate_key() -> str:
     return base64.b64encode(os.urandom(32)).decode()
 
 
+CHUNK_TEXT_PREFIX = "venc1:"
+
+
+def encrypt_chunk_text(text: str) -> str:
+    """Cifra o texto de um chunk para gravação em uma coluna de texto.
+
+    Sem chave configurada, retorna o texto em claro (mesma degradação do
+    object store). Com chave, grava base64 do blob cifrado atrás de um
+    prefixo que marca o valor como cifrado — necessário porque, ao contrário
+    do object store, aqui não há bytes crus para checar o `MAGIC` antes de
+    decodificar.
+    """
+    cipher = get_document_cipher()
+    if cipher is None:
+        return text
+    blob = cipher.encrypt(text.encode("utf-8"))
+    return CHUNK_TEXT_PREFIX + base64.b64encode(blob).decode("ascii")
+
+
+def decrypt_chunk_text(stored: str) -> str:
+    """Reverte `encrypt_chunk_text`. Texto legado sem o prefixo é retornado
+    como está, o que permite migração incremental dos chunks já gravados."""
+    if not stored.startswith(CHUNK_TEXT_PREFIX):
+        return stored
+    cipher = get_document_cipher()
+    if cipher is None:
+        raise ValueError(
+            "Chunk cifrado encontrado, mas DOCUMENT_ENCRYPTION_KEY não está "
+            "configurada: não é possível decifrar o texto."
+        )
+    blob = base64.b64decode(stored[len(CHUNK_TEXT_PREFIX):])
+    return cipher.decrypt(blob).decode("utf-8")
+
+
 if __name__ == "__main__":  # pragma: no cover
     print(generate_key())

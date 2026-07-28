@@ -5,6 +5,8 @@ from typing import List
 
 from dotenv import load_dotenv
 
+from app.core.encryption import load_key as load_document_encryption_key
+
 
 load_dotenv()
 
@@ -44,6 +46,8 @@ class Settings:
     smtp_from: str
     smtp_use_tls: bool
     download_url_ttl_seconds: int
+    nostr_private_key_hex: str
+    nostr_relays: List[str]
 
     @property
     def openai_enabled(self) -> bool:
@@ -74,6 +78,10 @@ class Settings:
     def attestation_enabled(self) -> bool:
         return bool(self.platform_ed25519_private_key)
 
+    @property
+    def nostr_anchor_enabled(self) -> bool:
+        return bool(self.nostr_private_key_hex and self.nostr_relays)
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -90,6 +98,19 @@ def get_settings() -> Settings:
         signing_secret = "development-only-secret-change-me"
 
     is_production = app_env == "production"
+
+    if is_production:
+        try:
+            document_key = load_document_encryption_key()
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if document_key is None:
+            raise RuntimeError(
+                "DOCUMENT_ENCRYPTION_KEY é obrigatório em produção: sem ele os "
+                "documentos são gravados sem criptografia. Gere uma chave com "
+                "`python -m app.core.encryption` antes de subir o serviço."
+            )
+
     # Em produção a autenticação por conta é obrigatória em todas as rotas;
     # o modo de tokens por papel só existe para operação local.
     auth_required = _env_flag("AUTH_REQUIRED", False) or is_production
@@ -130,4 +151,6 @@ def get_settings() -> Settings:
         smtp_from=os.getenv("SMTP_FROM", "").strip(),
         smtp_use_tls=_env_flag("SMTP_USE_TLS", True),
         download_url_ttl_seconds=int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "300")),
+        nostr_private_key_hex=os.getenv("NOSTR_PRIVATE_KEY_HEX", "").strip(),
+        nostr_relays=_split_csv(os.getenv("NOSTR_RELAYS", "")),
     )

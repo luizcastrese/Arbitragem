@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -31,9 +33,9 @@ from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
 from app.core.email import deliver_invitation_email
-from app.core.encryption import get_document_cipher
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
+from app.core.nostr_anchor import publish_attestation_anchor
 from app.core.ratelimit import SlidingWindowRateLimiter
 from app.core.signed_url import (
     SignedUrlError,
@@ -75,6 +77,7 @@ from app.db.repository import (
     register_contest,
     respond_to_document as persist_response,
     save_stage,
+    save_nostr_anchor,
     append_audit,
 )
 from app.db.models import Deadline, Invitation
@@ -358,11 +361,6 @@ def root():
                 (
                     "PLATFORM_SIGNING_SECRET usa valor de desenvolvimento."
                     if settings.using_development_signing_secret
-                    else None
-                ),
-                (
-                    "DOCUMENT_ENCRYPTION_KEY ausente: documentos são gravados sem criptografia."
-                    if settings.is_production and get_document_cipher() is None
                     else None
                 ),
             ]
@@ -1351,6 +1349,13 @@ def issue_attestation(
             "key_id": attestation["platform"]["key_id"],
         },
     )
+
+    # Âncora pública em Nostr (hash + assinatura, nunca o teor da decisão).
+    # Melhor esforço: falha de rede/relay não afeta a attestation já emitida.
+    anchor = publish_attestation_anchor(attestation)
+    if anchor:
+        save_nostr_anchor(db, case, anchor)
+
     return attestation
 
 
@@ -1366,6 +1371,22 @@ def get_attestation(
     if not attestation:
         raise HTTPException(status_code=404, detail="Attestation ainda não emitida")
     return attestation
+
+
+@app.get("/cases/{case_id}/attestation/nostr-anchor")
+def get_attestation_nostr_anchor(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    anchor = case_to_dict(case, include_content=False)["nostr_anchor"]
+    if not anchor:
+        raise HTTPException(
+            status_code=404, detail="Attestation ainda não ancorada em Nostr"
+        )
+    return anchor
 
 
 @app.post("/attestations/verify")

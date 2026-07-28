@@ -5,6 +5,8 @@ Para múltiplas réplicas em produção, troque o armazenamento por um backend
 compartilhado (por exemplo Redis) mantendo a mesma interface `allow`.
 """
 
+from __future__ import annotations
+
 import threading
 import time
 from collections import defaultdict, deque
