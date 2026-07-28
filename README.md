@@ -178,6 +178,8 @@ Variáveis do arquivo `.env`:
 | `DOCUMENT_S3_ENDPOINT_URL` / `DOCUMENT_S3_REGION` | Endpoint e região S3-compatíveis |
 | `DOCUMENT_ENCRYPTION_KEY` | Chave AES-256-GCM (base64 de 32 bytes) para cifrar documentos |
 | `DOWNLOAD_URL_TTL_SECONDS` | Validade dos links de download assinados |
+| `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations em relays Nostr; opcional |
+| `NOSTR_RELAYS` | Relays Nostr (`wss://...`, separados por vírgula) para a âncora pública |
 
 Gere um segredo local:
 
@@ -246,10 +248,10 @@ agenda, relatório Word, assinatura e auditoria.
   apenas em desenvolvimento;
 - o envio de convites por SMTP já existe, mas depende de um provedor
   transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
-- os documentos ficam fora do banco (object store), cifrados em repouso com
-  AES-256-GCM e acessíveis por link temporário assinado; ainda falta rotação de
-  chaves e um cofre dedicado, e o texto derivado em chunks permanece no banco
-  em claro para a recuperação — um passo seguinte é cifrá-lo ou tokenizá-lo;
+- os documentos ficam fora do banco (object store) e o texto dos chunks no
+  banco, ambos cifrados em repouso com AES-256-GCM (`DOCUMENT_ENCRYPTION_KEY`,
+  obrigatória em produção) e acessíveis por link temporário assinado; ainda
+  falta rotação de chaves e um cofre dedicado;
 - prompts e avaliações ainda precisam de versionamento formal;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
@@ -260,8 +262,8 @@ agenda, relatório Word, assinatura e auditoria.
 
 Antes de exposição pública, a próxima etapa é verificar e-mails, configurar o
 provedor SMTP com um domínio autenticado, adicionar rotação de chaves e cofre de
-segredos, cifrar ou tokenizar o texto dos chunks, migrar o rate limiting para um
-backend compartilhado e concluir uma bateria de avaliações e revisão jurídica.
+segredos, migrar o rate limiting para um backend compartilhado e concluir uma
+bateria de avaliações e revisão jurídica.
 
 ## Referências OpenAI
 

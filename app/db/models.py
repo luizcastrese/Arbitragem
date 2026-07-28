@@ -32,6 +32,7 @@ class Case(Base):
     decision_json = Column(Text, nullable=True)
     review_json = Column(Text, nullable=True)
     attestation_json = Column(Text, nullable=True)
+    nostr_anchor_json = Column(Text, nullable=True)
     escrow_id = Column(String, nullable=True)
     contested_at = Column(String, nullable=True)
     contested_by = Column(String, nullable=True)

@@ -181,8 +181,11 @@ def test_invitation_endpoint_reports_email_delivery(client):
 
 
 def test_production_forces_auth_and_disables_role_tokens(monkeypatch):
+    from app.core.encryption import generate_key
+
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "a-very-long-production-secret-value")
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
     config.get_settings.cache_clear()
     try:
         settings = config.get_settings()
@@ -190,5 +193,17 @@ def test_production_forces_auth_and_disables_role_tokens(monkeypatch):
         assert settings.auth_required is True
         assert settings.allow_role_tokens is False
         assert settings.rate_limit_enabled is True
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_production_requires_document_encryption_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "a-very-long-production-secret-value")
+    monkeypatch.delenv("DOCUMENT_ENCRYPTION_KEY", raising=False)
+    config.get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="DOCUMENT_ENCRYPTION_KEY"):
+            config.get_settings()
     finally:
         config.get_settings.cache_clear()

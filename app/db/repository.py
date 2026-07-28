@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import build_audit_event
+from app.core.encryption import decrypt_chunk_text, encrypt_chunk_text
 from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
 from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
 from app.documents.storage import (
@@ -52,7 +53,7 @@ def _chunk_to_dict(chunk: Chunk, include_embedding: bool = True) -> Dict[str, An
     result = {
         "id": chunk.id,
         "document_id": chunk.document_id,
-        "text": chunk.text,
+        "text": decrypt_chunk_text(chunk.text),
         "sha256": chunk.sha256,
         "embedding_error": chunk.embedding_error,
     }
@@ -173,6 +174,7 @@ def case_to_dict(
         "decision": _json_load(case.decision_json),
         "review": _json_load(case.review_json),
         "attestation": _json_load(case.attestation_json),
+        "nostr_anchor": _json_load(case.nostr_anchor_json),
         "escrow_id": case.escrow_id,
         "contest": {
             "contested": bool(case.contested_at),
@@ -358,7 +360,7 @@ def add_document(
                 id=f"{document_id}-C{index}",
                 case_id=case.id,
                 document_id=document.id,
-                text=record["text"],
+                text=encrypt_chunk_text(record["text"]),
                 sha256=record["sha256"],
                 embedding_json=_json_dump(record.get("embedding")),
                 embedding_error=record.get("embedding_error", False),
@@ -513,6 +515,20 @@ def save_stage(
     setattr(case, field, _json_dump(value))
     case.status = status
     append_audit(db, case, event_type, event_payload)
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_nostr_anchor(db: Session, case: Case, anchor: Dict[str, Any]) -> Case:
+    """Registra a âncora Nostr da attestation. Não altera `case.status`: é
+    metadado complementar, não uma etapa do fluxo do procedimento."""
+    case.nostr_anchor_json = _json_dump(anchor)
+    append_audit(
+        db,
+        case,
+        "attestation_anchored_nostr",
+        {"event_id": anchor.get("event_id"), "relays": anchor.get("relays")},
+    )
     db.commit()
     return get_case(db, case.id)
 

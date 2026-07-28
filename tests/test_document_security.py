@@ -16,8 +16,14 @@ os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("PLATFORM_SIGNING_SECRET", "test-signing-secret")
 
 from app.core import signed_url as signed_url_module  # noqa: E402
+from app.core import encryption as encryption_module  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
-from app.core.encryption import DocumentCipher, generate_key  # noqa: E402
+from app.core.encryption import (  # noqa: E402
+    DocumentCipher,
+    decrypt_chunk_text,
+    encrypt_chunk_text,
+    generate_key,
+)
 from app.core.signed_url import (  # noqa: E402
     SignedUrlError,
     sign_download_token,
@@ -239,3 +245,94 @@ def test_signed_url_404_for_text_document(client):
     ).json()["document"]["id"]
     response = client.post(f"/cases/{case_id}/documents/{doc}/original-url")
     assert response.status_code == 404
+
+
+# --- Texto do chunk cifrado em repouso -----------------------------------------
+
+
+def test_encrypt_decrypt_chunk_text_roundtrip(monkeypatch):
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    encryption_module.get_document_cipher.cache_clear()
+    try:
+        stored = encrypt_chunk_text("trecho sensível do documento")
+        assert stored.startswith(encryption_module.CHUNK_TEXT_PREFIX)
+        assert "sensível" not in stored
+        assert decrypt_chunk_text(stored) == "trecho sensível do documento"
+    finally:
+        encryption_module.get_document_cipher.cache_clear()
+
+
+def test_decrypt_chunk_text_legacy_plaintext_passthrough():
+    encryption_module.get_document_cipher.cache_clear()
+    assert decrypt_chunk_text("texto legado sem prefixo") == "texto legado sem prefixo"
+
+
+def test_decrypt_chunk_text_without_key_raises(monkeypatch):
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    encryption_module.get_document_cipher.cache_clear()
+    stored = encrypt_chunk_text("outro trecho sensível")
+    monkeypatch.delenv("DOCUMENT_ENCRYPTION_KEY", raising=False)
+    encryption_module.get_document_cipher.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="DOCUMENT_ENCRYPTION_KEY"):
+            decrypt_chunk_text(stored)
+    finally:
+        encryption_module.get_document_cipher.cache_clear()
+
+
+def test_add_document_stores_encrypted_chunk_text_in_db(monkeypatch):
+    from app.db.models import Chunk
+    from app.db.repository import add_document, case_to_dict, create_case, get_case
+
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    encryption_module.get_document_cipher.cache_clear()
+    try:
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        session_factory = sessionmaker(
+            bind=engine, autocommit=False, autoflush=False, expire_on_commit=False
+        )
+        Base.metadata.create_all(bind=engine)
+        db = session_factory()
+        try:
+            case = create_case(
+                db,
+                title="Caso",
+                claimant="Cliente",
+                respondent="Empresa",
+                claimant_token_hash="x",
+                respondent_token_hash="y",
+                manager_token_hash="z",
+            )
+            secret_text = "Informação confidencial da parte reclamante sobre o contrato."
+            add_document(
+                db,
+                case,
+                name="nota.txt",
+                content=secret_text,
+                document_hash="deadbeef",
+                chunk_records=[
+                    {"text": secret_text, "sha256": "deadbeef", "embedding": None}
+                ],
+                submitted_by="claimant",
+                material_type="argument",
+                purpose="prova",
+            )
+
+            raw_chunk = db.query(Chunk).one()
+            assert raw_chunk.text.startswith(encryption_module.CHUNK_TEXT_PREFIX)
+            assert "confidencial" not in raw_chunk.text
+
+            # Sessão de teste reutiliza o mesmo objeto `case`; força releitura
+            # em vez do relacionamento já resolvido (vazio) em `create_case`.
+            db.expire_all()
+            full = case_to_dict(get_case(db, case.id))
+            assert full["chunks"][0]["text"] == secret_text
+        finally:
+            db.close()
+            Base.metadata.drop_all(bind=engine)
+    finally:
+        encryption_module.get_document_cipher.cache_clear()
