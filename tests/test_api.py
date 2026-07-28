@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["PLATFORM_SIGNING_SECRET"] = "test-signing-secret"
+os.environ["AUTH_REQUIRED"] = "false"
 
 from app.core.config import get_settings  # noqa: E402
 
@@ -83,7 +84,9 @@ def register_user(client, name, email):
         },
     )
     assert response.status_code == 201
-    return response.json()
+    result = response.json()
+    result["session_token"] = response.cookies.get("valinor_session")
+    return result
 
 
 def add_contract(client, case_id):
@@ -357,7 +360,7 @@ def test_accounts_invitations_deadlines_and_word_report(client):
 
 
 def test_documents_are_immutable_after_manifest_lock(client):
-    case_id, _, _ = prepare_locked_case(client)
+    case_id, document, _ = prepare_locked_case(client)
 
     response = client.post(
         f"/cases/{case_id}/documents/text",
@@ -371,6 +374,28 @@ def test_documents_are_immutable_after_manifest_lock(client):
         headers=actor_headers(case_id, "respondent"),
     )
     assert response.status_code == 409
+
+    acknowledgement = client.post(
+        f"/cases/{case_id}/documents/{document['id']}/acknowledge",
+        json={"party": "respondent"},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    replacement_response = client.post(
+        f"/cases/{case_id}/documents/{document['id']}/respond",
+        json={
+            "party": "respondent",
+            "response_status": "answered",
+            "response_text": "Tentativa de substituir a resposta fixada.",
+        },
+        headers=actor_headers(case_id, "respondent"),
+    )
+    admission = client.post(
+        f"/cases/{case_id}/documents/{document['id']}/admit",
+        headers=actor_headers(case_id, "manager"),
+    )
+    assert acknowledgement.status_code == 409
+    assert replacement_response.status_code == 409
+    assert admission.status_code == 409
 
 
 def test_stages_are_idempotent(client):

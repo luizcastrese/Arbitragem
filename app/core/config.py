@@ -111,11 +111,11 @@ def get_settings() -> Settings:
                 "`python -m app.core.encryption` antes de subir o serviço."
             )
 
-    # Em produção a autenticação por conta é obrigatória em todas as rotas;
-    # o modo de tokens por papel só existe para operação local.
-    auth_required = _env_flag("AUTH_REQUIRED", False) or is_production
-    # Rate limiting fica ligado por padrão em produção; em desenvolvimento só
-    # entra se explicitamente configurado, para não atrapalhar os testes.
+    # Autenticação é segura por padrão e forçada mesmo se uma variável legada
+    # tentar desabilitá-la em produção.
+    auth_required = True if is_production else _env_flag("AUTH_REQUIRED", True)
+
+    # Rate limiting fica ligado por padrão em produção.
     rate_limit_enabled = _env_flag("RATE_LIMIT_ENABLED", is_production)
 
     return Settings(

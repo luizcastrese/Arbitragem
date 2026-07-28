@@ -148,17 +148,18 @@ def test_deliver_invitation_falls_back_to_log_when_unconfigured():
 
 
 def test_invitation_endpoint_reports_email_delivery(client):
-    manager = client.post(
+    registration = client.post(
         "/auth/register",
         json={
             "display_name": "Gestora Ana",
             "email": "gestora@example.com",
             "password": "senha-segura-123",
         },
-    ).json()
+    )
+    manager_token = registration.cookies.get("valinor_session")
     created = client.post(
         "/cases",
-        headers={"X-Session-Token": manager["session_token"]},
+        headers={"X-Session-Token": manager_token},
         json={
             "title": "Cobrança contestada",
             "claimant": "Cliente Carlos",
@@ -167,7 +168,7 @@ def test_invitation_endpoint_reports_email_delivery(client):
     ).json()
     invite = client.post(
         f"/cases/{created['id']}/invitations",
-        headers={"X-Actor-Token": manager["session_token"]},
+        headers={"X-Actor-Token": manager_token},
         json={"email": "cliente@example.com", "role": "claimant"},
     )
     assert invite.status_code == 201

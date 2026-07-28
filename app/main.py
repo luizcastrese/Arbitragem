@@ -11,11 +11,10 @@ import time
 from typing import Dict, List
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.requests import Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -106,6 +105,7 @@ from app.schemas import (
 
 
 settings = get_settings()
+SESSION_COOKIE_NAME = "valinor_session"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,6 +143,16 @@ app.add_middleware(
 
 @app.middleware("http")
 async def observability_and_rate_limit(request: Request, call_next):
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if token:
+        headers = list(request.scope.get("headers", []))
+        names = {name.lower() for name, _ in headers}
+        if b"x-session-token" not in names:
+            headers.append((b"x-session-token", token.encode("utf-8")))
+        if b"x-actor-token" not in names:
+            headers.append((b"x-actor-token", token.encode("utf-8")))
+        request.scope["headers"] = headers
+
     request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
 
     if rate_limiter.enabled:
@@ -191,6 +201,18 @@ async def observability_and_rate_limit(request: Request, call_next):
     return response
 
 
+def _set_session_cookie(response: Response, token: str, max_age: int = 7 * 86400):
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=max_age,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        path="/",
+    )
+
+
 def _case_or_404(db: Session, case_id: str):
     case = get_case(db, case_id)
     if not case:
@@ -212,10 +234,19 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
     user = get_user_by_token(db, token)
     if user and user_has_role(db, case.id, user.id, expected_party):
         return user
+
     raise HTTPException(
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
     )
+
+
+def _assert_evidence_mutable(case) -> None:
+    if case.manifest_locked:
+        raise HTTPException(
+            status_code=409,
+            detail="O registro documental está travado e não aceita alterações",
+        )
 
 
 def _public_case(case) -> Dict:
@@ -396,28 +427,36 @@ def _require_case_view(db: Session, case, x_session_token: str):
 
 
 @app.post("/auth/register", status_code=201)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(
+    payload: RegisterRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     try:
         user = register_user(db, payload.display_name, payload.email, payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     token, session = create_session(db, user)
+    _set_session_cookie(response, token)
     return {
         "user": user_to_dict(user),
-        "session_token": token,
         "expires_at": session.expires_at.isoformat(),
     }
 
 
 @app.post("/auth/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    payload: LoginRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     user = authenticate_user(db, payload.email, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos")
     token, session = create_session(db, user)
+    _set_session_cookie(response, token)
     return {
         "user": user_to_dict(user),
-        "session_token": token,
         "expires_at": session.expires_at.isoformat(),
     }
 
@@ -432,11 +471,19 @@ def current_user(
 
 @app.post("/auth/logout")
 def logout(
+    response: Response,
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     if not revoke_session(db, x_session_token):
         raise HTTPException(status_code=401, detail="Sessão inválida")
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        secure=settings.is_production,
+        httponly=True,
+        samesite="lax",
+    )
     return {"message": "Sessão encerrada"}
 
 
@@ -472,6 +519,9 @@ def create_case(
     x_session_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    user = get_user_by_token(db, x_session_token)
+    if settings.auth_required and not user:
+        raise HTTPException(status_code=401, detail="Entre para criar um caso")
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -486,13 +536,13 @@ def create_case(
         respondent_token_hash=_hash_token(credentials["respondent"]),
         manager_token_hash=_hash_token(credentials["manager"]),
     )
-    user = get_user_by_token(db, x_session_token)
     if user:
         add_member(db, case.id, user.id, "manager")
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
-    result["access_credentials"] = credentials
+    if not settings.auth_required:
+        result["access_credentials"] = credentials
     return result
 
 
@@ -763,6 +813,7 @@ def acknowledge_evidence(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_evidence_mutable(case)
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
     _require_actor(db, case, x_actor_token, expected_party)
@@ -790,6 +841,7 @@ def respond_to_evidence(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_evidence_mutable(case)
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
     _require_actor(db, case, x_actor_token, expected_party)
@@ -831,6 +883,7 @@ def admit_evidence(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_evidence_mutable(case)
     _require_actor(db, case, x_actor_token, "manager")
     document = _document_or_404(db, case_id, document_id)
     if not document.acknowledged_at:

@@ -23,8 +23,8 @@ cadeia de auditoria encadeada por hashes.
 - API FastAPI com validação e documentação OpenAPI;
 - painel React responsivo;
 - casos persistidos em SQLite;
-- credenciais locais separadas para cliente, empresa e gestor em cada caso;
-- contas com senha derivada por PBKDF2 e sessões expiráveis;
+- autorização separada para cliente, empresa e gestor em cada caso;
+- contas com senha derivada por PBKDF2 e sessões expiráveis em cookie HttpOnly;
 - convites de uso único vinculados ao e-mail e ao papel no caso;
 - agenda processual com responsável, vencimento e notificações internas;
 - aceite individual das duas partes antes da formação do procedimento;
@@ -163,7 +163,7 @@ Variáveis do arquivo `.env`:
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
-| `AUTH_REQUIRED` | Exige conta e participação no caso nas consultas (forçado em produção) |
+| `AUTH_REQUIRED` | Exige conta e participação; padrão `true` e obrigatório em produção |
 | `RATE_LIMIT_ENABLED` | Liga o rate limiting por IP; padrão ligado em produção |
 | `RATE_LIMIT_MAX_REQUESTS` | Requisições permitidas por janela e por IP |
 | `RATE_LIMIT_WINDOW_SECONDS` | Tamanho da janela de rate limiting em segundos |

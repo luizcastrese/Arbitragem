@@ -74,6 +74,13 @@ const steps = [
   }
 ]
 
+function userHasRole(caseData, user, role) {
+  if (!user) return false
+  return (caseData.participants || []).some(
+    (participant) => participant.email === user.email && participant.role === role
+  )
+}
+
 const statusLabels = {
   draft: 'Recebendo documentos',
   locked: 'Documentos protegidos',
@@ -101,20 +108,10 @@ export default function App() {
   const [claimantResponse, setClaimantResponse] = useState('')
   const [respondentResponse, setRespondentResponse] = useState('')
   const [conciliationUpdate, setConciliationUpdate] = useState('')
-  const [sessionToken, setSessionToken] = useState(() => localStorage.getItem('arbitragem_session') || '')
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('arbitragem_user') || 'null') } catch { return null }
-  })
+  const [user, setUser] = useState(null)
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState('register')
   const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
-  const [caseCredentials, setCaseCredentials] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('arbitragem_case_credentials') || '{}')
-    } catch {
-      return {}
-    }
-  })
 
   const currentStage = useMemo(
     () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
@@ -124,19 +121,17 @@ export default function App() {
   async function request(path, options = {}) {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
-      headers: {
-        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
-        ...(options.headers || {})
-      }
+      credentials: 'include',
+      headers: options.headers || {}
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.detail || `Erro HTTP ${response.status}`)
     return data
   }
 
-  function actorHeaders(caseId, party) {
-    const token = caseCredentials[caseId]?.[party]
-    return token || sessionToken ? { 'X-Actor-Token': token || sessionToken } : {}
+  function actorHeaders() {
+    // The HttpOnly cookie authenticates the account; the backend derives roles.
+    return {}
   }
 
   async function authenticate(event) {
@@ -154,13 +149,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      setSessionToken(data.session_token)
       setUser(data.user)
-      localStorage.setItem('arbitragem_session', data.session_token)
-      localStorage.setItem('arbitragem_user', JSON.stringify(data.user))
       setShowAuth(false)
       setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
-      setTimeout(() => window.location.reload(), 100)
+      await loadCases()
     } catch (err) {
       setError(err.message)
     } finally {
@@ -169,12 +161,11 @@ export default function App() {
   }
 
   async function logout() {
-    try { await request('/auth/logout', { method: 'POST' }) } catch { /* sessão local também será removida */ }
-    localStorage.removeItem('arbitragem_session')
-    localStorage.removeItem('arbitragem_user')
-    setSessionToken('')
+    try { await request('/auth/logout', { method: 'POST' }) } catch { /* clear local UI regardless */ }
     setUser(null)
-    window.location.reload()
+    setCases([])
+    setCaseData(null)
+    setShowAuth(true)
   }
 
   async function acceptPendingInvite() {
@@ -204,15 +195,24 @@ export default function App() {
   }
 
   useEffect(() => {
+    // Remove credentials left by versions that stored bearer tokens in the browser.
+    localStorage.removeItem('arbitragem_session')
+    localStorage.removeItem('arbitragem_user')
+    localStorage.removeItem('arbitragem_case_credentials')
+
     async function bootstrap() {
       try {
-        const [root, items] = await Promise.all([request('/'), request('/cases')])
+        const root = await request('/')
         setSystem(root)
-        setCases(items)
-        if (items[0]) {
-          await loadCase(items[0].id)
-        } else {
-          setShowCreate(true)
+        try {
+          setUser(await request('/auth/me'))
+          const items = await request('/cases')
+          setCases(items)
+          if (items[0]) await loadCase(items[0].id)
+          else setShowCreate(true)
+        } catch (err) {
+          if (/401|sessão|entre/i.test(err.message)) setShowAuth(true)
+          else throw err
         }
       } catch (err) {
         setError(err.message)
@@ -255,14 +255,7 @@ export default function App() {
           respondent: form.get('respondent')
         })
       })
-      const credentials = data.access_credentials
       delete data.access_credentials
-      const updatedCredentials = { ...caseCredentials, [data.id]: credentials }
-      setCaseCredentials(updatedCredentials)
-      localStorage.setItem(
-        'arbitragem_case_credentials',
-        JSON.stringify(updatedCredentials)
-      )
       formElement.reset()
       await loadCases(data.id)
       setStatus('Caso criado. Agora adicione os documentos da disputa.')
@@ -507,7 +500,6 @@ export default function App() {
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
                 user={user}
-                sessionToken={sessionToken}
               />
             ) : (
               <LoadingState />
@@ -804,11 +796,15 @@ function CaseWorkspace({
   setConciliationUpdate,
   showTechnical,
   setShowTechnical,
-  user,
-  sessionToken
+  user
 }) {
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : currentStage
+  const roles = {
+    claimant: userHasRole(caseData, user, 'claimant'),
+    respondent: userHasRole(caseData, user, 'respondent'),
+    manager: userHasRole(caseData, user, 'manager')
+  }
 
   return (
     <>
@@ -858,6 +854,7 @@ function CaseWorkspace({
           setClaimantResponse={setClaimantResponse}
           setRespondentResponse={setRespondentResponse}
           setConciliationUpdate={setConciliationUpdate}
+          roles={roles}
         />
       )}
 
@@ -875,6 +872,7 @@ function CaseWorkspace({
           actorHeaders={actorHeaders}
           evidenceResponses={evidenceResponses}
           setEvidenceResponses={setEvidenceResponses}
+          roles={roles}
         />
       )}
 
@@ -885,7 +883,6 @@ function CaseWorkspace({
         request={request}
         actorHeaders={actorHeaders}
         user={user}
-        sessionToken={sessionToken}
       />
 
       {caseData.status === 'reviewed' && (
@@ -905,10 +902,11 @@ function CaseWorkspace({
   )
 }
 
-function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sessionToken }) {
+function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
   const [inviteLink, setInviteLink] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
+  const isManager = userHasRole(caseData, user, 'manager')
 
   async function invite(event) {
     event.preventDefault()
@@ -943,7 +941,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
   async function downloadReport() {
     await run('Gerando o relatório Word...', async () => {
       const response = await fetch(`${API_BASE}/cases/${caseData.id}/report.docx`, {
-        headers: sessionToken ? { 'X-Session-Token': sessionToken } : {}
+        credentials: 'include'
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
@@ -980,7 +978,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
               <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
             </span>
           ))}
-          <form className="compact-form" onSubmit={invite}>
+          {isManager && <form className="compact-form" onSubmit={invite}>
             <input name="email" type="email" required placeholder="E-mail da parte" />
             <select name="role" defaultValue="claimant">
               <option value="claimant">Cliente reclamante</option>
@@ -988,14 +986,14 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
               <option value="manager">Gestor</option>
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
-          </form>
+          </form>}
           {inviteLink && (
             <label className="invite-link">
               <span>Link protegido para envio</span>
               <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
             </label>
           )}
-          {!user && <small>O modo local continua disponível; para convites nominativos, crie uma conta de gestor.</small>}
+          {!isManager && <small>Somente gestores podem criar novos convites.</small>}
         </div>
 
         <div className="operation-block">
@@ -1010,7 +1008,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
             ))}
             {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
           </div>
-          <form className="compact-form deadline-form" onSubmit={addDeadline}>
+          {isManager && <form className="compact-form deadline-form" onSubmit={addDeadline}>
             <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
             <select name="assigned_to" defaultValue="all">
               <option value="all">Todas as pessoas</option>
@@ -1020,7 +1018,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user, sess
             </select>
             <input name="due_at" type="datetime-local" required />
             <button className="button secondary" disabled={busy}>Adicionar prazo</button>
-          </form>
+          </form>}
         </div>
       </div>
     </section>
@@ -1162,7 +1160,8 @@ function NextAction({
   conciliationUpdate,
   setClaimantResponse,
   setRespondentResponse,
-  setConciliationUpdate
+  setConciliationUpdate,
+  roles
 }) {
   const actionContent = {
     draft: {
@@ -1221,6 +1220,7 @@ function NextAction({
           setClaimantResponse={setClaimantResponse}
           setRespondentResponse={setRespondentResponse}
           setConciliationUpdate={setConciliationUpdate}
+          roles={roles}
         />
       ) : caseData.status === 'draft' ? (
         <>
@@ -1230,6 +1230,7 @@ function NextAction({
             run={run}
             request={request}
             actorHeaders={actorHeaders}
+            roles={roles}
           />
 
           <div className="submission-context">
@@ -1239,8 +1240,9 @@ function NextAction({
                 value={documentParty}
                 onChange={(event) => setDocumentParty(event.target.value)}
               >
-                <option value="claimant">Cliente reclamante</option>
-                <option value="respondent">Empresa reclamada</option>
+                {roles.claimant && <option value="claimant">Cliente reclamante</option>}
+                {roles.respondent && <option value="respondent">Empresa reclamada</option>}
+                {!roles.claimant && !roles.respondent && <option value="">Sem papel de parte</option>}
               </select>
             </label>
             <label className="mini-field">
@@ -1269,7 +1271,7 @@ function NextAction({
               <strong>Enviar um PDF</strong>
               <small>Contrato, proposta, nota fiscal ou outro documento.</small>
               <span className="button secondary">Escolher arquivo</span>
-              <input type="file" accept="application/pdf" onChange={uploadPdf} disabled={busy} />
+              <input type="file" accept="application/pdf" onChange={uploadPdf} disabled={busy || !roles[documentParty]} />
             </label>
 
             <div className="upload-divider"><span>ou</span></div>
@@ -1297,7 +1299,7 @@ function NextAction({
               </label>
               <button
                 className="button secondary"
-                disabled={busy || !documentText.trim()}
+                disabled={busy || !roles[documentParty] || !documentText.trim()}
                 onClick={addTextDocument}
               >
                 <FileText size={17} /> Adicionar texto ao caso
@@ -1318,6 +1320,7 @@ function NextAction({
               className="button primary"
               disabled={
                 busy
+                || !roles.manager
                 || !caseData.documents.length
                 || !caseData.consent?.complete
                 || !caseData.contradictory?.complete
@@ -1350,7 +1353,7 @@ function NextAction({
       ) : (
         <button
           className="button primary action-cta"
-          disabled={busy}
+          disabled={busy || !roles.manager}
           onClick={() => {
             if (caseData.status === 'locked') {
               return run(
@@ -1389,7 +1392,7 @@ function NextAction({
   )
 }
 
-function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
+function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
   const entries = [
     {
       party: 'claimant',
@@ -1423,7 +1426,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
             </div>
             {entry.consent?.accepted ? (
               <em><Check size={14} /> Aceitou</em>
-            ) : (
+            ) : roles[entry.party] ? (
               <button
                 className="button secondary compact"
                 disabled={busy}
@@ -1441,6 +1444,8 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders }) {
               >
                 Registrar aceite
               </button>
+            ) : (
+              <em><Clock3 size={14} /> Aguardando a parte</em>
             )}
           </div>
         ))}
@@ -1467,7 +1472,8 @@ function ConciliationActions({
   conciliationUpdate,
   setClaimantResponse,
   setRespondentResponse,
-  setConciliationUpdate
+  setConciliationUpdate,
+  roles
 }) {
   const rounds = caseData.conciliation_rounds || []
   const latest = rounds[rounds.length - 1] || caseData.conciliation || {}
@@ -1520,6 +1526,7 @@ function ConciliationActions({
         <label className="mini-field">
           <span>Resposta do cliente reclamante</span>
           <textarea
+            disabled={!roles.claimant}
             value={claimantResponse}
             onChange={(event) => setClaimantResponse(event.target.value)}
             placeholder="O que aceita, rejeita ou gostaria de alterar?"
@@ -1528,6 +1535,7 @@ function ConciliationActions({
         <label className="mini-field">
           <span>Resposta da empresa reclamada</span>
           <textarea
+            disabled={!roles.respondent}
             value={respondentResponse}
             onChange={(event) => setRespondentResponse(event.target.value)}
             placeholder="Qual concessão, condição ou contraproposta a empresa apresenta?"
@@ -1536,6 +1544,7 @@ function ConciliationActions({
         <label className="mini-field full">
           <span>Fatos novos ou orientação para a próxima rodada</span>
           <textarea
+            disabled={!roles.manager}
             value={conciliationUpdate}
             onChange={(event) => setConciliationUpdate(event.target.value)}
             placeholder="Ex.: novo prazo possível, pagamento já realizado ou interesse em manter a relação."
@@ -1546,14 +1555,14 @@ function ConciliationActions({
       <div className="conciliation-buttons">
         <button
           className="button secondary"
-          disabled={busy || !canAdvance}
+          disabled={busy || !roles.manager || !canAdvance}
           onClick={generateNextRound}
         >
           <Handshake size={17} /> Gerar rodada {rounds.length + 1}
         </button>
         <button
           className="button primary"
-          disabled={busy}
+          disabled={busy || !roles.manager}
           onClick={() => run(
             'Encerrando a fase consensual e organizando o caso...',
             () => request(`/cases/${caseData.id}/organize`, {
@@ -1582,7 +1591,8 @@ function DocumentsCard({
   request,
   actorHeaders,
   evidenceResponses,
-  setEvidenceResponses
+  setEvidenceResponses,
+  roles
 }) {
   return (
     <section className="surface documents-card">
@@ -1621,7 +1631,7 @@ function DocumentsCard({
               <EvidenceState done={document.admitted} label="Admitido para decisão" />
             </div>
 
-            {!locked && !document.acknowledged_at && (
+            {!locked && roles[document.counterparty] && !document.acknowledged_at && (
               <button
                 className="button secondary compact"
                 disabled={busy}
@@ -1644,7 +1654,7 @@ function DocumentsCard({
               </button>
             )}
 
-            {!locked && document.acknowledged_at && document.response_status === 'pending' && (
+            {!locked && roles[document.counterparty] && document.acknowledged_at && document.response_status === 'pending' && (
               <div className="evidence-response">
                 <label className="mini-field">
                   <span>Manifestação de {partyLabel(document.counterparty, caseData)}</span>
@@ -1684,6 +1694,7 @@ function DocumentsCard({
             )}
 
             {!locked
+              && roles.manager
               && document.response_status !== 'pending'
               && !document.admitted
               && (
