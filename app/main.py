@@ -18,23 +18,19 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.agents.conciliator import assess_conciliation
-from app.agents.judge import decide_case as judge_decide_case
-from app.agents.organizer import organize_case as organizer_organize_case
-from app.agents.reviewer import review_decision
-from app.core.attestation import (
-    AttestationError,
-    build_decision_attestation,
-    public_key_info,
-    verify_attestation,
-)
+from app.core.attestation import public_key_info, verify_attestation
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
 from app.core.email import deliver_invitation_email
 from app.core.hashing import sha256_text
-from app.core.manifest import lock_case_manifest
-from app.core.nostr_anchor import publish_attestation_anchor
+from app.core.procedure import (
+    PARTIES,
+    advance as advance_procedure,
+    counterparty as party_counterparty,
+    retrieve_admitted_chunks,
+    state as procedure_state,
+)
 from app.core.ratelimit import SlidingWindowRateLimiter
 from app.core.signed_url import (
     SignedUrlError,
@@ -46,13 +42,14 @@ from app.db.access_repository import (
     accept_invitation,
     add_member,
     authenticate_user,
-    create_deadline,
+    case_roles_taken,
     create_invitation,
     create_notification,
     create_session,
     deadline_to_dict,
     get_user_by_token,
     invitation_to_dict,
+    pending_invitation_roles,
     register_user,
     revoke_session,
     user_case_ids,
@@ -63,7 +60,6 @@ from app.db.init_db import init_db
 from app.db.repository import (
     add_document as persist_document,
     acknowledge_document as persist_acknowledgement,
-    admit_document as persist_admission,
     case_to_dict,
     create_case as persist_case,
     document_to_dict,
@@ -71,20 +67,19 @@ from app.db.repository import (
     get_case,
     list_cases,
     load_document_original,
-    lock_manifest as persist_manifest,
+    record_composition_closure,
+    record_composition_input,
     record_consent,
+    record_ratification,
+    record_submission_closure,
     register_contest,
     respond_to_document as persist_response,
-    save_stage,
-    save_nostr_anchor,
     append_audit,
 )
-from app.db.models import Deadline, Invitation
 from app.db.session import get_db
 from app.documents.chunker import chunk_text
-from app.documents.embeddings import build_embedding, retrieve_by_embedding
+from app.documents.embeddings import build_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
-from app.documents.retrieval import retrieve_relevant_chunks
 from app.documents.storage import StorageError, get_document_storage
 from app.reports.report_generator import build_report
 from app.reports.docx_generator import build_docx_report
@@ -92,15 +87,16 @@ from app.schemas import (
     AcceptInvitationRequest,
     AddDocumentRequest,
     AttestationVerifyRequest,
-    ConciliationRoundRequest,
+    CompositionPositionRequest,
     ConsentRequest,
     ContestRequest,
     CreateCaseRequest,
-    DeadlineRequest,
     EvidenceActionRequest,
     InvitationRequest,
     LoginRequest,
+    RatificationRequest,
     RegisterRequest,
+    SubmissionClosureRequest,
 )
 
 
@@ -225,6 +221,13 @@ def _hash_token(token: str) -> str:
 
 
 def _require_actor(db: Session, case, token: str, expected_party: str):
+    """Só as duas partes atuam no caso. O procedimento não tem terceiro
+    humano: nenhum papel além de `claimant` e `respondent` é aceitável."""
+    if expected_party not in PARTIES:
+        raise HTTPException(
+            status_code=403,
+            detail="Este procedimento não tem terceiro humano; só as partes atuam",
+        )
     if settings.allow_role_tokens:
         stored_hash = getattr(case, f"{expected_party}_token_hash", None)
         if token and stored_hash and secrets.compare_digest(
@@ -238,6 +241,32 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
     raise HTTPException(
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
+    )
+
+
+def _actor_party(db: Session, case, token: str) -> str:
+    """Descobre qual das duas partes está agindo, sem confiar no corpo da
+    requisição. Uma parte nunca fala pela outra."""
+    for party in PARTIES:
+        try:
+            _require_actor(db, case, token, party)
+            return party
+        except HTTPException:
+            continue
+    raise HTTPException(
+        status_code=403,
+        detail="Apenas o cliente reclamante ou a empresa reclamada podem agir no caso",
+    )
+
+
+def _advance_and_reload(db: Session, case_id: str) -> Dict:
+    """Deixa o rito avançar tudo o que já pode avançar e devolve o caso."""
+    case = _case_or_404(db, case_id)
+    advance_procedure(db, case)
+    return case_to_dict(
+        _case_or_404(db, case_id),
+        include_content=False,
+        include_embeddings=False,
     )
 
 
@@ -273,29 +302,12 @@ def _public_case(case) -> Dict:
 
 
 def _retrieve(case_data: Dict, query: str, method: str = "embedding") -> List[Dict]:
-    admitted_document_ids = {
-        document["id"]
-        for document in case_data["documents"]
-        if document.get("admitted")
-    }
-    chunks = [
-        chunk
-        for chunk in case_data["chunks"]
-        if chunk.get("document_id") in admitted_document_ids
-    ]
     if method not in {"embedding", "lexical"}:
         raise HTTPException(
             status_code=400,
             detail="Método deve ser 'embedding' ou 'lexical'",
         )
-    if method == "embedding":
-        try:
-            results = retrieve_by_embedding(query=query, chunks=chunks, limit=5)
-            if results:
-                return results
-        except Exception:
-            pass
-    return retrieve_relevant_chunks(query=query, chunks=chunks, limit=5)
+    return retrieve_admitted_chunks(case_data, query, method=method)
 
 
 def _process_document(
@@ -314,6 +326,14 @@ def _process_document(
         raise HTTPException(
             status_code=409,
             detail="Documentos não podem mudar após o manifesto ser travado",
+        )
+    if getattr(case, f"{submitted_by}_submission_closed", False):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Você declarou encerrada a sua produção de material. "
+                "Reabra a produção antes de apresentar algo novo."
+            ),
         )
 
     chunks = chunk_text(content)
@@ -358,7 +378,10 @@ def _process_document(
         "Novo material disponível para manifestação",
         f"{name} foi apresentado. Confirme a ciência e registre sua resposta.",
     )
-    return document_to_dict(document, include_content=False)
+    result = document_to_dict(document, include_content=False)
+    # O rito abre em seguida o prazo de ciência e resposta da contraparte.
+    advance_procedure(db, case)
+    return result
 
 
 @app.get("/")
@@ -525,7 +548,6 @@ def create_case(
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
-        "manager": secrets.token_urlsafe(24),
     }
     case = persist_case(
         db,
@@ -534,10 +556,12 @@ def create_case(
         respondent=payload.respondent,
         claimant_token_hash=_hash_token(credentials["claimant"]),
         respondent_token_hash=_hash_token(credentials["respondent"]),
-        manager_token_hash=_hash_token(credentials["manager"]),
+        created_by=payload.creator_role,
     )
+    # Quem abre o caso entra como parte, do lado que declarou. Ninguém
+    # administra o próprio litígio: o rito é que conduz o procedimento.
     if user:
-        add_member(db, case.id, user.id, "manager")
+        add_member(db, case.id, user.id, payload.creator_role)
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
@@ -553,7 +577,7 @@ def get_invitations(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _actor_party(db, case, x_actor_token)
     return [invitation_to_dict(item) for item in case.invitations]
 
 
@@ -564,8 +588,37 @@ def invite_participant(
     x_actor_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    """Uma parte convida a contraparte. Não há convite para terceiro: o único
+    terceiro do procedimento é o próprio rito."""
     case = _case_or_404(db, case_id)
-    actor = _require_actor(db, case, x_actor_token, "manager")
+    actor_party = _actor_party(db, case, x_actor_token)
+    actor = get_user_by_token(db, x_actor_token)
+    if actor and payload.email.strip().lower() == actor.email:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "O convite é para a contraparte. As duas partes precisam ser "
+                "pessoas distintas."
+            ),
+        )
+    if payload.role != party_counterparty(actor_party):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Só é possível convidar a contraparte: "
+                f"{party_counterparty(actor_party)}"
+            ),
+        )
+    if payload.role in case_roles_taken(db, case.id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"O papel {payload.role} já está ocupado neste caso",
+        )
+    if payload.role in pending_invitation_roles(db, case.id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Já existe um convite pendente para o papel {payload.role}",
+        )
     token, invitation = create_invitation(
         db,
         case.id,
@@ -577,7 +630,12 @@ def invite_participant(
         db,
         case,
         "participant_invited",
-        {"email": invitation.email, "role": invitation.role, "invitation_id": invitation.id},
+        {
+            "email": invitation.email,
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+            "actor": actor_party,
+        },
     )
     db.commit()
     create_notification(
@@ -621,7 +679,12 @@ def accept_case_invitation(
         db,
         case,
         "invitation_accepted",
-        {"user_id": user.id, "role": invitation.role, "invitation_id": invitation.id},
+        {
+            "user_id": user.id,
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+            "actor": invitation.role,
+        },
     )
     db.commit()
     return {"case_id": case.id, "role": invitation.role, "message": "Convite aceito"}
@@ -638,61 +701,152 @@ def get_deadlines(
     return [deadline_to_dict(item) for item in case.deadlines]
 
 
-@app.post("/cases/{case_id}/deadlines", status_code=201)
-def add_deadline(
+# A agenda processual não tem mais um criador humano: o rito abre o prazo de
+# ciência e resposta quando um material é disponibilizado e dá baixa nele
+# quando a contraparte se manifesta. Ver `app.core.procedure`.
+
+
+@app.get("/cases/{case_id}/procedure")
+def get_procedure_state(
     case_id: str,
-    payload: DeadlineRequest,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Estado do rito: em que etapa o caso está e o que ele espera, de quem.
+    Enquanto houver pendência aqui, ela é sempre de uma das partes."""
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    return procedure_state(case_to_dict(case, include_content=False))
+
+
+@app.post("/cases/{case_id}/advance")
+def advance_case(
+    case_id: str,
     x_actor_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    """Pede ao rito que execute tudo o que já pode ser executado.
+
+    Não concede poder nenhum a quem chama: cada passo continua condicionado às
+    suas próprias pré-condições. As partes chamam este endpoint apenas para
+    não precisarem esperar o próximo ato de alguém.
+    """
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    try:
-        due_at = datetime.fromisoformat(payload.due_at.replace("Z", "+00:00"))
-        if due_at.tzinfo is None:
-            due_at = due_at.astimezone()
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Data do prazo inválida") from exc
-    deadline = create_deadline(
-        db, case.id, payload.label, payload.kind, payload.assigned_to, due_at
-    )
-    append_audit(
-        db,
-        case,
-        "deadline_created",
-        {"deadline_id": deadline.id, "assigned_to": deadline.assigned_to, "due_at": deadline.due_at.isoformat()},
-    )
-    db.commit()
-    for party in ({"claimant", "respondent", "manager"} if payload.assigned_to == "all" else {payload.assigned_to}):
-        create_notification(
-            db,
-            case.id,
-            party,
-            "deadline_created",
-            "Novo prazo no procedimento",
-            f"{deadline.label}: até {deadline.due_at.isoformat()}.",
+    _actor_party(db, case, x_actor_token)
+    return advance_procedure(db, case)
+
+
+@app.post("/cases/{case_id}/submission-complete")
+def close_submission(
+    case_id: str,
+    payload: SubmissionClosureRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """A parte declara que encerrou a própria produção de material.
+
+    Quando as duas encerram — e o contraditório está completo — o rito trava o
+    manifesto sozinho. Este é o sinal que substitui o julgamento do gestor
+    humano sobre quando o acervo está pronto.
+    """
+    case = _case_or_404(db, case_id)
+    actor_party = _actor_party(db, case, x_actor_token)
+    _assert_evidence_mutable(case)
+    if payload.closed and not case.documents:
+        raise HTTPException(
+            status_code=409,
+            detail="Não é possível encerrar a produção antes de haver material no caso",
         )
-    return deadline_to_dict(deadline)
+    record_submission_closure(db, case, actor_party, payload.closed)
+    return _advance_and_reload(db, case_id)
 
 
-@app.post("/cases/{case_id}/deadlines/{deadline_id}/complete")
-def complete_deadline(
+@app.post("/cases/{case_id}/composition/position")
+def submit_composition_position(
     case_id: str,
-    deadline_id: str,
+    payload: CompositionPositionRequest,
     x_actor_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    """A parte registra sua própria posição para a próxima rodada. Cada lado
+    fala por si — ninguém redige a manifestação do outro."""
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    deadline = db.query(Deadline).filter(
-        Deadline.case_id == case.id, Deadline.id == deadline_id
-    ).one_or_none()
-    if not deadline:
-        raise HTTPException(status_code=404, detail="Prazo não encontrado")
-    deadline.completed_at = datetime.now().astimezone()
-    append_audit(db, case, "deadline_completed", {"deadline_id": deadline.id})
-    db.commit()
-    return deadline_to_dict(deadline)
+    actor_party = _actor_party(db, case, x_actor_token)
+    if not case.manifest_locked:
+        raise HTTPException(
+            status_code=409,
+            detail="A composição começa depois que o registro documental é travado",
+        )
+    data = case_to_dict(case, include_content=False)
+    if data["organized"]:
+        raise HTTPException(
+            status_code=409,
+            detail="A fase de composição foi encerrada porque o julgamento já começou",
+        )
+    if data["composition"]["closed"]:
+        raise HTTPException(
+            status_code=409,
+            detail="A composição já foi encerrada neste caso",
+        )
+    record_composition_input(db, case, actor_party, payload.position)
+    return _advance_and_reload(db, case_id)
+
+
+@app.post("/cases/{case_id}/composition/close")
+def close_composition(
+    case_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """A parte encerra a composição. Ela é voluntária: basta um dos lados não
+    querer mais rodadas para o rito seguir para o julgamento."""
+    case = _case_or_404(db, case_id)
+    actor_party = _actor_party(db, case, x_actor_token)
+    if not case.manifest_locked:
+        raise HTTPException(
+            status_code=409,
+            detail="A composição começa depois que o registro documental é travado",
+        )
+    record_composition_closure(db, case, actor_party)
+    return _advance_and_reload(db, case_id)
+
+
+@app.post("/cases/{case_id}/ratification")
+def ratify_decision(
+    case_id: str,
+    payload: RatificationRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """A parte revisa a decisão que a auditoria ressalvou.
+
+    Esta é a revisão humana do procedimento. Ela não cabe a um terceiro — não
+    há terceiro —, e sim a quem é titular do conflito: informadas da ressalva,
+    as duas partes decidem se o resultado vale assim mesmo. Só o aceite das
+    duas destrava a execução; a recusa de qualquer uma encerra o caso sem
+    decisão executável.
+    """
+    case = _case_or_404(db, case_id)
+    actor_party = _actor_party(db, case, x_actor_token)
+    data = case_to_dict(case, include_content=False)
+    if not data["ratification"]["open"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Não há ratificação em aberto neste caso"
+                if not data["ratification"]["outcome"]
+                else "A fase de ratificação já foi encerrada"
+            ),
+        )
+    if data["ratification"][actor_party]["answered"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Você já se manifestou sobre esta decisão",
+        )
+    record_ratification(
+        db, case, actor_party, payload.accepted, payload.reason
+    )
+    return _advance_and_reload(db, case_id)
 
 
 @app.post("/cases/{case_id}/consent")
@@ -709,16 +863,14 @@ def set_case_consent(
             status_code=409,
             detail="O consentimento não pode ser alterado após a trava do processo",
         )
-    updated = record_consent(
+    record_consent(
         db,
         case,
         party=payload.party,
         accepted=payload.accepted,
         terms_version=payload.terms_version,
     )
-    return case_to_dict(updated, include_content=False, include_embeddings=False)[
-        "consent"
-    ]
+    return _advance_and_reload(db, case_id)["consent"]
 
 
 @app.post("/cases/{case_id}/documents/text", status_code=201)
@@ -825,11 +977,7 @@ def acknowledge_evidence(
     if not document.disclosed_at:
         raise HTTPException(status_code=409, detail="Material ainda não disponibilizado")
     persist_acknowledgement(db, case, document, payload.party)
-    return case_to_dict(
-        get_case(db, case_id),
-        include_content=False,
-        include_embeddings=False,
-    )
+    return _advance_and_reload(db, case_id)
 
 
 @app.post("/cases/{case_id}/documents/{document_id}/respond")
@@ -868,34 +1016,9 @@ def respond_to_evidence(
         payload.response_status,
         payload.response_text,
     )
-    return case_to_dict(
-        get_case(db, case_id),
-        include_content=False,
-        include_embeddings=False,
-    )
-
-
-@app.post("/cases/{case_id}/documents/{document_id}/admit")
-def admit_evidence(
-    case_id: str,
-    document_id: str,
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _assert_evidence_mutable(case)
-    _require_actor(db, case, x_actor_token, "manager")
-    document = _document_or_404(db, case_id, document_id)
-    if not document.acknowledged_at:
-        raise HTTPException(status_code=409, detail="A contraparte ainda não confirmou ciência")
-    if document.response_status not in {"answered", "waived", "challenged"}:
-        raise HTTPException(status_code=409, detail="A oportunidade de resposta ainda está aberta")
-    persist_admission(db, case, document)
-    return case_to_dict(
-        get_case(db, case_id),
-        include_content=False,
-        include_embeddings=False,
-    )
+    # A admissão vem em seguida, pelo próprio rito: cumprido o contraditório,
+    # ela é consequência automática, não um juízo de terceiro.
+    return _advance_and_reload(db, case_id)
 
 
 @app.get("/cases/{case_id}/documents/{document_id}/original")
@@ -974,40 +1097,9 @@ def download_via_signed_url(token: str):
     )
 
 
-@app.post("/cases/{case_id}/lock")
-def lock_manifest(
-    case_id: str,
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    if case.manifest_locked:
-        return {
-            "message": "Manifesto já estava travado",
-            "manifest": case_to_dict(case)["locked_manifest"],
-        }
-    if not case.documents:
-        raise HTTPException(
-            status_code=400,
-            detail="Adicione ao menos um documento antes de travar o manifesto",
-        )
-    case_data = case_to_dict(case)
-    if not case_data["consent"]["complete"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Cliente e empresa precisam aceitar o procedimento antes da trava",
-        )
-    if not case_data["contradictory"]["complete"]:
-        pending = ", ".join(case_data["contradictory"]["pending_document_ids"])
-        raise HTTPException(
-            status_code=409,
-            detail=f"Contraditório pendente nos materiais: {pending}",
-        )
-
-    manifest = lock_case_manifest(case_data)
-    persist_manifest(db, case, manifest)
-    return {"message": "Manifesto travado", "manifest": manifest}
+# A trava do manifesto é ato do rito, não de uma pessoa. Ela acontece sozinha
+# quando as duas partes aceitaram o procedimento, encerraram a produção de
+# material e o contraditório se completou. Ver `app.core.procedure._lock_manifest`.
 
 
 @app.get("/cases/{case_id}/manifest")
@@ -1085,242 +1177,11 @@ def retrieve_chunks(
     return _retrieve(case_to_dict(case, include_content=False), query, method)
 
 
-@app.post("/cases/{case_id}/conciliation")
-def assess_case_conciliation(
-    case_id: str,
-    payload: ConciliationRoundRequest = ConciliationRoundRequest(),
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    case_data = case_to_dict(case)
-    if not case.manifest_locked:
-        raise HTTPException(
-            status_code=409,
-            detail="Trave o manifesto antes da triagem de composição",
-        )
-    rounds = case_data["conciliation_rounds"]
-    if rounds and not payload.advance:
-        return rounds[-1]
-    if case_data["organized"]:
-        raise HTTPException(
-            status_code=409,
-            detail="A fase de composição foi encerrada porque o julgamento já começou",
-        )
-
-    previous_round = rounds[-1] if rounds else None
-    has_new_input = any(
-        [
-            payload.claimant_response,
-            payload.respondent_response,
-            payload.new_information,
-        ]
-    )
-    if (
-        previous_round
-        and not previous_round.get("continue_recommended", False)
-        and not has_new_input
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "A última rodada não recomendou nova tentativa. "
-                "Informe fatos ou posições novas para reavaliar."
-            ),
-        )
-
-    context = {
-        "round_number": len(rounds) + 1,
-        "manifest": case_data["locked_manifest"],
-        "parties": {
-            "claimant": case_data["claimant"],
-            "respondent": case_data["respondent"],
-        },
-        "documents": [
-            {
-                "id": document["id"],
-                "name": document["name"],
-                "content": document.get("content", "")[:8000],
-            }
-            for document in case_data["documents"]
-        ],
-        "previous_rounds": rounds,
-        "current_party_responses": {
-            "claimant": payload.claimant_response,
-            "respondent": payload.respondent_response,
-            "new_information": payload.new_information,
-        },
-        "retrieved_evidence": {
-            "shared_interests": _retrieve(
-                case_data,
-                "interesses comuns continuidade da relação acordo solução consensual",
-            ),
-            "possible_concessions": _retrieve(
-                case_data,
-                "propostas concessões negociação pagamento prazo entrega",
-            ),
-        },
-    }
-    round_number = len(rounds) + 1
-    conciliation = assess_conciliation(context, round_number)
-    updated_rounds = [*rounds, conciliation]
-    save_stage(
-        db,
-        case,
-        field="conciliation_json",
-        value=updated_rounds,
-        status="conciliation",
-        event_type=(
-            "conciliation_screened"
-            if round_number == 1
-            else "conciliation_round_generated"
-        ),
-        event_payload={
-            "round_number": round_number,
-            "convergence": conciliation.get("convergence"),
-            "recommended_path": conciliation.get("recommended_path"),
-            "confidence": conciliation.get("confidence"),
-            "continue_recommended": conciliation.get("continue_recommended"),
-            "recommended_additional_rounds": conciliation.get(
-                "recommended_additional_rounds"
-            ),
-            "execution": conciliation.get("execution", {}),
-        },
-    )
-    return conciliation
-
-
-@app.post("/cases/{case_id}/organize")
-def organize_case(
-    case_id: str,
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    case_data = case_to_dict(case)
-    if not case.manifest_locked:
-        raise HTTPException(
-            status_code=409,
-            detail="Trave o manifesto antes de organizar o caso",
-        )
-    if not case_data["conciliation"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Faça a triagem de conciliação ou mediação antes do julgamento",
-        )
-    if case_data["organized"]:
-        return case_data["organized"]
-
-    organized = organizer_organize_case(
-        documents=case_data["documents"],
-        chunks=case_data["chunks"],
-    )
-    save_stage(
-        db,
-        case,
-        field="organized_json",
-        value=organized,
-        status="organized",
-        event_type="case_organized",
-        event_payload={"execution": organized.get("execution", {})},
-    )
-    return organized
-
-
-@app.post("/cases/{case_id}/decide")
-def decide_case(
-    case_id: str,
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    case_data = case_to_dict(case)
-    if not case_data["organized"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Organize o caso antes de proferir a decisão",
-        )
-    if case_data["decision"]:
-        return case_data["decision"]
-
-    decision_context = {
-        "manifest": case_data["locked_manifest"],
-        "conciliation_rounds": case_data["conciliation_rounds"],
-        "organized_case": case_data["organized"],
-        "retrieved_evidence": {
-            "delivery": _retrieve(
-                case_data,
-                "obrigações de entrega e cumprimento parcial",
-            ),
-            "payment": _retrieve(
-                case_data,
-                "condições de pagamento e proporcionalidade",
-            ),
-            "deadline": _retrieve(
-                case_data,
-                "cumprimento de prazo e atraso",
-            ),
-        },
-    }
-    decision = judge_decide_case(decision_context)
-    save_stage(
-        db,
-        case,
-        field="decision_json",
-        value=decision,
-        status="decided",
-        event_type="decision_generated",
-        event_payload={
-            "outcome": decision.get("outcome"),
-            "confidence": decision.get("confidence"),
-            "requires_human_review": decision.get("requires_human_review"),
-            "execution": decision.get("execution", {}),
-        },
-    )
-    return decision
-
-
-@app.post("/cases/{case_id}/review")
-def review_case(
-    case_id: str,
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    case_data = case_to_dict(case)
-    if not case_data["decision"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Profira a decisão antes da auditoria",
-        )
-    if case_data["review"]:
-        return case_data["review"]
-
-    review_payload = {
-        "manifest": case_data["locked_manifest"],
-        "conciliation_rounds": case_data["conciliation_rounds"],
-        "organized_case": case_data["organized"],
-        "decision": case_data["decision"],
-    }
-    review = review_decision(review_payload)
-    save_stage(
-        db,
-        case,
-        field="review_json",
-        value=review,
-        status="reviewed",
-        event_type="review_generated",
-        event_payload={
-            "approved": review.get("approved"),
-            "requires_human_review": review.get("requires_human_review"),
-            "execution": review.get("execution", {}),
-        },
-    )
-    return review
+# Composição, organização, decisão e auditoria deixaram de ter um gatilho
+# humano. O rito conduz cada uma delas quando as pré-condições da etapa
+# anterior estão satisfeitas, e as partes participam pelo que é delas:
+# `POST /cases/{id}/composition/position` e `/composition/close`.
+# Ver `app.core.procedure`.
 
 
 @app.get("/.well-known/valinor-signing-key")
@@ -1334,82 +1195,10 @@ def signing_key():
     return public_key_info()
 
 
-@app.post("/cases/{case_id}/attestation")
-def issue_attestation(
-    case_id: str,
-    x_actor_token: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
-    settings_now = get_settings()
-    if not settings_now.attestation_enabled:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "PLATFORM_ED25519_PRIVATE_KEY não está configurada; "
-                "a emissão de attestations está desabilitada"
-            ),
-        )
-
-    case_data = case_to_dict(case)
-    if case_data["attestation"]:
-        return case_data["attestation"]
-    if case_data["contest"]["contested"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Caso contestado: nenhuma attestation pode ser emitida",
-        )
-
-    # A cadeia de auditoria íntegra é pré-condição criptográfica da emissão.
-    audit_events = case_data["audit_log"]
-    chain_valid, chain_errors = verify_audit_chain(audit_events)
-    if not chain_valid:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": (
-                    "A cadeia de auditoria está inválida; "
-                    "a attestation não pode ser emitida"
-                ),
-                "errors": chain_errors,
-            },
-        )
-    audit_chain_head = audit_events[-1]["event_hash"] if audit_events else ""
-
-    try:
-        attestation = build_decision_attestation(
-            case_data=case_data,
-            audit_chain_head=audit_chain_head,
-            audit_chain_length=len(audit_events),
-        )
-    except AttestationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-
-    save_stage(
-        db,
-        case,
-        field="attestation_json",
-        value=attestation,
-        status="attested",
-        event_type="attestation_issued",
-        event_payload={
-            "attestation_hash": attestation["attestation_hash"],
-            "audit_chain_head": audit_chain_head,
-            "outcome": attestation["decision"]["outcome"],
-            "split": attestation["decision"]["split"],
-            "contest_window_ends_utc": attestation["contest_window_ends_utc"],
-            "key_id": attestation["platform"]["key_id"],
-        },
-    )
-
-    # Âncora pública em Nostr (hash + assinatura, nunca o teor da decisão).
-    # Melhor esforço: falha de rede/relay não afeta a attestation já emitida.
-    anchor = publish_attestation_anchor(attestation)
-    if anchor:
-        save_nostr_anchor(db, case, anchor)
-
-    return attestation
+# A attestation também é emitida pelo rito, assim que a decisão passa pela
+# auditoria independente e a cadeia de auditoria fecha. Um caso inconclusivo,
+# reprovado na auditoria ou que exige revisão humana simplesmente não gera
+# attestation. Ver `app.core.procedure._issue_attestation`.
 
 
 @app.get("/cases/{case_id}/attestation")
@@ -1484,6 +1273,17 @@ def contest_case(
         )
     if case_data["contest"]["contested"]:
         return case_data["contest"]
+    # Quem ratificou já exerceu sua revisão sobre o mérito. Contestar depois
+    # seria voltar atrás do próprio aceite — e a ratificação é justamente o
+    # fundamento sobre o qual esta attestation foi emitida.
+    if case_data["ratification"][actor_role]["accepted"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Você ratificou esta decisão. A ratificação é o fundamento da "
+                "attestation e não pode ser contestada em seguida."
+            ),
+        )
 
     window_ends = datetime.fromisoformat(attestation["contest_window_ends_utc"])
     if datetime.now(window_ends.tzinfo) > window_ends:

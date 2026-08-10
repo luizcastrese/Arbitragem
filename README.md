@@ -23,14 +23,14 @@ cadeia de auditoria encadeada por hashes.
 - API FastAPI com validação e documentação OpenAPI;
 - painel React responsivo;
 - casos persistidos em SQLite;
-- autorização separada para cliente, empresa e gestor em cada caso;
+- autorização separada para cliente e empresa em cada caso, sem terceiro humano;
 - contas com senha derivada por PBKDF2 e sessões expiráveis em cookie HttpOnly;
 - convites de uso único vinculados ao e-mail e ao papel no caso;
-- agenda processual com responsável, vencimento e notificações internas;
+- agenda processual aberta e encerrada pelo próprio rito, com notificações internas;
 - aceite individual das duas partes antes da formação do procedimento;
 - upload de texto e PDF;
 - contraditório documentado: disponibilização, ciência, resposta ou renúncia e
-  admissão antes do uso pela IA;
+  admissão automática antes do uso pela IA;
 - hashing SHA-256 e chunking com sobreposição;
 - embeddings OpenAI opcionais;
 - recuperação vetorial com fallback lexical;
@@ -53,24 +53,126 @@ cadeia de auditoria encadeada por hashes.
 ## Fluxo
 
 ```text
-caso
-  -> aceite bilateral
-  -> documentos e argumentos identificados por autor e finalidade
-  -> ciência da contraparte
-  -> resposta, contestação ou renúncia
-  -> admissão do material
-  -> manifesto travado
-  -> rodadas de conciliação ou mediação
-  -> organização
-  -> decisão da IA
-  -> auditoria independente
+caso aberto por uma das partes
+  -> aceite bilateral                          (parte)
+  -> convite à contraparte                     (parte)
+  -> documentos identificados por autor e finalidade   (parte)
+  -> prazo de ciência e resposta aberto        (rito)
+  -> ciência da contraparte                    (parte)
+  -> resposta, contestação ou renúncia         (parte)
+     ou preclusão, se o prazo vencer em silêncio       (rito)
+  -> admissão do material                      (rito)
+  -> encerramento da produção pelas duas partes        (parte)
+     ou preclusão, se o prazo vencer em silêncio       (rito)
+  -> manifesto travado                         (rito)
+  -> rodadas de composição                     (rito, com a posição de cada parte)
+  -> organização                               (rito)
+  -> decisão da IA                             (rito)
+  -> auditoria independente                    (rito)
+  -> se a auditoria ressalvou:
+       ratificação pelas duas partes           (parte)
+       ou encerramento sem decisão executável  (rito)
+  -> attestation e janela de contestação       (rito)
+  -> contestação, se houver                    (parte)
   -> relatório
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
 uma parte, disponibilizado à contraparte, reconhecido como recebido e respondido
-ou expressamente dispensado. O gestor só pode admitir o material depois desse
-percurso, e o lock é bloqueado enquanto houver pendência.
+ou expressamente dispensado. Só então o material é admitido, e a trava é
+bloqueada enquanto houver pendência.
+
+## Não há terceiro humano
+
+O procedimento tem exatamente dois participantes humanos: o cliente reclamante e
+a empresa reclamada. O papel de gestor foi abolido. Todo ato que antes dependia
+de um terceiro — admitir material, travar o manifesto, abrir e fechar prazos,
+conduzir as rodadas de composição, organizar, julgar, auditar e emitir a
+attestation — é executado pelo próprio rito, em `app/core/procedure.py`.
+
+Nenhuma pré-condição foi relaxada nessa mudança. As mesmas verificações que antes
+rodavam antes de alguém apertar o botão continuam valendo; o que muda é quem
+executa. Cada ato do rito entra na cadeia de auditoria com `actor: "procedure"`,
+e cada ato das partes com o papel de quem agiu — de modo que a própria trilha
+prova que nenhuma pessoa conduziu o procedimento de dentro.
+
+Isso também elimina uma assimetria: quem abre o caso declara de que lado está e
+entra como parte. Ninguém administra o próprio litígio.
+
+O que continua sendo das partes, e só delas:
+
+- aceitar o procedimento;
+- convidar a contraparte (e apenas ela);
+- apresentar material e explicar sua finalidade;
+- dar ciência e responder, contestar ou renunciar ao material da outra;
+- declarar encerrada a própria produção (`POST /cases/{id}/submission-complete`);
+- registrar a própria posição em cada rodada de composição, ou encerrá-la;
+- ratificar ou recusar uma decisão que a auditoria ressalvou;
+- contestar a decisão dentro da janela.
+
+`POST /cases/{id}/advance` apenas pede ao rito que execute o que já pode ser
+executado. Ele não concede poder algum a quem chama: cada passo continua
+condicionado às suas próprias pré-condições, e chamá-lo com o caso pendente não
+faz nada.
+
+### Preclusão: silêncio não veta o procedimento
+
+Sem um terceiro humano, uma parte que simplesmente não age travaria o caso para
+sempre — não haveria ninguém para destravá-lo por fora. Por isso o rito abre
+prazo para cada ato da contraparte, comunica esse prazo por e-mail, e, vencido o
+prazo sem manifestação, registra a **preclusão**:
+
+- material sem ciência ou sem resposta passa a `response_status: "precluded"`,
+  com `acknowledged_by: "preclusion"`, e segue para admissão;
+- parte que não declara encerrada a própria produção tem o encerramento
+  registrado por decurso de prazo.
+
+A preclusão **não presume concordância** com o material da outra parte: ela
+apenas encerra uma oportunidade que foi aberta, comunicada e não exercida. O
+resultado da entrega do aviso entra na cadeia de auditoria (`notice_delivered`,
+`notice_transport`), justamente porque a legitimidade da preclusão depende de a
+oportunidade ter sido comunicada.
+
+### A revisão humana é das partes
+
+Quando a auditoria independente faz ressalva — não aprova a decisão, ou indica
+revisão humana —, a execução automática fica bloqueada. Antes o caso encalhava
+aí: não havia a quem recorrer, e inventar um revisor humano contrariaria a
+premissa do procedimento.
+
+A revisão passa a ser de quem é titular do conflito. O rito abre a fase de
+**ratificação**: informa as duas partes da ressalva concreta e pergunta se o
+resultado vale assim mesmo.
+
+- **as duas aceitam** → a execução é destravada e a attestation é emitida com
+  `basis: "party_ratification"`, registrando de forma assinada que ela se apoia
+  na vontade das partes, e não na aprovação automática. A ressalva continua
+  visível no artefato: a ratificação não a apaga;
+- **qualquer uma recusa** (com motivo, que entra no registro) → o caso encerra
+  como `unresolved`, sem decisão executável;
+- **o prazo vence em silêncio** → encerra como `unresolved`. Ratificar é
+  endossar um resultado que o próprio sistema ressalvou; ninguém é levado a
+  esse endosso por inércia. É o segundo ponto do fluxo, ao lado do
+  consentimento, em que a preclusão não opera a favor do andamento.
+
+Quem ratificou não pode contestar em seguida: a ratificação é o fundamento da
+attestation, e voltar atrás dela seria contradizer o próprio aceite.
+
+**A ratificação supera ressalvas de mérito, nunca a ausência de resultado.**
+Uma decisão inconclusiva ou produzida em modo seguro não tem split a executar, e
+nem o acordo das partes cria um: esses casos encerram direto como `unresolved`,
+com o relatório e a cadeia de auditoria íntegros. Encerrar sem decisão é um
+desfecho legítimo do procedimento, não uma falha — as partes ficam livres para
+buscar outro caminho levando consigo o registro do que foi produzido aqui.
+
+**O consentimento nunca preclui.** Adesão é voluntária: nenhum prazo transforma
+silêncio em aceite. Um caso sem o aceite das duas partes simplesmente não avança,
+e é o único ponto do fluxo em que isso é o comportamento correto.
+
+As duas partes são sempre pessoas distintas: convidar o próprio e-mail é
+recusado, e uma conta que já é parte não pode ocupar o outro polo. Sem terceiro
+humano observando, é o código que impede alguém de litigar consigo mesmo e
+colher uma decisão assinada de uma disputa que nunca existiu.
 
 O aceite registra a versão dos termos exibidos às partes: participação
 voluntária, acesso a todo material, oportunidade de resposta, composição
@@ -87,10 +189,12 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
   às propostas; deve compreender e aceitar o procedimento;
 - **empresa reclamada:** apresenta defesa e documentos, formula contrapropostas
   e acompanha exposição, acordos e decisões de forma consistente;
-- **gestor do procedimento:** administra convites, acesso, prazos e integridade
-  do rito, sem decidir o mérito;
 - **representantes e advogados:** podem apoiar qualquer parte na preparação e
   manifestação dentro do caso.
+
+Não há um terceiro humano no caso. A condução do rito é do próprio sistema, e a
+integridade do procedimento é verificável pela cadeia de auditoria em vez de
+depender da imparcialidade de um administrador.
 
 O nicho inicial é a resolução privada de reclamações entre empresas e clientes,
 especialmente situações que já geraram ou poderiam gerar processos. A empresa
@@ -161,6 +265,11 @@ Variáveis do arquivo `.env`:
 | `POSTGRES_USER` | Usuário PostgreSQL do Compose |
 | `POSTGRES_PASSWORD` | Senha PostgreSQL do Compose |
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
+| `CONTRADICTORY_RESPONSE_DAYS` | Dias do prazo de ciência e resposta aberto pelo rito; padrão 7 |
+| `SUBMISSION_CLOSURE_DAYS` | Dias para cada parte encerrar a própria produção; padrão 7 |
+| `RATIFICATION_DAYS` | Dias para as partes ratificarem uma decisão ressalvada; padrão 7 |
+| `COMPOSITION_MAX_ROUNDS` | Teto de rodadas de composição por caso; padrão 5 |
+| `CONTEST_WINDOW_DAYS` | Dias da janela de contestação após a attestation; padrão 7 |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
 | `AUTH_REQUIRED` | Exige conta e participação; padrão `true` e obrigatório em produção |
@@ -199,9 +308,11 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /auth/register` | Criar conta e sessão |
 | `POST /auth/login` | Entrar e criar sessão expiráveis |
 | `POST /auth/logout` | Encerrar a sessão atual |
-| `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
+| `POST /cases/{id}/invitations` | Convidar a contraparte por e-mail |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
-| `POST /cases/{id}/deadlines` | Criar prazo e notificações |
+| `GET /cases/{id}/deadlines` | Consultar a agenda mantida pelo rito |
+| `GET /cases/{id}/procedure` | Estado do rito: etapa atual e o que falta, de quem |
+| `POST /cases/{id}/advance` | Pedir ao rito que execute o que já é possível |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte |
@@ -209,17 +320,16 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/documents/pdf` | Adicionar PDF |
 | `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |
 | `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
-| `POST /cases/{id}/documents/{document_id}/admit` | Admitir material após contraditório |
+| `POST /cases/{id}/submission-complete` | Encerrar ou reabrir a própria produção de material |
 | `GET /cases/{id}/documents/{document_id}/original` | Baixar o arquivo original armazenado |
 | `POST /cases/{id}/documents/{document_id}/original-url` | Emitir link temporário e assinado do original |
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
-| `POST /cases/{id}/lock` | Travar manifesto |
-| `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `POST /cases/{id}/composition/position` | Registrar a própria posição na rodada |
+| `POST /cases/{id}/composition/close` | Encerrar a composição |
+| `POST /cases/{id}/ratification` | Ratificar ou recusar decisão ressalvada |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
 | `GET /cases/{id}/retrieve` | Consultar evidências |
-| `POST /cases/{id}/organize` | Organizar registro |
-| `POST /cases/{id}/decide` | Proferir decisão da IA |
-| `POST /cases/{id}/review` | Auditar decisão |
+| `POST /cases/{id}/contest` | Contestar a decisão dentro da janela |
 | `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
 | `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
@@ -235,9 +345,12 @@ npm run build
 npm audit --audit-level=moderate
 ```
 
-Os testes cobrem o fluxo integral, contas, convites, isolamento entre os papéis, contraditório,
-persistência, imutabilidade após o lock, idempotência, PDF, transições inválidas,
-agenda, relatório Word, assinatura e auditoria.
+Os testes cobrem o fluxo integral conduzido pelo rito, contas, convites restritos
+à contraparte, isolamento entre os papéis, contraditório, admissão automática,
+trava automática e suas pré-condições, composição com a posição de cada parte,
+persistência, imutabilidade após o lock, idempotência do `advance`, PDF, agenda
+automática, relatório Word, assinatura e auditoria. Um teste específico verifica
+que nenhum ato do procedimento é atribuído a um terceiro humano.
 
 ## Limites antes de produção pública
 
@@ -258,7 +371,16 @@ agenda, relatório Word, assinatura e auditoria.
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
-- decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
+- decisões inconclusivas encerram o caso sem resultado executável: a
+  plataforma não oferece caminho de mérito além do que produziu;
+- o rito roda de forma síncrona dentro da requisição da parte: um caso que
+  destrava várias etapas de uma vez encadeia várias chamadas ao modelo na mesma
+  requisição. Antes de exposição pública isso deve virar um worker em segundo
+  plano;
+- a janela de contestação ainda é apenas uma cláusula assinada na attestation:
+  não há liquidação automática no vencimento nem revogação assinada quando o
+  caso é contestado, de modo que um executor externo que verificou o artefato
+  offline não sabe da contestação.
 
 Antes de exposição pública, a próxima etapa é verificar e-mails, configurar o
 provedor SMTP com um domínio autenticado, adicionar rotação de chaves e cofre de

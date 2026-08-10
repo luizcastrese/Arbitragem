@@ -1,3 +1,4 @@
+from datetime import timedelta
 import io
 import os
 import zipfile
@@ -55,13 +56,14 @@ def client():
     Base.metadata.drop_all(bind=engine)
 
 
-def create_case(client):
+def create_case(client, creator_role="claimant"):
     response = client.post(
         "/cases",
         json={
             "title": "Entrega parcial de software",
             "claimant": "Empresa Alfa",
             "respondent": "Fornecedor Beta",
+            "creator_role": creator_role,
         },
     )
     assert response.status_code == 201
@@ -137,12 +139,20 @@ def complete_contradictory(client, case_id, document_id):
         headers=actor_headers(case_id, "respondent"),
     )
     assert response.status_code == 200
-    admission = client.post(
-        f"/cases/{case_id}/documents/{document_id}/admit",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert admission.status_code == 200
-    return admission.json()
+    return response.json()
+
+
+def close_submissions(client, case_id, parties=("claimant", "respondent")):
+    result = None
+    for party in parties:
+        response = client.post(
+            f"/cases/{case_id}/submission-complete",
+            json={"closed": True},
+            headers=actor_headers(case_id, party),
+        )
+        assert response.status_code == 200
+        result = response.json()
+    return result
 
 
 def prepare_locked_case(client):
@@ -150,12 +160,9 @@ def prepare_locked_case(client):
     accept_procedure(client, case_id)
     document = add_contract(client, case_id)["document"]
     complete_contradictory(client, case_id, document["id"])
-    locked = client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert locked.status_code == 200
-    return case_id, document, locked
+    final = close_submissions(client, case_id)
+    assert final["manifest_locked"] is True
+    return case_id, document, final
 
 
 def test_complete_safe_flow_is_persistent_and_auditable(client):
@@ -168,14 +175,24 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert document["chunks_count"] >= 1
     assert document["submitted_by"] == "claimant"
     assert document["disclosed_at"]
+
+    # O material ainda não foi admitido: falta o contraditório.
+    assert client.get(f"/cases/{case_id}").json()["documents"][0]["admitted"] is False
+
     complete_contradictory(client, case_id, document["id"])
 
-    locked = client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert locked.status_code == 200
-    assert locked.json()["manifest"]["platform_signature"]
+    # Cumprido o contraditório, o próprio rito admitiu o material. Nenhum
+    # terceiro humano interveio.
+    admitted = client.get(f"/cases/{case_id}").json()["documents"][0]
+    assert admitted["admitted"] is True
+    assert admitted["contradictory_complete"] is True
+
+    # Sem o encerramento das duas partes, o rito não trava nada.
+    assert client.get(f"/cases/{case_id}").json()["manifest_locked"] is False
+
+    final = close_submissions(client, case_id)
+    assert final["manifest_locked"] is True
+    assert final["locked_manifest"]["platform_signature"]
 
     verification = client.get(f"/cases/{case_id}/manifest/verify").json()
     assert verification == {
@@ -184,58 +201,20 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "signature_valid": True,
     }
 
-    conciliation = client.post(
-        f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert conciliation.status_code == 200
-    assert conciliation.json()["convergence"] == "undetermined"
-    assert conciliation.json()["recommended_path"] == "human_screening"
-    assert conciliation.json()["requires_party_consent"] is True
-    assert conciliation.json()["round_number"] == 1
-    assert conciliation.json()["continue_recommended"] is False
-
-    second_round = client.post(
-        f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
-        json={
-            "advance": True,
-            "claimant_response": "Aceita discutir novo prazo.",
-            "respondent_response": "Aceita avaliar entrega complementar.",
-            "new_information": "As partes mantêm a relação comercial.",
-        },
-    )
-    assert second_round.status_code == 200
-    assert second_round.json()["round_number"] == 2
-
-    organized = client.post(
-        f"/cases/{case_id}/organize",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert organized.status_code == 200
-    assert organized.json()["execution"]["mode"] == "safe_fallback"
-
-    decision = client.post(
-        f"/cases/{case_id}/decide",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert decision.status_code == 200
-    assert decision.json()["outcome"] == "inconclusive"
-    assert decision.json()["requires_human_review"] is True
-    assert decision.json()["confidence"] == 0.0
-    assert "decisão de mérito" in decision.json()["decision"]
-
-    review = client.post(
-        f"/cases/{case_id}/review",
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert review.status_code == 200
-    assert review.json()["approved"] is False
-    assert review.json()["requires_human_review"] is True
-
+    # Em modo seguro a triagem não recomenda novas rodadas, e o rito segue
+    # sozinho até a auditoria.
     persisted = client.get(f"/cases/{case_id}").json()
-    assert persisted["status"] == "reviewed"
+    # Em modo seguro não há decisão de mérito: o rito encerra o caso
+    # explicitamente, em vez de deixá-lo encalhado após a auditoria.
+    assert persisted["status"] == "unresolved"
+    assert persisted["ratification"]["outcome"] is None
+    assert persisted["conciliation"]["convergence"] == "undetermined"
+    assert persisted["conciliation"]["recommended_path"] == "human_screening"
+    assert persisted["conciliation"]["continue_recommended"] is False
+    assert persisted["organized"]["execution"]["mode"] == "safe_fallback"
     assert persisted["decision"]["outcome"] == "inconclusive"
+    assert persisted["decision"]["requires_human_review"] is True
+    assert persisted["review"]["approved"] is False
     assert persisted["documents"][0]["sha256"] == document["sha256"]
 
     audit = client.get(f"/cases/{case_id}/audit").json()
@@ -247,33 +226,74 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "consent_accepted",
         "document_added",
         "evidence_disclosed",
+        "deadline_created",
         "notice_acknowledged",
         "response_submitted",
         "evidence_admitted",
+        "deadline_completed",
+        # Cumprido o contraditório, o rito abre o prazo de encerramento de
+        # produção para cada parte — é o que torna a preclusão possível.
+        "deadline_created",
+        "deadline_created",
+        "submission_closed",
+        "deadline_completed",
+        "submission_closed",
+        "deadline_completed",
         "manifest_locked",
         "conciliation_screened",
-        "conciliation_round_generated",
         "case_organized",
         "decision_generated",
         "review_generated",
+        "case_closed_unresolved",
     ]
 
     report = client.get(f"/cases/{case_id}/report").json()
-    assert report["status"] == "reviewed"
+    assert report["status"] == "unresolved"
     assert report["manifest"]["manifest_hash"]
     assert report["consent"]["complete"] is True
     assert report["contradictory"]["complete"] is True
     assert report["documents"][0]["admitted"] is True
-    assert report["conciliation"]["requires_party_consent"] is True
-    assert len(report["conciliation_rounds"]) == 2
     assert report["review"]["approved"] is False
     assert "decisão computacional" in report["disclaimer"]
 
 
-def test_accounts_invitations_deadlines_and_word_report(client):
-    manager = register_user(client, "Gestora Ana", "gestora@example.com")
-    manager_session = manager["session_token"]
-    session_headers = {"X-Session-Token": manager_session}
+def test_no_act_of_the_procedure_is_attributed_to_a_human_third_party(client):
+    """Toda etapa conduzida pelo rito é registrada como `actor: procedure`, e
+    toda etapa das partes é registrada com o papel da parte. Não existe um
+    terceiro humano na cadeia de auditoria."""
+    case_id, _, _ = prepare_locked_case(client)
+
+    events = client.get(f"/cases/{case_id}/audit").json()["events"]
+    actors_by_event = {
+        event["event_type"]: event["payload"].get("actor") for event in events
+    }
+
+    assert actors_by_event["consent_accepted"] in {"claimant", "respondent"}
+    assert actors_by_event["document_added"] == "claimant"
+    assert actors_by_event["notice_acknowledged"] == "respondent"
+    assert actors_by_event["response_submitted"] == "respondent"
+
+    for event_type in (
+        "evidence_disclosed",
+        "evidence_admitted",
+        "deadline_created",
+        "manifest_locked",
+        "conciliation_screened",
+        "case_organized",
+        "decision_generated",
+        "review_generated",
+    ):
+        assert actors_by_event[event_type] == "procedure", event_type
+
+    assert all(
+        event["payload"].get("actor") in {"claimant", "respondent", "procedure"}
+        for event in events
+    )
+
+
+def test_creator_joins_as_a_party_and_can_only_invite_the_counterparty(client):
+    claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
+    session_headers = {"X-Session-Token": claimant["session_token"]}
 
     created = client.post(
         "/cases",
@@ -282,81 +302,237 @@ def test_accounts_invitations_deadlines_and_word_report(client):
             "title": "Cobrança contestada",
             "claimant": "Cliente Carlos",
             "respondent": "Empresa Delta",
+            "creator_role": "claimant",
         },
     )
     assert created.status_code == 201
     case = created.json()
     case_id = case["id"]
     CASE_CREDENTIALS[case_id] = case["access_credentials"]
-    assert case["participants"][0]["role"] == "manager"
+
+    # Quem abre o caso entra como parte, nunca como administrador dele.
+    assert [item["role"] for item in case["participants"]] == ["claimant"]
+
+    # Convidar para o próprio papel, ou para um terceiro, é recusado.
+    same_role = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": claimant["session_token"]},
+        json={"email": "outro@example.com", "role": "claimant"},
+    )
+    assert same_role.status_code == 403
+
+    third_party = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": claimant["session_token"]},
+        json={"email": "gestor@example.com", "role": "manager"},
+    )
+    assert third_party.status_code == 422
 
     invite = client.post(
         f"/cases/{case_id}/invitations",
-        headers={"X-Actor-Token": manager_session},
-        json={"email": "cliente@example.com", "role": "claimant"},
+        headers={"X-Actor-Token": claimant["session_token"]},
+        json={"email": "empresa@example.com", "role": "respondent"},
     )
     assert invite.status_code == 201
     invitation_token = invite.json()["acceptance_token"]
-    assert invite.json()["status"] == "pending"
 
-    customer = register_user(client, "Cliente Carlos", "cliente@example.com")
+    # Um segundo convite para o mesmo papel é barrado enquanto o primeiro
+    # estiver pendente.
+    duplicate = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": claimant["session_token"]},
+        json={"email": "empresa2@example.com", "role": "respondent"},
+    )
+    assert duplicate.status_code == 409
+
+    company = register_user(client, "Empresa Delta", "empresa@example.com")
     accepted = client.post(
         "/invitations/accept",
-        headers={"X-Session-Token": customer["session_token"]},
+        headers={"X-Session-Token": company["session_token"]},
         json={"token": invitation_token},
     )
     assert accepted.status_code == 200
-    assert accepted.json()["role"] == "claimant"
+    assert accepted.json()["role"] == "respondent"
 
-    customer_case_list = client.get(
+    company_cases = client.get(
         "/cases",
-        headers={"X-Session-Token": customer["session_token"]},
+        headers={"X-Session-Token": company["session_token"]},
     ).json()
-    assert [item["id"] for item in customer_case_list] == [case_id]
+    assert [item["id"] for item in company_cases] == [case_id]
 
-    document = client.post(
-        f"/cases/{case_id}/documents/text",
-        headers={"X-Actor-Token": customer["session_token"]},
-        json={
-            "name": "relato.txt",
-            "content": "O cliente contesta a cobrança porque o serviço foi cancelado.",
-            "submitted_by": "claimant",
-            "material_type": "argument",
-            "purpose": "Explicar a contestação da cobrança.",
-        },
-    )
-    assert document.status_code == 201
 
-    deadline = client.post(
-        f"/cases/{case_id}/deadlines",
-        headers={"X-Actor-Token": manager_session},
+def test_one_person_cannot_hold_both_sides_of_a_case(client):
+    """A invariante mais frágil sem terceiro humano: sem ninguém observando,
+    é o código que precisa impedir alguém de litigar consigo mesmo e colher
+    uma decisão assinada de uma disputa que nunca existiu."""
+    person = register_user(client, "Fulano", "fulano@example.com")
+    headers = {"X-Session-Token": person["session_token"]}
+
+    case = client.post(
+        "/cases",
+        headers=headers,
         json={
-            "label": "Resposta da empresa",
-            "kind": "response",
-            "assigned_to": "respondent",
-            "due_at": "2030-01-15T18:00:00Z",
+            "title": "Caso simulado",
+            "claimant": "Fulano",
+            "respondent": "Fulano de novo",
+            "creator_role": "claimant",
         },
+    ).json()
+    case_id = case["id"]
+    CASE_CREDENTIALS[case_id] = case["access_credentials"]
+
+    # Convidar o próprio e-mail é recusado na origem.
+    self_invite = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": person["session_token"]},
+        json={"email": "fulano@example.com", "role": "respondent"},
     )
-    assert deadline.status_code == 201
-    assert deadline.json()["status"] == "open"
+    assert self_invite.status_code == 403
+
+    # E se o convite chegar por outro caminho, aceitá-lo com uma conta que já
+    # é parte também é recusado.
+    other = register_user(client, "Sicrano", "sicrano@example.com")
+    invite = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": person["session_token"]},
+        json={"email": "sicrano@example.com", "role": "respondent"},
+    )
+    assert invite.status_code == 201
+    token = invite.json()["acceptance_token"]
+
+    reused_by_first_party = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": person["session_token"]},
+        json={"token": token},
+    )
+    # O convite pertence a outro e-mail; e mesmo que pertencesse, a conta já
+    # é parte no caso.
+    assert reused_by_first_party.status_code == 409
+
+    accepted = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": other["session_token"]},
+        json={"token": token},
+    )
+    assert accepted.status_code == 200
+
+    roles = [
+        item["role"]
+        for item in client.get(f"/cases/{case_id}", headers=headers).json()["participants"]
+    ]
+    assert sorted(roles) == ["claimant", "respondent"]
+    assert len(set(roles)) == 2
+
+
+def test_silence_precludes_instead_of_vetoing_the_procedure(client, monkeypatch):
+    """Vencido o prazo, o silêncio da contraparte encerra a oportunidade em vez
+    de travar o caso para sempre. Sem terceiro humano, esta é a única saída
+    para uma parte que simplesmente não age."""
+    from app.db import access_repository
+
+    case_id = create_case(client)["id"]
+    accept_procedure(client, case_id)
+    add_contract(client, case_id)
+
+    # Enquanto o prazo está aberto, o rito espera: não precluí nada.
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.json()["performed"] == []
+    assert advanced.json()["waiting_on"] == ["respondent"]
+
+    pending = advanced.json()["pending"][0]
+    assert pending["action"] == "acknowledge"
+    assert pending["due_at"]
+
+    # O tempo passa e a contraparte não se manifesta. Adiantar o relógio que o
+    # rito usa para aferir vencimento é o bastante: os prazos já gravados
+    # passam a estar vencidos.
+    real_now = access_repository.utc_now
+    monkeypatch.setattr(
+        access_repository, "utc_now", lambda: real_now() + timedelta(days=30)
+    )
+
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+    steps = [item["step"] for item in advanced.json()["performed"]]
+    assert "responses_precluded" in steps
+
+    case = client.get(f"/cases/{case_id}").json()
+    precluded = case["documents"][0]
+    assert precluded["response_status"] == "precluded"
+    assert precluded["acknowledged_by"] == "preclusion"
+    # A preclusão encerra a oportunidade, e o material segue para admissão.
+    assert precluded["admitted"] is True
+    assert case["contradictory"]["complete"] is True
+
+    # O mesmo vale para o encerramento da produção: uma parte inerte não
+    # impede a trava.
+    assert "submission_closures_precluded" in steps
+    assert case["manifest_locked"] is True
+    assert case["submission"]["respondent"]["closed"] is True
+
+    events = {
+        event["event_type"]: event["payload"]
+        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
+    }
+    assert events["response_precluded"]["actor"] == "procedure"
+    assert events["response_precluded"]["party"] == "respondent"
+    assert events["response_precluded"]["due_at"]
+    assert events["submission_closed_by_preclusion"]["actor"] == "procedure"
+
+
+def test_consent_is_never_precluded(client, monkeypatch):
+    """A adesão é voluntária: nenhum prazo transforma silêncio em aceite. Sem
+    o consentimento das duas partes o procedimento simplesmente não existe."""
+    from app.db import access_repository
+
+    case_id = create_case(client)["id"]
+    add_contract(client, case_id)
+
+    real_now = access_repository.utc_now
+    monkeypatch.setattr(
+        access_repository, "utc_now", lambda: real_now() + timedelta(days=365)
+    )
+
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["consent"]["complete"] is False
+    assert case["manifest_locked"] is False
+    assert {item["action"] for item in advanced.json()["pending"]} >= {"consent"}
+
+
+def test_procedure_opens_and_closes_its_own_deadlines(client):
+    case_id = create_case(client)["id"]
+    accept_procedure(client, case_id)
+    document = add_contract(client, case_id)["document"]
+
+    deadlines = client.get(f"/cases/{case_id}/deadlines").json()
+    assert len(deadlines) == 1
+    assert deadlines[0]["assigned_to"] == "respondent"
+    assert deadlines[0]["reference_id"] == document["id"]
+    assert deadlines[0]["status"] == "open"
+
+    complete_contradictory(client, case_id, document["id"])
+
+    deadlines = client.get(f"/cases/{case_id}/deadlines").json()
+    by_reference = {item["reference_id"]: item for item in deadlines}
+    assert by_reference[document["id"]]["status"] == "completed"
+    # E abre o prazo de encerramento de produção para cada parte.
+    assert by_reference["claimant"]["status"] == "open"
+    assert by_reference["respondent"]["status"] == "open"
 
     report = client.get(f"/cases/{case_id}/report.docx")
     assert report.status_code == 200
-    assert report.headers["content-type"].startswith(
-        "application/vnd.openxmlformats-officedocument"
-    )
     with zipfile.ZipFile(io.BytesIO(report.content)) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert "Cobrança contestada" in document_xml
-    assert "Resposta da empresa" in document_xml
-
-    audit_types = [
-        event["event_type"]
-        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
-    ]
-    assert "participant_invited" in audit_types
-    assert "invitation_accepted" in audit_types
-    assert "deadline_created" in audit_types
+    assert "Ciência e resposta" in document_xml
 
 
 def test_documents_are_immutable_after_manifest_lock(client):
@@ -389,55 +565,369 @@ def test_documents_are_immutable_after_manifest_lock(client):
         },
         headers=actor_headers(case_id, "respondent"),
     )
-    admission = client.post(
-        f"/cases/{case_id}/documents/{document['id']}/admit",
-        headers=actor_headers(case_id, "manager"),
-    )
     assert acknowledgement.status_code == 409
     assert replacement_response.status_code == 409
-    assert admission.status_code == 409
 
 
-def test_stages_are_idempotent(client):
+def test_advance_is_idempotent(client):
+    case_id, _, _ = prepare_locked_case(client)
+
+    first = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    second = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "respondent")
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # O caso já chegou ao fim do que o rito podia fazer sozinho.
+    assert first.json()["performed"] == []
+    assert second.json()["performed"] == []
+
+    event_types = [
+        event["event_type"]
+        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
+    ]
+    assert event_types.count("manifest_locked") == 1
+    assert event_types.count("conciliation_screened") == 1
+    assert event_types.count("case_organized") == 1
+    assert event_types.count("decision_generated") == 1
+    assert event_types.count("review_generated") == 1
+
+
+def test_procedure_state_reports_what_is_pending_and_from_whom(client):
     case_id = create_case(client)["id"]
+
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert state["stage"] == "draft"
+    assert state["manifest_locked"] is False
+    assert {item["action"] for item in state["pending"]} == {"consent", "add_document"}
+
     accept_procedure(client, case_id)
     document = add_contract(client, case_id)["document"]
+
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    pending = {(item["party"], item["action"]) for item in state["pending"]}
+    assert ("respondent", "acknowledge") in pending
+    assert state["waiting_on"] == ["respondent"]
+
+    client.post(
+        f"/cases/{case_id}/documents/{document['id']}/acknowledge",
+        json={"party": "respondent"},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    pending = {(item["party"], item["action"]) for item in state["pending"]}
+    assert ("respondent", "respond") in pending
+
     complete_contradictory(client, case_id, document["id"])
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert {item["action"] for item in state["pending"]} == {"close_submission"}
+    assert state["waiting_on"] == ["claimant", "respondent"]
 
-    first_lock = client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+    close_submissions(client, case_id, parties=("claimant",))
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert state["waiting_on"] == ["respondent"]
+
+    close_submissions(client, case_id, parties=("respondent",))
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert state["manifest_locked"] is True
+    assert state["pending"] == []
+
+
+def test_composition_waits_for_both_parties_and_either_can_end_it(client, monkeypatch):
+    """Com a IA disponível, o rito espera a posição das duas partes antes de
+    abrir a rodada seguinte — e qualquer uma das partes pode encerrar a
+    composição sozinha, porque ela é voluntária."""
+    from app.core import procedure
+
+    def fake_conciliation(context, round_number):
+        return {
+            "round_number": round_number,
+            "convergence": "undetermined",
+            "recommended_path": "conciliation",
+            "neutral_summary": f"Rodada {round_number}",
+            "common_interests": [],
+            "negotiable_issues": [],
+            "non_negotiable_issues": [],
+            "possible_terms": [],
+            "reasoning": [],
+            "confidence": 0.5,
+            "continue_recommended": True,
+            "recommended_additional_rounds": 1,
+            "next_round_focus": "prazo",
+            "stop_reason": None,
+            "requires_party_consent": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+            "party_positions": context["current_party_responses"],
+        }
+
+    monkeypatch.setattr(procedure, "assess_conciliation", fake_conciliation)
+
+    case_id, _, locked = prepare_locked_case(client)
+    assert locked["status"] == "conciliation"
+    assert len(locked["conciliation_rounds"]) == 1
+
+    # A rodada seguinte não sai com apenas uma parte manifestada.
+    client.post(
+        f"/cases/{case_id}/composition/position",
+        json={"position": "Aceito discutir novo prazo."},
+        headers=actor_headers(case_id, "claimant"),
     )
-    second_lock = client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+    case = client.get(f"/cases/{case_id}").json()
+    assert len(case["conciliation_rounds"]) == 1
+    assert case["composition"]["claimant"]["submitted"] is True
+    assert case["composition"]["respondent"]["submitted"] is False
+
+    second = client.post(
+        f"/cases/{case_id}/composition/position",
+        json={"position": "Aceito avaliar entrega complementar."},
+        headers=actor_headers(case_id, "respondent"),
     )
-    assert first_lock.json()["manifest"] == second_lock.json()["manifest"]
+    assert second.status_code == 200
+    rounds = second.json()["conciliation_rounds"]
+    assert len(rounds) == 2
+    # Cada posição entrou na rodada atribuída à parte que a escreveu.
+    assert rounds[1]["party_positions"]["claimant"] == "Aceito discutir novo prazo."
+    assert (
+        rounds[1]["party_positions"]["respondent"]
+        == "Aceito avaliar entrega complementar."
+    )
+    # As posições foram consumidas: a rodada seguinte começa do zero.
+    assert second.json()["composition"]["complete"] is False
 
-    first_conciliation = client.post(
-        f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
-    ).json()
-    second_conciliation = client.post(
-        f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
-    ).json()
-    assert first_conciliation == second_conciliation
+    # Uma única parte encerra a composição e o rito segue para o julgamento.
+    closed = client.post(
+        f"/cases/{case_id}/composition/close",
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "unresolved"
+    assert closed.json()["composition"]["closed_by"] == ["respondent"]
 
-    first_organization = client.post(
-        f"/cases/{case_id}/organize",
-        headers=actor_headers(case_id, "manager"),
-    ).json()
-    second_organization = client.post(
-        f"/cases/{case_id}/organize",
-        headers=actor_headers(case_id, "manager"),
-    ).json()
-    assert first_organization == second_organization
 
-    audit = client.get(f"/cases/{case_id}/audit").json()["events"]
-    assert [event["event_type"] for event in audit].count("manifest_locked") == 1
-    assert [event["event_type"] for event in audit].count("conciliation_screened") == 1
-    assert [event["event_type"] for event in audit].count("case_organized") == 1
+def _with_reserved_decision(monkeypatch, *, outcome="partial", approved=False):
+    """Simula um caso com decisão executável mas ressalvada pela auditoria —
+    exatamente a situação que antes encalhava sem ninguém a quem recorrer."""
+    from app.core import procedure
+
+    monkeypatch.setattr(
+        procedure,
+        "assess_conciliation",
+        lambda context, round_number: {
+            "round_number": round_number,
+            "convergence": "not_detected",
+            "recommended_path": "adjudication",
+            "neutral_summary": "Sem convergência.",
+            "common_interests": [],
+            "negotiable_issues": [],
+            "non_negotiable_issues": [],
+            "possible_terms": [],
+            "reasoning": [],
+            "confidence": 0.6,
+            "continue_recommended": False,
+            "recommended_additional_rounds": 0,
+            "next_round_focus": "",
+            "stop_reason": "Posições esgotadas.",
+            "requires_party_consent": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "organizer_organize_case",
+        lambda documents, chunks: {
+            "factual_overview": "Entrega parcial.",
+            "disputed_facts": [],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "judge_decide_case",
+        lambda context: {
+            "outcome": outcome,
+            "partial_claimant_bps": 6000,
+            "decision": "Divisão proporcional à entrega comprovada.",
+            "confidence": 0.55,
+            "requires_human_review": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "review_decision",
+        lambda payload: {
+            "approved": approved,
+            "requires_human_review": True,
+            "risks": ["Confiança baixa na proporção adotada."],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+
+
+def test_parties_review_a_reserved_decision_and_ratify_it(client, monkeypatch):
+    """A revisão humana é das partes. Informadas da ressalva da auditoria,
+    elas decidem se o resultado vale assim mesmo — e só o aceite das duas
+    destrava a execução."""
+    _with_reserved_decision(monkeypatch)
+    case_id, _, _ = prepare_locked_case(client)
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["status"] == "ratification"
+    assert case["ratification"]["open"] is True
+    assert case["ratification"]["outcome"] is None
+
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert {item["action"] for item in state["pending"]} == {"ratify"}
+    assert state["waiting_on"] == ["claimant", "respondent"]
+    assert all(item["due_at"] for item in state["pending"])
+
+    # Uma parte só se manifesta por si.
+    first = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "ratification"
+
+    repeated = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert repeated.status_code == 409
+
+    second = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert second.status_code == 200
+    ratification = second.json()["ratification"]
+    assert ratification["outcome"] == "ratified"
+    assert second.json()["status"] == "ratified"
+
+    events = [
+        event["event_type"]
+        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
+    ]
+    assert "ratification_opened" in events
+    assert events.count("ratification_accepted") == 2
+    assert "ratification_resolved" in events
+
+
+def test_a_single_refusal_closes_the_case_without_an_executable_decision(
+    client, monkeypatch
+):
+    _with_reserved_decision(monkeypatch)
+    case_id, _, _ = prepare_locked_case(client)
+
+    # Recusar exige motivo: ele passa a integrar o registro.
+    without_reason = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": False, "reason": "não"},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert without_reason.status_code == 422
+
+    refused = client.post(
+        f"/cases/{case_id}/ratification",
+        json={
+            "accepted": False,
+            "reason": "A proporção adotada não corresponde ao que foi entregue.",
+        },
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert refused.status_code == 200
+    assert refused.json()["status"] == "unresolved"
+    assert refused.json()["ratification"]["outcome"] == "not_ratified"
+    assert refused.json()["ratification"]["rejected_by"] == ["respondent"]
+    assert refused.json()["attestation"] is None
+
+    # A outra parte não precisa mais se manifestar: o caso está encerrado.
+    late = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert late.status_code == 409
+
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert state["pending"] == []
+    assert state["ratification"]["outcome"] == "not_ratified"
+
+
+def test_silence_never_ratifies_a_reserved_decision(client, monkeypatch):
+    """Preclusão empurra o procedimento adiante, mas nunca cria um endosso:
+    ratificar é aceitar um resultado que o próprio sistema ressalvou."""
+    _with_reserved_decision(monkeypatch)
+    from app.db import access_repository
+
+    case_id, _, _ = prepare_locked_case(client)
+    assert client.get(f"/cases/{case_id}").json()["status"] == "ratification"
+
+    real_now = access_repository.utc_now
+    monkeypatch.setattr(
+        access_repository, "utc_now", lambda: real_now() + timedelta(days=60)
+    )
+
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+    assert advanced.json()["ratification"]["outcome"] == "not_ratified"
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["status"] == "unresolved"
+    assert case["attestation"] is None
+    assert "Silêncio não vale como aceite" in case["ratification"]["closed_reason"]
+
+
+def test_an_approved_decision_never_goes_through_ratification(client, monkeypatch):
+    """Sem ressalva, a decisão não vira acordo: a execução é automática e o
+    controle das partes continua sendo a janela de contestação."""
+    _with_reserved_decision(monkeypatch, approved=True)
+    from app.core import procedure
+
+    monkeypatch.setattr(
+        procedure,
+        "judge_decide_case",
+        lambda context: {
+            "outcome": "claimant",
+            "decision": "Procedente.",
+            "confidence": 0.9,
+            "requires_human_review": False,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "review_decision",
+        lambda payload: {
+            "approved": True,
+            "requires_human_review": False,
+            "risks": [],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+
+    case_id, _, _ = prepare_locked_case(client)
+    case = client.get(f"/cases/{case_id}").json()
+
+    assert case["ratification"]["open"] is False
+    assert case["ratification"]["outcome"] is None
+    # Sem chave Ed25519 configurada nestes testes, não há attestation; o que
+    # importa é que a fase de ratificação não foi aberta.
+    assert case["status"] == "reviewed"
+
+    blocked = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert blocked.status_code == 409
 
 
 def test_pdf_upload_extracts_text(client):
@@ -462,43 +952,105 @@ def test_pdf_upload_extracts_text(client):
     assert "Contrato de prestação" in response.json()["text_preview"]
 
 
-def test_invalid_transition_and_payload_are_rejected(client):
+def test_lock_waits_for_every_precondition(client):
     case_id = create_case(client)["id"]
-    assert client.post(
-        f"/cases/{case_id}/decide",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 409
-    assert client.post(
-        f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 409
 
-    add_contract(client, case_id)
-    assert client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 409
+    # Sem material nenhum não há o que encerrar.
+    premature = client.post(
+        f"/cases/{case_id}/submission-complete",
+        json={"closed": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert premature.status_code == 409
+
+    document = add_contract(client, case_id)["document"]
+
+    # Sem aceite bilateral, encerrar a produção não trava nada.
+    close_submissions(client, case_id)
+    assert client.get(f"/cases/{case_id}").json()["manifest_locked"] is False
+
     accept_procedure(client, case_id)
-    assert client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 409
-    document_id = client.get(f"/cases/{case_id}").json()["documents"][0]["id"]
-    complete_contradictory(client, case_id, document_id)
-    assert client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 200
-    assert client.post(
-        f"/cases/{case_id}/organize",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 409
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["manifest_locked"] is False
+    assert case["contradictory"]["complete"] is False
+    assert case["contradictory"]["pending_document_ids"] == [document["id"]]
 
+    complete_contradictory(client, case_id, document["id"])
+    assert client.get(f"/cases/{case_id}").json()["manifest_locked"] is True
+
+
+def test_closed_submission_blocks_new_material_until_reopened(client):
+    case_id = create_case(client)["id"]
+    add_contract(client, case_id)
+    close_submissions(client, case_id, parties=("claimant",))
+
+    blocked = client.post(
+        f"/cases/{case_id}/documents/text",
+        json={
+            "name": "extra.txt",
+            "content": "Material apresentado depois do encerramento.",
+            "submitted_by": "claimant",
+            "material_type": "argument",
+            "purpose": "Tentativa de reabrir a produção sem declarar.",
+        },
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert blocked.status_code == 409
+
+    reopened = client.post(
+        f"/cases/{case_id}/submission-complete",
+        json={"closed": False},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["submission"]["claimant"]["closed"] is False
+
+    allowed = client.post(
+        f"/cases/{case_id}/documents/text",
+        json={
+            "name": "extra.txt",
+            "content": "Material apresentado depois de reabrir a produção.",
+            "submitted_by": "claimant",
+            "material_type": "argument",
+            "purpose": "Complementar a alegação inicial.",
+        },
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert allowed.status_code == 201
+
+
+def test_invalid_payloads_are_rejected(client):
     invalid = client.post(
         "/cases",
-        json={"title": "x", "claimant": "", "respondent": "B"},
+        json={
+            "title": "x",
+            "claimant": "",
+            "respondent": "B",
+            "creator_role": "claimant",
+        },
     )
     assert invalid.status_code == 422
+
+    without_side = client.post(
+        "/cases",
+        json={
+            "title": "Caso sem lado declarado",
+            "claimant": "A",
+            "respondent": "B",
+        },
+    )
+    assert without_side.status_code == 422
+
+    third_party_side = client.post(
+        "/cases",
+        json={
+            "title": "Caso com terceiro",
+            "claimant": "A",
+            "respondent": "B",
+            "creator_role": "manager",
+        },
+    )
+    assert third_party_side.status_code == 422
 
 
 def test_counterparty_controls_acknowledgement_and_response(client):
@@ -528,11 +1080,17 @@ def test_decision_cannot_start_with_pending_contradictory(client):
     case_id = create_case(client)["id"]
     accept_procedure(client, case_id)
     add_contract(client, case_id)
+    close_submissions(client, case_id)
 
     case = client.get(f"/cases/{case_id}").json()
     assert case["contradictory"]["complete"] is False
     assert case["contradictory"]["pending_document_ids"]
-    assert client.post(
-        f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
-    ).status_code == 409
+    assert case["manifest_locked"] is False
+    assert case["decision"] is None
+
+    forced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert forced.status_code == 200
+    assert forced.json()["performed"] == []
+    assert client.get(f"/cases/{case_id}").json()["manifest_locked"] is False

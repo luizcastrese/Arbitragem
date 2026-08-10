@@ -24,10 +24,20 @@ class Case(Base):
     respondent_consent_at = Column(String, nullable=True)
     claimant_token_hash = Column(String, nullable=True)
     respondent_token_hash = Column(String, nullable=True)
-    manager_token_hash = Column(String, nullable=True)
+    # Cada parte encerra a própria produção de material. Só quando as duas
+    # encerram é que o rito pode travar o manifesto — no lugar do antigo
+    # julgamento de um gestor humano sobre "o material está completo".
+    claimant_submission_closed = Column(Boolean, nullable=False, default=False)
+    respondent_submission_closed = Column(Boolean, nullable=False, default=False)
+    claimant_submission_closed_at = Column(String, nullable=True)
+    respondent_submission_closed_at = Column(String, nullable=True)
     manifest_locked = Column(Boolean, nullable=False, default=False)
     locked_manifest_json = Column(Text, nullable=True)
     conciliation_json = Column(Text, nullable=True)
+    # Posições das partes aguardando a próxima rodada de composição.
+    composition_inputs_json = Column(Text, nullable=True)
+    # Ratificação da decisão pelas partes, quando a auditoria fez ressalva.
+    ratification_json = Column(Text, nullable=True)
     organized_json = Column(Text, nullable=True)
     decision_json = Column(Text, nullable=True)
     review_json = Column(Text, nullable=True)
@@ -202,6 +212,9 @@ class Deadline(Base):
     label = Column(String, nullable=False)
     kind = Column(String, nullable=False)
     assigned_to = Column(String, nullable=False)
+    # Objeto a que o prazo se refere (por exemplo o documento cuja resposta é
+    # esperada). O rito usa a referência para fechar o prazo sozinho.
+    reference_id = Column(String, nullable=True, index=True)
     due_at = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
