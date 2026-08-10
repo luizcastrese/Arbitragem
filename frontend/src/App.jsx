@@ -1355,7 +1355,9 @@ function SubmissionClosure({ caseData, busy, run, request, actorHeaders, myParty
           <span>
             Declare que encerrou a sua produção. Quando os dois lados encerrarem
             — e todo material tiver passado pelo contraditório — o próprio rito
-            trava o conjunto documental. Ninguém decide isso por vocês.
+            trava o conjunto documental. Ninguém decide isso por vocês. Se o
+            prazo vencer sem declaração, o rito encerra a produção por decurso
+            de prazo.
           </span>
         </div>
         {myParty && (
@@ -1670,6 +1672,14 @@ function DocumentsCard({
               />
               <EvidenceState done={document.admitted} label="Admitido para decisão" />
             </div>
+
+            {document.response_status === 'precluded' && (
+              <small className="admission-note">
+                O prazo para se manifestar sobre este material venceu sem
+                resposta. A oportunidade foi encerrada por preclusão — o que não
+                significa concordância com o conteúdo.
+              </small>
+            )}
 
             {!locked && roles[document.counterparty] && !document.acknowledged_at && (
               <button
@@ -2061,7 +2071,8 @@ function responseStatusLabel(status) {
     pending: 'Resposta pendente',
     answered: 'Respondido',
     challenged: 'Contestado',
-    waived: 'Resposta dispensada'
+    waived: 'Resposta dispensada',
+    precluded: 'Prazo vencido sem resposta'
   }[status] || 'Resposta pendente'
 }
 

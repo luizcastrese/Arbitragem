@@ -95,6 +95,16 @@ def revoke_session(db: Session, token: str) -> bool:
     return True
 
 
+def user_roles_in_case(db: Session, case_id: str, user_id: str) -> set[str]:
+    return {
+        row.role
+        for row in db.query(CaseMember).filter(
+            CaseMember.case_id == case_id,
+            CaseMember.user_id == user_id,
+        )
+    }
+
+
 def add_member(db: Session, case_id: str, user_id: str, role: str) -> CaseMember:
     existing = (
         db.query(CaseMember)
@@ -107,6 +117,13 @@ def add_member(db: Session, case_id: str, user_id: str, role: str) -> CaseMember
     )
     if existing:
         return existing
+    # Invariante do procedimento: as duas partes são pessoas distintas. Sem um
+    # terceiro humano observando, é aqui que se impede alguém de litigar
+    # consigo mesmo e colher uma decisão assinada de uma disputa inexistente.
+    if user_roles_in_case(db, case_id, user_id):
+        raise ValueError(
+            "Esta conta já é parte neste caso e não pode ocupar também o outro polo"
+        )
     member = CaseMember(
         id=str(uuid.uuid4()),
         case_id=case_id,
@@ -185,6 +202,11 @@ def accept_invitation(db: Session, token: str, user: User) -> Invitation:
         raise ValueError("Este convite expirou")
     if invitation.email != user.email:
         raise ValueError("O convite pertence a outro endereço de e-mail")
+    if user_roles_in_case(db, invitation.case_id, user.id):
+        raise ValueError(
+            "Sua conta já é parte neste caso: as duas partes precisam ser "
+            "pessoas distintas"
+        )
     add_member(db, invitation.case_id, user.id, invitation.role)
     invitation.status = "accepted"
     invitation.accepted_at = utc_now()
@@ -217,22 +239,36 @@ def create_deadline(
     return deadline
 
 
-def deadline_exists_for_reference(
+def open_deadline_for_reference(
     db: Session,
     case_id: str,
     reference_id: str,
     kind: str,
-) -> bool:
+) -> Optional[Deadline]:
+    """Prazo ainda aberto para um objeto do procedimento, se houver. Prazos já
+    encerrados não contam: um ato que se reabre merece prazo novo."""
     return (
         db.query(Deadline)
         .filter(
             Deadline.case_id == case_id,
             Deadline.reference_id == reference_id,
             Deadline.kind == kind,
+            Deadline.completed_at.is_(None),
         )
         .first()
-        is not None
     )
+
+
+def expired_deadline_for_reference(
+    db: Session,
+    case_id: str,
+    reference_id: str,
+    kind: str,
+) -> Optional[Deadline]:
+    deadline = open_deadline_for_reference(db, case_id, reference_id, kind)
+    if deadline and _as_utc(deadline.due_at) <= utc_now():
+        return deadline
+    return None
 
 
 def complete_deadlines_for_reference(

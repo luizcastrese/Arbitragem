@@ -139,7 +139,8 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         "contradictory_complete": bool(
             document.disclosed_at
             and document.acknowledged_at
-            and document.response_status in {"answered", "waived", "challenged"}
+            and document.response_status
+            in {"answered", "waived", "challenged", "precluded"}
             and document.admitted
         ),
         "chunks_count": document.chunks_count,
@@ -485,19 +486,32 @@ def record_submission_closure(
     case: Case,
     party: str,
     closed: bool,
+    by_preclusion: bool = False,
+    due_at: Optional[str] = None,
 ) -> Case:
     """A parte declara que encerrou (ou reabriu) a própria produção de
     material. É o sinal que substitui o juízo do gestor humano sobre quando
-    o acervo está completo."""
+    o acervo está completo.
+
+    Com `by_preclusion`, quem registra é o rito: o prazo para encerrar venceu
+    sem manifestação e o silêncio é tratado como encerramento, para que uma
+    parte inerte não impeça indefinidamente a trava do manifesto.
+    """
     now = datetime.now(timezone.utc).isoformat()
     setattr(case, f"{party}_submission_closed", closed)
     setattr(case, f"{party}_submission_closed_at", now if closed else None)
-    append_audit(
-        db,
-        case,
-        "submission_closed" if closed else "submission_reopened",
-        {"party": party, "actor": party},
-    )
+    if by_preclusion:
+        event_type = "submission_closed_by_preclusion"
+        payload = {
+            "party": party,
+            "actor": "procedure",
+            "due_at": due_at,
+            "precluded_at": now,
+        }
+    else:
+        event_type = "submission_closed" if closed else "submission_reopened"
+        payload = {"party": party, "actor": party}
+    append_audit(db, case, event_type, payload)
     db.commit()
     return get_case(db, case.id)
 
@@ -608,6 +622,44 @@ def respond_to_document(
                 if response_text
                 else None
             ),
+        },
+    )
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+def preclude_response(
+    db: Session,
+    case: Case,
+    document: Document,
+    party: str,
+    due_at: str,
+) -> Document:
+    """Registra a preclusão: vencido o prazo sem manifestação, o silêncio da
+    contraparte vale como renúncia à resposta.
+
+    Sem isso, bastaria uma parte não fazer nada para vetar o procedimento
+    inteiro — e não há terceiro humano para destravá-lo. A preclusão não
+    presume concordância com o material: apenas encerra a oportunidade de
+    responder, que foi aberta, notificada e não exercida.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    if not document.acknowledged_at:
+        document.acknowledged_at = now
+        document.acknowledged_by = "preclusion"
+    document.response_status = "precluded"
+    document.responded_at = now
+    append_audit(
+        db,
+        case,
+        "response_precluded",
+        {
+            "document_id": document.id,
+            "party": party,
+            "actor": "procedure",
+            "due_at": due_at,
+            "precluded_at": now,
         },
     )
     db.commit()

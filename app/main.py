@@ -591,6 +591,14 @@ def invite_participant(
     case = _case_or_404(db, case_id)
     actor_party = _actor_party(db, case, x_actor_token)
     actor = get_user_by_token(db, x_actor_token)
+    if actor and payload.email.strip().lower() == actor.email:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "O convite é para a contraparte. As duas partes precisam ser "
+                "pessoas distintas."
+            ),
+        )
     if payload.role != party_counterparty(actor_party):
         raise HTTPException(
             status_code=403,

@@ -30,11 +30,13 @@ from app.core.audit import verify_audit_chain
 from app.core.config import get_settings
 from app.core.manifest import lock_case_manifest
 from app.core.nostr_anchor import publish_attestation_anchor
+from app.core.email import deliver_deadline_email
 from app.db.access_repository import (
     complete_deadlines_for_reference,
     create_deadline,
     create_notification,
-    deadline_exists_for_reference,
+    expired_deadline_for_reference,
+    open_deadline_for_reference,
 )
 from app.db.repository import (
     admit_document,
@@ -44,6 +46,8 @@ from app.db.repository import (
     get_case,
     get_document,
     lock_manifest as persist_manifest,
+    preclude_response,
+    record_submission_closure,
     save_nostr_anchor,
     save_stage,
 )
@@ -52,8 +56,11 @@ from app.documents.retrieval import retrieve_relevant_chunks
 
 
 PARTIES = ("claimant", "respondent")
-RESPONDED_STATUSES = {"answered", "waived", "challenged"}
+# "precluded" só é atribuído pelo rito, quando o prazo vence sem
+# manifestação. Nenhuma parte pode se auto-atribuir esse estado.
+RESPONDED_STATUSES = {"answered", "waived", "challenged", "precluded"}
 RESPONSE_DEADLINE_KIND = "contradictory"
+SUBMISSION_DEADLINE_KIND = "submission"
 
 # Teto de passos por invocação. Protege contra um agente que insista em
 # recomendar novas rodadas indefinidamente.
@@ -95,6 +102,74 @@ def retrieve_admitted_chunks(
 def _notify_parties(db: Session, case_id: str, event_type: str, title: str, message: str) -> None:
     for party in PARTIES:
         create_notification(db, case_id, party, event_type, title, message)
+
+
+def _party_email(case, party: str) -> Optional[str]:
+    for member in case.members:
+        if member.role == party:
+            return member.user.email
+    return None
+
+
+def _open_deadline(
+    db: Session,
+    case,
+    *,
+    party: str,
+    label: str,
+    kind: str,
+    reference_id: str,
+    days: int,
+) -> Any:
+    """Abre um prazo, registra na auditoria e avisa a parte responsável.
+
+    O aviso não é enfeite: a preclusão só é legítima porque a oportunidade foi
+    aberta, comunicada e não exercida. Se o SMTP não estiver configurado, a
+    entrega cai no log — e isso fica registrado.
+    """
+    deadline = create_deadline(
+        db,
+        case.id,
+        label=label,
+        kind=kind,
+        assigned_to=party,
+        due_at=datetime.now(timezone.utc) + timedelta(days=days),
+        reference_id=reference_id,
+    )
+    email = _party_email(case, party)
+    delivery = (
+        deliver_deadline_email(
+            to_email=email,
+            case_title=case.title,
+            label=deadline.label,
+            due_at=deadline.due_at.isoformat(),
+        )
+        if email
+        else {"delivered": False, "transport": "none"}
+    )
+    append_audit(
+        db,
+        case,
+        "deadline_created",
+        {
+            "deadline_id": deadline.id,
+            "assigned_to": party,
+            "reference_id": reference_id,
+            "due_at": deadline.due_at.isoformat(),
+            "notice_delivered": bool(delivery.get("delivered")),
+            "notice_transport": delivery.get("transport"),
+            "actor": "procedure",
+        },
+    )
+    create_notification(
+        db,
+        case.id,
+        party,
+        "deadline_created",
+        label,
+        f"{label}: até {deadline.due_at.isoformat()}.",
+    )
+    return deadline
 
 
 # ---------------------------------------------------------------------------
@@ -140,46 +215,141 @@ def _open_response_deadlines(db: Session, case, data: Dict[str, Any]) -> Optiona
     for document_data in data["documents"]:
         if document_data["response_status"] in RESPONDED_STATUSES:
             continue
-        if deadline_exists_for_reference(
+        if open_deadline_for_reference(
             db, case.id, document_data["id"], RESPONSE_DEADLINE_KIND
         ):
             continue
-        expected = counterparty(document_data["submitted_by"])
-        deadline = create_deadline(
-            db,
-            case.id,
-            label=f"Ciência e resposta ao material {document_data['name']}",
-            kind=RESPONSE_DEADLINE_KIND,
-            assigned_to=expected,
-            due_at=datetime.now(timezone.utc)
-            + timedelta(days=settings.contradictory_response_days),
-            reference_id=document_data["id"],
-        )
-        append_audit(
+        _open_deadline(
             db,
             case,
-            "deadline_created",
-            {
-                "deadline_id": deadline.id,
-                "assigned_to": deadline.assigned_to,
-                "reference_id": document_data["id"],
-                "due_at": deadline.due_at.isoformat(),
-                "actor": "procedure",
-            },
-        )
-        create_notification(
-            db,
-            case.id,
-            expected,
-            "deadline_created",
-            "Novo material aguardando sua manifestação",
-            f"{deadline.label}: até {deadline.due_at.isoformat()}.",
+            party=counterparty(document_data["submitted_by"]),
+            label=f"Ciência e resposta ao material {document_data['name']}",
+            kind=RESPONSE_DEADLINE_KIND,
+            reference_id=document_data["id"],
+            days=settings.contradictory_response_days,
         )
         opened.append(document_data["id"])
     if not opened:
         return None
     db.commit()
     return {"step": "response_deadlines_opened", "document_ids": opened}
+
+
+def _preclude_expired_responses(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Vencido o prazo sem manifestação, o silêncio vale como renúncia.
+
+    É o que impede que uma parte vete o procedimento simplesmente não fazendo
+    nada — risco que ficou exposto quando o gestor humano deixou de existir,
+    já que não há mais ninguém para destravar o caso por fora.
+    """
+    if case.manifest_locked:
+        return None
+    precluded: List[str] = []
+    for document_data in data["documents"]:
+        if document_data["response_status"] in RESPONDED_STATUSES:
+            continue
+        deadline = expired_deadline_for_reference(
+            db, case.id, document_data["id"], RESPONSE_DEADLINE_KIND
+        )
+        if not deadline:
+            continue
+        document = get_document(db, case.id, document_data["id"])
+        if document is None:
+            continue
+        expected = counterparty(document_data["submitted_by"])
+        preclude_response(
+            db, case, document, expected, deadline.due_at.isoformat()
+        )
+        create_notification(
+            db,
+            case.id,
+            expected,
+            "response_precluded",
+            "Prazo de resposta encerrado",
+            f"O prazo para se manifestar sobre {document_data['name']} venceu "
+            "sem resposta. A oportunidade foi encerrada e o procedimento segue.",
+        )
+        precluded.append(document_data["id"])
+    if not precluded:
+        return None
+    db.commit()
+    return {"step": "responses_precluded", "document_ids": precluded}
+
+
+def _open_submission_deadlines(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Cumprido o contraditório, abre o prazo para cada parte encerrar a
+    própria produção — o último ato que falta antes da trava."""
+    if case.manifest_locked:
+        return None
+    if not data["consent"]["complete"] or not data["documents"]:
+        return None
+    if not data["contradictory"]["complete"]:
+        return None
+    settings = get_settings()
+    opened: List[str] = []
+    for party in PARTIES:
+        if data["submission"][party]["closed"]:
+            continue
+        if open_deadline_for_reference(
+            db, case.id, party, SUBMISSION_DEADLINE_KIND
+        ):
+            continue
+        _open_deadline(
+            db,
+            case,
+            party=party,
+            label="Encerramento da sua produção de material",
+            kind=SUBMISSION_DEADLINE_KIND,
+            reference_id=party,
+            days=settings.submission_closure_days,
+        )
+        opened.append(party)
+    if not opened:
+        return None
+    db.commit()
+    return {"step": "submission_deadlines_opened", "parties": opened}
+
+
+def _preclude_expired_submission_closures(
+    db: Session, case, data: Dict[str, Any]
+) -> Optional[Dict]:
+    """Vencido o prazo, o silêncio da parte vale como encerramento da própria
+    produção. Sem isso, bastaria não declarar nada para impedir a trava."""
+    if case.manifest_locked:
+        return None
+    if not data["contradictory"]["complete"]:
+        return None
+    precluded: List[str] = []
+    for party in PARTIES:
+        if data["submission"][party]["closed"]:
+            continue
+        deadline = expired_deadline_for_reference(
+            db, case.id, party, SUBMISSION_DEADLINE_KIND
+        )
+        if not deadline:
+            continue
+        record_submission_closure(
+            db,
+            case,
+            party,
+            closed=True,
+            by_preclusion=True,
+            due_at=deadline.due_at.isoformat(),
+        )
+        create_notification(
+            db,
+            case.id,
+            party,
+            "submission_precluded",
+            "Produção de material encerrada por decurso de prazo",
+            "O prazo para encerrar sua produção venceu sem manifestação. "
+            "O registro documental segue para a trava.",
+        )
+        precluded.append(party)
+    if not precluded:
+        return None
+    db.commit()
+    return {"step": "submission_closures_precluded", "parties": precluded}
 
 
 def _close_met_deadlines(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
@@ -192,6 +362,29 @@ def _close_met_deadlines(db: Session, case, data: Dict[str, Any]) -> Optional[Di
     if not open_references:
         return None
     closed: List[str] = []
+
+    # O prazo de encerramento de produção se fecha quando a parte declara.
+    for party in PARTIES:
+        if party not in open_references:
+            continue
+        if not data["submission"][party]["closed"]:
+            continue
+        completed = complete_deadlines_for_reference(db, case.id, party)
+        if not completed:
+            continue
+        for deadline in completed:
+            append_audit(
+                db,
+                case,
+                "deadline_completed",
+                {
+                    "deadline_id": deadline.id,
+                    "reference_id": party,
+                    "actor": "procedure",
+                },
+            )
+        closed.append(party)
+
     for document_data in data["documents"]:
         if document_data["id"] not in open_references:
             continue
@@ -505,9 +698,12 @@ def _issue_attestation(db: Session, case, data: Dict[str, Any]) -> Optional[Dict
 
 
 STEPS: tuple[Callable[[Session, Any, Dict[str, Any]], Optional[Dict]], ...] = (
+    _preclude_expired_responses,
     _admit_ready_material,
     _close_met_deadlines,
     _open_response_deadlines,
+    _preclude_expired_submission_closures,
+    _open_submission_deadlines,
     _lock_manifest,
     _run_composition_round,
     _organize,
@@ -526,6 +722,17 @@ def pending_actions(data: Dict[str, Any]) -> List[Dict[str, str]]:
     """O que falta, atribuído à parte responsável. Enquanto houver pendência
     aqui, o rito está esperando uma parte — nunca um terceiro."""
     pending: List[Dict[str, str]] = []
+    # Prazo aberto por referência, para que cada pendência informe até quando
+    # pode ser exercida antes de precluir.
+    due_by_reference = {
+        deadline["reference_id"]: deadline["due_at"]
+        for deadline in data["deadlines"]
+        if deadline["status"] != "completed" and deadline["reference_id"]
+    }
+
+    def _with_due(item: Dict[str, str], reference_id: str) -> Dict[str, str]:
+        due_at = due_by_reference.get(reference_id)
+        return {**item, "due_at": due_at} if due_at else item
 
     if data["contest"]["contested"]:
         return pending
@@ -542,26 +749,34 @@ def pending_actions(data: Dict[str, Any]) -> List[Dict[str, str]]:
                 )
         for document in data["documents"]:
             expected = document["counterparty"]
+            if document["response_status"] in RESPONDED_STATUSES:
+                continue
             if not document["acknowledged_at"]:
                 pending.append(
-                    {
-                        "party": expected,
-                        "action": "acknowledge",
-                        "reference_id": document["id"],
-                        "detail": f"Confirmar ciência do material {document['name']}.",
-                    }
+                    _with_due(
+                        {
+                            "party": expected,
+                            "action": "acknowledge",
+                            "reference_id": document["id"],
+                            "detail": f"Confirmar ciência do material {document['name']}.",
+                        },
+                        document["id"],
+                    )
                 )
-            elif document["response_status"] not in RESPONDED_STATUSES:
+            else:
                 pending.append(
-                    {
-                        "party": expected,
-                        "action": "respond",
-                        "reference_id": document["id"],
-                        "detail": (
-                            f"Responder, contestar ou renunciar ao material "
-                            f"{document['name']}."
-                        ),
-                    }
+                    _with_due(
+                        {
+                            "party": expected,
+                            "action": "respond",
+                            "reference_id": document["id"],
+                            "detail": (
+                                f"Responder, contestar ou renunciar ao material "
+                                f"{document['name']}."
+                            ),
+                        },
+                        document["id"],
+                    )
                 )
         # O encerramento da produção só vira pendência quando ele é a última
         # coisa que falta: enquanto houver contraditório aberto, a espera é
@@ -574,11 +789,14 @@ def pending_actions(data: Dict[str, Any]) -> List[Dict[str, str]]:
             for party in PARTIES:
                 if not data["submission"][party]["closed"]:
                     pending.append(
-                        {
-                            "party": party,
-                            "action": "close_submission",
-                            "detail": "Encerrar a própria produção de material.",
-                        }
+                        _with_due(
+                            {
+                                "party": party,
+                                "action": "close_submission",
+                                "detail": "Encerrar a própria produção de material.",
+                            },
+                            party,
+                        )
                     )
         if not data["documents"]:
             pending.append(

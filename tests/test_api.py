@@ -1,3 +1,4 @@
+from datetime import timedelta
 import io
 import os
 import zipfile
@@ -227,8 +228,14 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "response_submitted",
         "evidence_admitted",
         "deadline_completed",
+        # Cumprido o contraditório, o rito abre o prazo de encerramento de
+        # produção para cada parte — é o que torna a preclusão possível.
+        "deadline_created",
+        "deadline_created",
         "submission_closed",
+        "deadline_completed",
         "submission_closed",
+        "deadline_completed",
         "manifest_locked",
         "conciliation_screened",
         "case_organized",
@@ -350,6 +357,153 @@ def test_creator_joins_as_a_party_and_can_only_invite_the_counterparty(client):
     assert [item["id"] for item in company_cases] == [case_id]
 
 
+def test_one_person_cannot_hold_both_sides_of_a_case(client):
+    """A invariante mais frágil sem terceiro humano: sem ninguém observando,
+    é o código que precisa impedir alguém de litigar consigo mesmo e colher
+    uma decisão assinada de uma disputa que nunca existiu."""
+    person = register_user(client, "Fulano", "fulano@example.com")
+    headers = {"X-Session-Token": person["session_token"]}
+
+    case = client.post(
+        "/cases",
+        headers=headers,
+        json={
+            "title": "Caso simulado",
+            "claimant": "Fulano",
+            "respondent": "Fulano de novo",
+            "creator_role": "claimant",
+        },
+    ).json()
+    case_id = case["id"]
+    CASE_CREDENTIALS[case_id] = case["access_credentials"]
+
+    # Convidar o próprio e-mail é recusado na origem.
+    self_invite = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": person["session_token"]},
+        json={"email": "fulano@example.com", "role": "respondent"},
+    )
+    assert self_invite.status_code == 403
+
+    # E se o convite chegar por outro caminho, aceitá-lo com uma conta que já
+    # é parte também é recusado.
+    other = register_user(client, "Sicrano", "sicrano@example.com")
+    invite = client.post(
+        f"/cases/{case_id}/invitations",
+        headers={"X-Actor-Token": person["session_token"]},
+        json={"email": "sicrano@example.com", "role": "respondent"},
+    )
+    assert invite.status_code == 201
+    token = invite.json()["acceptance_token"]
+
+    reused_by_first_party = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": person["session_token"]},
+        json={"token": token},
+    )
+    # O convite pertence a outro e-mail; e mesmo que pertencesse, a conta já
+    # é parte no caso.
+    assert reused_by_first_party.status_code == 409
+
+    accepted = client.post(
+        "/invitations/accept",
+        headers={"X-Session-Token": other["session_token"]},
+        json={"token": token},
+    )
+    assert accepted.status_code == 200
+
+    roles = [
+        item["role"]
+        for item in client.get(f"/cases/{case_id}", headers=headers).json()["participants"]
+    ]
+    assert sorted(roles) == ["claimant", "respondent"]
+    assert len(set(roles)) == 2
+
+
+def test_silence_precludes_instead_of_vetoing_the_procedure(client, monkeypatch):
+    """Vencido o prazo, o silêncio da contraparte encerra a oportunidade em vez
+    de travar o caso para sempre. Sem terceiro humano, esta é a única saída
+    para uma parte que simplesmente não age."""
+    from app.db import access_repository
+
+    case_id = create_case(client)["id"]
+    accept_procedure(client, case_id)
+    add_contract(client, case_id)
+
+    # Enquanto o prazo está aberto, o rito espera: não precluí nada.
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.json()["performed"] == []
+    assert advanced.json()["waiting_on"] == ["respondent"]
+
+    pending = advanced.json()["pending"][0]
+    assert pending["action"] == "acknowledge"
+    assert pending["due_at"]
+
+    # O tempo passa e a contraparte não se manifesta. Adiantar o relógio que o
+    # rito usa para aferir vencimento é o bastante: os prazos já gravados
+    # passam a estar vencidos.
+    real_now = access_repository.utc_now
+    monkeypatch.setattr(
+        access_repository, "utc_now", lambda: real_now() + timedelta(days=30)
+    )
+
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+    steps = [item["step"] for item in advanced.json()["performed"]]
+    assert "responses_precluded" in steps
+
+    case = client.get(f"/cases/{case_id}").json()
+    precluded = case["documents"][0]
+    assert precluded["response_status"] == "precluded"
+    assert precluded["acknowledged_by"] == "preclusion"
+    # A preclusão encerra a oportunidade, e o material segue para admissão.
+    assert precluded["admitted"] is True
+    assert case["contradictory"]["complete"] is True
+
+    # O mesmo vale para o encerramento da produção: uma parte inerte não
+    # impede a trava.
+    assert "submission_closures_precluded" in steps
+    assert case["manifest_locked"] is True
+    assert case["submission"]["respondent"]["closed"] is True
+
+    events = {
+        event["event_type"]: event["payload"]
+        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
+    }
+    assert events["response_precluded"]["actor"] == "procedure"
+    assert events["response_precluded"]["party"] == "respondent"
+    assert events["response_precluded"]["due_at"]
+    assert events["submission_closed_by_preclusion"]["actor"] == "procedure"
+
+
+def test_consent_is_never_precluded(client, monkeypatch):
+    """A adesão é voluntária: nenhum prazo transforma silêncio em aceite. Sem
+    o consentimento das duas partes o procedimento simplesmente não existe."""
+    from app.db import access_repository
+
+    case_id = create_case(client)["id"]
+    add_contract(client, case_id)
+
+    real_now = access_repository.utc_now
+    monkeypatch.setattr(
+        access_repository, "utc_now", lambda: real_now() + timedelta(days=365)
+    )
+
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["consent"]["complete"] is False
+    assert case["manifest_locked"] is False
+    assert {item["action"] for item in advanced.json()["pending"]} >= {"consent"}
+
+
 def test_procedure_opens_and_closes_its_own_deadlines(client):
     case_id = create_case(client)["id"]
     accept_procedure(client, case_id)
@@ -364,7 +518,11 @@ def test_procedure_opens_and_closes_its_own_deadlines(client):
     complete_contradictory(client, case_id, document["id"])
 
     deadlines = client.get(f"/cases/{case_id}/deadlines").json()
-    assert deadlines[0]["status"] == "completed"
+    by_reference = {item["reference_id"]: item for item in deadlines}
+    assert by_reference[document["id"]]["status"] == "completed"
+    # E abre o prazo de encerramento de produção para cada parte.
+    assert by_reference["claimant"]["status"] == "open"
+    assert by_reference["respondent"]["status"] == "open"
 
     report = client.get(f"/cases/{case_id}/report.docx")
     assert report.status_code == 200

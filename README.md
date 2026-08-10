@@ -60,8 +60,10 @@ caso aberto por uma das partes
   -> prazo de ciência e resposta aberto        (rito)
   -> ciência da contraparte                    (parte)
   -> resposta, contestação ou renúncia         (parte)
+     ou preclusão, se o prazo vencer em silêncio       (rito)
   -> admissão do material                      (rito)
   -> encerramento da produção pelas duas partes        (parte)
+     ou preclusão, se o prazo vencer em silêncio       (rito)
   -> manifesto travado                         (rito)
   -> rodadas de composição                     (rito, com a posição de cada parte)
   -> organização                               (rito)
@@ -108,6 +110,33 @@ O que continua sendo das partes, e só delas:
 executado. Ele não concede poder algum a quem chama: cada passo continua
 condicionado às suas próprias pré-condições, e chamá-lo com o caso pendente não
 faz nada.
+
+### Preclusão: silêncio não veta o procedimento
+
+Sem um terceiro humano, uma parte que simplesmente não age travaria o caso para
+sempre — não haveria ninguém para destravá-lo por fora. Por isso o rito abre
+prazo para cada ato da contraparte, comunica esse prazo por e-mail, e, vencido o
+prazo sem manifestação, registra a **preclusão**:
+
+- material sem ciência ou sem resposta passa a `response_status: "precluded"`,
+  com `acknowledged_by: "preclusion"`, e segue para admissão;
+- parte que não declara encerrada a própria produção tem o encerramento
+  registrado por decurso de prazo.
+
+A preclusão **não presume concordância** com o material da outra parte: ela
+apenas encerra uma oportunidade que foi aberta, comunicada e não exercida. O
+resultado da entrega do aviso entra na cadeia de auditoria (`notice_delivered`,
+`notice_transport`), justamente porque a legitimidade da preclusão depende de a
+oportunidade ter sido comunicada.
+
+**O consentimento nunca preclui.** Adesão é voluntária: nenhum prazo transforma
+silêncio em aceite. Um caso sem o aceite das duas partes simplesmente não avança,
+e é o único ponto do fluxo em que isso é o comportamento correto.
+
+As duas partes são sempre pessoas distintas: convidar o próprio e-mail é
+recusado, e uma conta que já é parte não pode ocupar o outro polo. Sem terceiro
+humano observando, é o código que impede alguém de litigar consigo mesmo e
+colher uma decisão assinada de uma disputa que nunca existiu.
 
 O aceite registra a versão dos termos exibidos às partes: participação
 voluntária, acesso a todo material, oportunidade de resposta, composição
@@ -201,6 +230,7 @@ Variáveis do arquivo `.env`:
 | `POSTGRES_PASSWORD` | Senha PostgreSQL do Compose |
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
 | `CONTRADICTORY_RESPONSE_DAYS` | Dias do prazo de ciência e resposta aberto pelo rito; padrão 7 |
+| `SUBMISSION_CLOSURE_DAYS` | Dias para cada parte encerrar a própria produção; padrão 7 |
 | `COMPOSITION_MAX_ROUNDS` | Teto de rodadas de composição por caso; padrão 5 |
 | `CONTEST_WINDOW_DAYS` | Dias da janela de contestação após a attestation; padrão 7 |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
