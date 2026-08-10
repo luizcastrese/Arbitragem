@@ -81,6 +81,42 @@ def _composition_inputs(value: Any) -> Dict[str, Any]:
     return normalized
 
 
+def _ratification(value: Any) -> Dict[str, Any]:
+    """Estado da ratificação da decisão pelas partes.
+
+    `outcome` é None enquanto a fase estiver aberta, "ratified" quando as duas
+    partes aceitaram e "not_ratified" quando alguma recusou ou o prazo venceu.
+    """
+    stored = value if isinstance(value, dict) else {}
+    normalized: Dict[str, Any] = {
+        "open": bool(stored) and stored.get("outcome") is None,
+        "outcome": stored.get("outcome"),
+        "closed_reason": stored.get("closed_reason"),
+        "closed_at": stored.get("closed_at"),
+    }
+    for party in PARTIES:
+        entry = stored.get(party)
+        normalized[party] = (
+            {
+                "answered": True,
+                "accepted": bool(entry.get("accepted")),
+                "reason": entry.get("reason", ""),
+                "at": entry.get("at"),
+            }
+            if isinstance(entry, dict)
+            else {"answered": False, "accepted": None, "reason": "", "at": None}
+        )
+    normalized["complete"] = all(
+        normalized[party]["answered"] for party in PARTIES
+    )
+    normalized["rejected_by"] = [
+        party
+        for party in PARTIES
+        if normalized[party]["answered"] and not normalized[party]["accepted"]
+    ]
+    return normalized
+
+
 def _chunk_to_dict(chunk: Chunk, include_embedding: bool = True) -> Dict[str, Any]:
     result = {
         "id": chunk.id,
@@ -208,6 +244,7 @@ def case_to_dict(
         "composition": _composition_inputs(
             _json_load(case.composition_inputs_json)
         ),
+        "ratification": _ratification(_json_load(case.ratification_json)),
         "contradictory": {
             "complete": bool(documents) and not pending_documents,
             "pending_document_ids": pending_documents,
@@ -555,6 +592,91 @@ def record_composition_closure(db: Session, case: Case, party: str) -> Case:
         case,
         "composition_closed_by_party",
         {"party": party, "actor": party},
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def open_ratification(db: Session, case: Case, reservations: List[str]) -> Case:
+    """Abre a fase de ratificação: a auditoria fez ressalva, e quem decide se
+    o resultado vale mesmo assim são as partes, não o sistema."""
+    case.ratification_json = _json_dump({"outcome": None})
+    case.status = "ratification"
+    append_audit(
+        db,
+        case,
+        "ratification_opened",
+        {"actor": "procedure", "reservations": reservations},
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def record_ratification(
+    db: Session,
+    case: Case,
+    party: str,
+    accepted: bool,
+    reason: str,
+) -> Case:
+    """Registra a manifestação da parte sobre a decisão ressalvada."""
+    stored = _json_load(case.ratification_json, {}) or {}
+    stored[party] = {
+        "accepted": accepted,
+        "reason": reason,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    case.ratification_json = _json_dump(stored)
+    append_audit(
+        db,
+        case,
+        "ratification_accepted" if accepted else "ratification_rejected",
+        {
+            "party": party,
+            "actor": party,
+            "reason_sha256": (
+                hashlib.sha256(reason.encode("utf-8")).hexdigest() if reason else None
+            ),
+        },
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def resolve_ratification(
+    db: Session,
+    case: Case,
+    outcome: str,
+    closed_reason: str,
+) -> Case:
+    """Fecha a fase de ratificação. `ratified` destrava a execução;
+    `not_ratified` encerra o caso sem decisão executável."""
+    stored = _json_load(case.ratification_json, {}) or {}
+    stored["outcome"] = outcome
+    stored["closed_reason"] = closed_reason
+    stored["closed_at"] = datetime.now(timezone.utc).isoformat()
+    case.ratification_json = _json_dump(stored)
+    case.status = "ratified" if outcome == "ratified" else "unresolved"
+    append_audit(
+        db,
+        case,
+        "ratification_resolved",
+        {"actor": "procedure", "outcome": outcome, "closed_reason": closed_reason},
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def close_unresolved(db: Session, case: Case, reason: str) -> Case:
+    """Encerra o caso sem decisão executável. É um desfecho legítimo do
+    procedimento, não uma falha: as partes ficam livres para buscar outro
+    caminho, com o registro íntegro do que foi produzido aqui."""
+    case.status = "unresolved"
+    append_audit(
+        db,
+        case,
+        "case_closed_unresolved",
+        {"actor": "procedure", "reason": reason},
     )
     db.commit()
     return get_case(db, case.id)

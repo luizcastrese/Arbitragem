@@ -20,7 +20,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from app.core.canonical import canonical_hash, canonical_json
 from app.core.config import get_settings
 
-ATTESTATION_VERSION = "1.0"
+# 1.1 acrescenta `basis` e `ratification`: a execução pode se apoiar na
+# aprovação automática ou na ratificação expressa das duas partes.
+ATTESTATION_VERSION = "1.1"
 SIGNATURE_ALGORITHM = "Ed25519"
 
 _SIGNATURE_FIELDS = ("signature", "signature_algorithm")
@@ -138,8 +140,48 @@ def _outcome_split(decision: Dict[str, Any]) -> Dict[str, int]:
     )
 
 
-def assert_executable(decision: Dict[str, Any], review: Dict[str, Any]) -> None:
-    """Pré-condições de mérito para uma attestation executável."""
+def decision_is_executable(
+    decision: Dict[str, Any],
+    review: Dict[str, Any],
+) -> bool:
+    """A decisão tem, em tese, um resultado executável?
+
+    Responde apenas sobre a *forma* do resultado — se existe um split
+    calculável e se houve análise real de IA. Não diz nada sobre as
+    ressalvas de mérito (auditoria reprovada, revisão humana indicada), que
+    são o que a ratificação pelas partes pode superar.
+    """
+    if not decision or not review:
+        return False
+    if decision.get("execution", {}).get("mode") == "safe_fallback":
+        return False
+    if review.get("execution", {}).get("mode") == "safe_fallback":
+        return False
+    try:
+        _outcome_split(decision)
+    except AttestationError:
+        return False
+    return True
+
+
+def assert_executable(
+    decision: Dict[str, Any],
+    review: Dict[str, Any],
+    ratified_by_parties: bool = False,
+) -> None:
+    """Pré-condições de mérito para uma attestation executável.
+
+    As duas primeiras barreiras são intransponíveis: sem análise real de IA ou
+    sem um resultado calculável, não há o que executar, e nem o acordo das
+    partes cria um.
+
+    As duas últimas — auditoria reprovada e revisão humana indicada — são
+    ressalvas sobre a qualidade da decisão. Elas bloqueiam a execução
+    automática, mas cedem à ratificação expressa das duas partes: se ambas
+    aceitam o resultado depois de informadas da ressalva, o fundamento da
+    execução deixa de ser a confiança do sistema e passa a ser a vontade de
+    quem é titular do conflito.
+    """
     if not decision:
         raise AttestationError("O caso ainda não tem decisão")
     if not review:
@@ -154,6 +196,8 @@ def assert_executable(decision: Dict[str, Any], review: Dict[str, Any]) -> None:
         )
     if decision.get("outcome") == "inconclusive":
         raise AttestationError("Decisão inconclusiva não gera attestation executável")
+    if ratified_by_parties:
+        return
     if not review.get("approved"):
         raise AttestationError(
             "A auditoria independente não aprovou a decisão; execução bloqueada"
@@ -178,10 +222,12 @@ def build_decision_attestation(
     decision = case_data.get("decision") or {}
     review = case_data.get("review") or {}
     manifest = case_data.get("locked_manifest") or {}
+    ratification = case_data.get("ratification") or {}
+    ratified = ratification.get("outcome") == "ratified"
 
     if not manifest:
         raise AttestationError("O manifesto ainda não foi travado")
-    assert_executable(decision, review)
+    assert_executable(decision, review, ratified_by_parties=ratified)
     split = _outcome_split(decision)
 
     key = private_key or load_private_key()
@@ -208,6 +254,15 @@ def build_decision_attestation(
             "approved": review.get("approved"),
             "requires_human_review": review.get("requires_human_review"),
             "review_hash": canonical_hash(review),
+        },
+        # Sobre o que a execução se apoia. Um executor externo precisa saber se
+        # a decisão passou automaticamente ou se foi ratificada pelas partes
+        # apesar de uma ressalva da auditoria.
+        "basis": "party_ratification" if ratified else "automatic",
+        "ratification": {
+            "ratified": ratified,
+            "claimant_at": (ratification.get("claimant") or {}).get("at"),
+            "respondent_at": (ratification.get("respondent") or {}).get("at"),
         },
         "issued_at_utc": issued_at.isoformat(),
         "contest_window_ends_utc": contest_window_ends.isoformat(),

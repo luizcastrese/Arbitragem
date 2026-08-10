@@ -33,6 +33,7 @@ class Settings:
     contest_window_days: int
     contradictory_response_days: int
     submission_closure_days: int
+    ratification_days: int
     composition_max_rounds: int
     app_env: str
     cors_origins: List[str]
@@ -138,6 +139,7 @@ def get_settings() -> Settings:
             os.getenv("CONTRADICTORY_RESPONSE_DAYS", "7")
         ),
         submission_closure_days=int(os.getenv("SUBMISSION_CLOSURE_DAYS", "7")),
+        ratification_days=int(os.getenv("RATIFICATION_DAYS", "7")),
         composition_max_rounds=int(os.getenv("COMPOSITION_MAX_ROUNDS", "5")),
         app_env=app_env,
         cors_origins=_split_csv(

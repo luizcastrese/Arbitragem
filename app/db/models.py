@@ -36,6 +36,8 @@ class Case(Base):
     conciliation_json = Column(Text, nullable=True)
     # Posições das partes aguardando a próxima rodada de composição.
     composition_inputs_json = Column(Text, nullable=True)
+    # Ratificação da decisão pelas partes, quando a auditoria fez ressalva.
+    ratification_json = Column(Text, nullable=True)
     organized_json = Column(Text, nullable=True)
     decision_json = Column(Text, nullable=True)
     review_json = Column(Text, nullable=True)

@@ -28,6 +28,7 @@ def _upgrade_sqlite_schema():
         "claimant_submission_closed_at": "TEXT",
         "respondent_submission_closed_at": "TEXT",
         "composition_inputs_json": "TEXT",
+        "ratification_json": "TEXT",
     }
     deadline_additions = {"reference_id": "TEXT"}
     document_additions = {

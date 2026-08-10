@@ -204,7 +204,10 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     # Em modo seguro a triagem não recomenda novas rodadas, e o rito segue
     # sozinho até a auditoria.
     persisted = client.get(f"/cases/{case_id}").json()
-    assert persisted["status"] == "reviewed"
+    # Em modo seguro não há decisão de mérito: o rito encerra o caso
+    # explicitamente, em vez de deixá-lo encalhado após a auditoria.
+    assert persisted["status"] == "unresolved"
+    assert persisted["ratification"]["outcome"] is None
     assert persisted["conciliation"]["convergence"] == "undetermined"
     assert persisted["conciliation"]["recommended_path"] == "human_screening"
     assert persisted["conciliation"]["continue_recommended"] is False
@@ -241,10 +244,11 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "case_organized",
         "decision_generated",
         "review_generated",
+        "case_closed_unresolved",
     ]
 
     report = client.get(f"/cases/{case_id}/report").json()
-    assert report["status"] == "reviewed"
+    assert report["status"] == "unresolved"
     assert report["manifest"]["manifest_hash"]
     assert report["consent"]["complete"] is True
     assert report["contradictory"]["complete"] is True
@@ -698,8 +702,232 @@ def test_composition_waits_for_both_parties_and_either_can_end_it(client, monkey
         headers=actor_headers(case_id, "respondent"),
     )
     assert closed.status_code == 200
-    assert closed.json()["status"] == "reviewed"
+    assert closed.json()["status"] == "unresolved"
     assert closed.json()["composition"]["closed_by"] == ["respondent"]
+
+
+def _with_reserved_decision(monkeypatch, *, outcome="partial", approved=False):
+    """Simula um caso com decisão executável mas ressalvada pela auditoria —
+    exatamente a situação que antes encalhava sem ninguém a quem recorrer."""
+    from app.core import procedure
+
+    monkeypatch.setattr(
+        procedure,
+        "assess_conciliation",
+        lambda context, round_number: {
+            "round_number": round_number,
+            "convergence": "not_detected",
+            "recommended_path": "adjudication",
+            "neutral_summary": "Sem convergência.",
+            "common_interests": [],
+            "negotiable_issues": [],
+            "non_negotiable_issues": [],
+            "possible_terms": [],
+            "reasoning": [],
+            "confidence": 0.6,
+            "continue_recommended": False,
+            "recommended_additional_rounds": 0,
+            "next_round_focus": "",
+            "stop_reason": "Posições esgotadas.",
+            "requires_party_consent": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "organizer_organize_case",
+        lambda documents, chunks: {
+            "factual_overview": "Entrega parcial.",
+            "disputed_facts": [],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "judge_decide_case",
+        lambda context: {
+            "outcome": outcome,
+            "partial_claimant_bps": 6000,
+            "decision": "Divisão proporcional à entrega comprovada.",
+            "confidence": 0.55,
+            "requires_human_review": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "review_decision",
+        lambda payload: {
+            "approved": approved,
+            "requires_human_review": True,
+            "risks": ["Confiança baixa na proporção adotada."],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+
+
+def test_parties_review_a_reserved_decision_and_ratify_it(client, monkeypatch):
+    """A revisão humana é das partes. Informadas da ressalva da auditoria,
+    elas decidem se o resultado vale assim mesmo — e só o aceite das duas
+    destrava a execução."""
+    _with_reserved_decision(monkeypatch)
+    case_id, _, _ = prepare_locked_case(client)
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["status"] == "ratification"
+    assert case["ratification"]["open"] is True
+    assert case["ratification"]["outcome"] is None
+
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert {item["action"] for item in state["pending"]} == {"ratify"}
+    assert state["waiting_on"] == ["claimant", "respondent"]
+    assert all(item["due_at"] for item in state["pending"])
+
+    # Uma parte só se manifesta por si.
+    first = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "ratification"
+
+    repeated = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert repeated.status_code == 409
+
+    second = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert second.status_code == 200
+    ratification = second.json()["ratification"]
+    assert ratification["outcome"] == "ratified"
+    assert second.json()["status"] == "ratified"
+
+    events = [
+        event["event_type"]
+        for event in client.get(f"/cases/{case_id}/audit").json()["events"]
+    ]
+    assert "ratification_opened" in events
+    assert events.count("ratification_accepted") == 2
+    assert "ratification_resolved" in events
+
+
+def test_a_single_refusal_closes_the_case_without_an_executable_decision(
+    client, monkeypatch
+):
+    _with_reserved_decision(monkeypatch)
+    case_id, _, _ = prepare_locked_case(client)
+
+    # Recusar exige motivo: ele passa a integrar o registro.
+    without_reason = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": False, "reason": "não"},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert without_reason.status_code == 422
+
+    refused = client.post(
+        f"/cases/{case_id}/ratification",
+        json={
+            "accepted": False,
+            "reason": "A proporção adotada não corresponde ao que foi entregue.",
+        },
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert refused.status_code == 200
+    assert refused.json()["status"] == "unresolved"
+    assert refused.json()["ratification"]["outcome"] == "not_ratified"
+    assert refused.json()["ratification"]["rejected_by"] == ["respondent"]
+    assert refused.json()["attestation"] is None
+
+    # A outra parte não precisa mais se manifestar: o caso está encerrado.
+    late = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert late.status_code == 409
+
+    state = client.get(f"/cases/{case_id}/procedure").json()
+    assert state["pending"] == []
+    assert state["ratification"]["outcome"] == "not_ratified"
+
+
+def test_silence_never_ratifies_a_reserved_decision(client, monkeypatch):
+    """Preclusão empurra o procedimento adiante, mas nunca cria um endosso:
+    ratificar é aceitar um resultado que o próprio sistema ressalvou."""
+    _with_reserved_decision(monkeypatch)
+    from app.db import access_repository
+
+    case_id, _, _ = prepare_locked_case(client)
+    assert client.get(f"/cases/{case_id}").json()["status"] == "ratification"
+
+    real_now = access_repository.utc_now
+    monkeypatch.setattr(
+        access_repository, "utc_now", lambda: real_now() + timedelta(days=60)
+    )
+
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=actor_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+    assert advanced.json()["ratification"]["outcome"] == "not_ratified"
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["status"] == "unresolved"
+    assert case["attestation"] is None
+    assert "Silêncio não vale como aceite" in case["ratification"]["closed_reason"]
+
+
+def test_an_approved_decision_never_goes_through_ratification(client, monkeypatch):
+    """Sem ressalva, a decisão não vira acordo: a execução é automática e o
+    controle das partes continua sendo a janela de contestação."""
+    _with_reserved_decision(monkeypatch, approved=True)
+    from app.core import procedure
+
+    monkeypatch.setattr(
+        procedure,
+        "judge_decide_case",
+        lambda context: {
+            "outcome": "claimant",
+            "decision": "Procedente.",
+            "confidence": 0.9,
+            "requires_human_review": False,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "review_decision",
+        lambda payload: {
+            "approved": True,
+            "requires_human_review": False,
+            "risks": [],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+
+    case_id, _, _ = prepare_locked_case(client)
+    case = client.get(f"/cases/{case_id}").json()
+
+    assert case["ratification"]["open"] is False
+    assert case["ratification"]["outcome"] is None
+    # Sem chave Ed25519 configurada nestes testes, não há attestation; o que
+    # importa é que a fase de ratificação não foi aberta.
+    assert case["status"] == "reviewed"
+
+    blocked = client.post(
+        f"/cases/{case_id}/ratification",
+        json={"accepted": True},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert blocked.status_code == 409
 
 
 def test_pdf_upload_extracts_text(client):

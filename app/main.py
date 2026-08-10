@@ -70,6 +70,7 @@ from app.db.repository import (
     record_composition_closure,
     record_composition_input,
     record_consent,
+    record_ratification,
     record_submission_closure,
     register_contest,
     respond_to_document as persist_response,
@@ -93,6 +94,7 @@ from app.schemas import (
     EvidenceActionRequest,
     InvitationRequest,
     LoginRequest,
+    RatificationRequest,
     RegisterRequest,
     SubmissionClosureRequest,
 )
@@ -809,6 +811,44 @@ def close_composition(
     return _advance_and_reload(db, case_id)
 
 
+@app.post("/cases/{case_id}/ratification")
+def ratify_decision(
+    case_id: str,
+    payload: RatificationRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """A parte revisa a decisão que a auditoria ressalvou.
+
+    Esta é a revisão humana do procedimento. Ela não cabe a um terceiro — não
+    há terceiro —, e sim a quem é titular do conflito: informadas da ressalva,
+    as duas partes decidem se o resultado vale assim mesmo. Só o aceite das
+    duas destrava a execução; a recusa de qualquer uma encerra o caso sem
+    decisão executável.
+    """
+    case = _case_or_404(db, case_id)
+    actor_party = _actor_party(db, case, x_actor_token)
+    data = case_to_dict(case, include_content=False)
+    if not data["ratification"]["open"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Não há ratificação em aberto neste caso"
+                if not data["ratification"]["outcome"]
+                else "A fase de ratificação já foi encerrada"
+            ),
+        )
+    if data["ratification"][actor_party]["answered"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Você já se manifestou sobre esta decisão",
+        )
+    record_ratification(
+        db, case, actor_party, payload.accepted, payload.reason
+    )
+    return _advance_and_reload(db, case_id)
+
+
 @app.post("/cases/{case_id}/consent")
 def set_case_consent(
     case_id: str,
@@ -1233,6 +1273,17 @@ def contest_case(
         )
     if case_data["contest"]["contested"]:
         return case_data["contest"]
+    # Quem ratificou já exerceu sua revisão sobre o mérito. Contestar depois
+    # seria voltar atrás do próprio aceite — e a ratificação é justamente o
+    # fundamento sobre o qual esta attestation foi emitida.
+    if case_data["ratification"][actor_role]["accepted"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Você ratificou esta decisão. A ratificação é o fundamento da "
+                "attestation e não pode ser contestada em seguida."
+            ),
+        )
 
     window_ends = datetime.fromisoformat(attestation["contest_window_ends_utc"])
     if datetime.now(window_ends.tzinfo) > window_ends:

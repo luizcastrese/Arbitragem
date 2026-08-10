@@ -130,6 +130,26 @@ class CompositionPositionRequest(BaseModel):
     position: str = Field(min_length=1, max_length=10_000)
 
 
+class RatificationRequest(BaseModel):
+    """Manifestação da parte sobre uma decisão que a auditoria ressalvou.
+
+    Aceitar dispensa justificativa; recusar exige, porque a recusa encerra o
+    caso sem decisão executável e o motivo passa a integrar o registro.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    accepted: bool
+    reason: str = Field(default="", max_length=10_000)
+
+    @field_validator("reason")
+    @classmethod
+    def rejection_needs_a_reason(cls, value: str, info) -> str:
+        if info.data.get("accepted") is False and len(value.strip()) < 10:
+            raise ValueError("Informe o motivo da recusa")
+        return value
+
+
 class ContestRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

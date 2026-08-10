@@ -88,8 +88,11 @@ const statusLabels = {
   organized: 'Fatos organizados',
   decided: 'Decisão proferida',
   reviewed: 'Decisão auditada',
+  ratification: 'Aguardando as partes',
+  ratified: 'Ratificada pelas partes',
   attested: 'Decisão assinada',
-  contested: 'Decisão contestada'
+  contested: 'Decisão contestada',
+  unresolved: 'Encerrado sem decisão executável'
 }
 
 export default function App() {
@@ -839,7 +842,7 @@ function CaseWorkspace({
 
       <ProcessSteps currentStage={displayedStage} blockedByAI={unavailable} />
 
-      {caseData.status !== 'reviewed' && (
+      {!['reviewed', 'unresolved'].includes(caseData.status) && (
         <NextAction
           caseData={caseData}
           busy={busy}
@@ -894,7 +897,7 @@ function CaseWorkspace({
         myParty={myParty}
       />
 
-      {caseData.status === 'reviewed' && (
+      {['reviewed', 'unresolved', 'ratified', 'attested'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
 
@@ -1188,6 +1191,24 @@ function NextAction({
       title: 'A decisão está sendo auditada',
       description: 'Uma segunda IA verifica fundamentos, evidências, contradições e aderência às regras.'
     },
+    ratification: {
+      icon: <Gavel size={22} />,
+      label: 'Sua vez',
+      title: 'A auditoria fez ressalva à decisão',
+      description: 'A revisão é de vocês: cada parte diz se aceita o resultado assim mesmo. Sem o aceite dos dois lados, o caso encerra sem decisão executável.'
+    },
+    ratified: {
+      icon: <ShieldCheck size={22} />,
+      label: 'Ratificada',
+      title: 'As duas partes aceitaram o resultado',
+      description: 'A execução passa a se apoiar na ratificação das partes, e não na aprovação automática.'
+    },
+    unresolved: {
+      icon: <AlertTriangle size={22} />,
+      label: 'Encerrado',
+      title: 'O procedimento terminou sem decisão executável',
+      description: 'O registro, o relatório e a cadeia de auditoria continuam íntegros e verificáveis.'
+    },
     attested: {
       icon: <ShieldCheck size={22} />,
       label: 'Janela de contestação',
@@ -1230,6 +1251,15 @@ function NextAction({
           setClaimantResponse={setClaimantResponse}
           setRespondentResponse={setRespondentResponse}
           roles={roles}
+          myParty={myParty}
+        />
+      ) : caseData.status === 'ratification' ? (
+        <RatificationPanel
+          caseData={caseData}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
           myParty={myParty}
         />
       ) : caseData.status === 'draft' ? (
@@ -1337,6 +1367,103 @@ function NextAction({
         />
       )}
     </section>
+  )
+}
+
+function RatificationPanel({ caseData, busy, run, request, actorHeaders, myParty }) {
+  const [reason, setReason] = useState('')
+  const ratification = caseData.ratification || {}
+  const mine = myParty ? ratification[myParty] : null
+  const review = caseData.review || {}
+  const decision = caseData.decision || {}
+
+  const reservations = [
+    !review.approved && 'A auditoria independente não aprovou a decisão.',
+    decision.requires_human_review && 'O agente julgador indicou revisão humana.',
+    review.requires_human_review && 'A auditoria independente indicou revisão humana.'
+  ].filter(Boolean)
+
+  function answer(accepted) {
+    return run(
+      accepted
+        ? 'Registrando o seu aceite da decisão...'
+        : 'Registrando a sua recusa...',
+      () => request(`/cases/${caseData.id}/ratification`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...actorHeaders(caseData.id, myParty)
+        },
+        body: JSON.stringify({ accepted, reason })
+      })
+    )
+  }
+
+  return (
+    <div className="ratification-panel">
+      <div className="blocking-note">
+        <AlertTriangle size={17} />
+        <span>
+          {reservations.join(' ')} Por isso a execução automática está
+          bloqueada. Não há terceiro para revisar: quem decide se o resultado
+          vale assim mesmo são vocês.
+        </span>
+      </div>
+
+      <div className="consent-grid">
+        {['claimant', 'respondent'].map((party) => (
+          <div className={`consent-party ${ratification[party]?.accepted ? 'accepted' : ''}`} key={party}>
+            <div>
+              <span>{partyRoleLabel(party)}</span>
+              <strong>{party === 'claimant' ? caseData.claimant : caseData.respondent}</strong>
+            </div>
+            {ratification[party]?.answered ? (
+              ratification[party]?.accepted
+                ? <em><Check size={14} /> Aceitou</em>
+                : <em><AlertTriangle size={14} /> Recusou</em>
+            ) : (
+              <em><Clock3 size={14} /> Aguardando a parte</em>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {myParty && !mine?.answered && (
+        <>
+          <label className="mini-field full">
+            <span>Motivo (obrigatório para recusar)</span>
+            <textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Se for recusar, explique o que na decisão não se sustenta."
+            />
+          </label>
+          <div className="conciliation-buttons">
+            <button
+              className="button primary"
+              disabled={busy}
+              onClick={() => answer(true)}
+            >
+              <Check size={17} /> Aceito o resultado
+            </button>
+            <button
+              className="button ghost"
+              disabled={busy || reason.trim().length < 10}
+              onClick={() => answer(false)}
+            >
+              Recuso a decisão
+            </button>
+          </div>
+        </>
+      )}
+
+      <small className="consent-note">
+        O silêncio não vale como aceite: se o prazo vencer sem manifestação das
+        duas partes, o caso encerra sem decisão executável. Recusar não é
+        derrota — apenas devolve o conflito a vocês, com o registro íntegro do
+        que foi produzido aqui.
+      </small>
+    </div>
   )
 }
 

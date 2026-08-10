@@ -69,6 +69,9 @@ caso aberto por uma das partes
   -> organização                               (rito)
   -> decisão da IA                             (rito)
   -> auditoria independente                    (rito)
+  -> se a auditoria ressalvou:
+       ratificação pelas duas partes           (parte)
+       ou encerramento sem decisão executável  (rito)
   -> attestation e janela de contestação       (rito)
   -> contestação, se houver                    (parte)
   -> relatório
@@ -104,6 +107,7 @@ O que continua sendo das partes, e só delas:
 - dar ciência e responder, contestar ou renunciar ao material da outra;
 - declarar encerrada a própria produção (`POST /cases/{id}/submission-complete`);
 - registrar a própria posição em cada rodada de composição, ou encerrá-la;
+- ratificar ou recusar uma decisão que a auditoria ressalvou;
 - contestar a decisão dentro da janela.
 
 `POST /cases/{id}/advance` apenas pede ao rito que execute o que já pode ser
@@ -128,6 +132,38 @@ apenas encerra uma oportunidade que foi aberta, comunicada e não exercida. O
 resultado da entrega do aviso entra na cadeia de auditoria (`notice_delivered`,
 `notice_transport`), justamente porque a legitimidade da preclusão depende de a
 oportunidade ter sido comunicada.
+
+### A revisão humana é das partes
+
+Quando a auditoria independente faz ressalva — não aprova a decisão, ou indica
+revisão humana —, a execução automática fica bloqueada. Antes o caso encalhava
+aí: não havia a quem recorrer, e inventar um revisor humano contrariaria a
+premissa do procedimento.
+
+A revisão passa a ser de quem é titular do conflito. O rito abre a fase de
+**ratificação**: informa as duas partes da ressalva concreta e pergunta se o
+resultado vale assim mesmo.
+
+- **as duas aceitam** → a execução é destravada e a attestation é emitida com
+  `basis: "party_ratification"`, registrando de forma assinada que ela se apoia
+  na vontade das partes, e não na aprovação automática. A ressalva continua
+  visível no artefato: a ratificação não a apaga;
+- **qualquer uma recusa** (com motivo, que entra no registro) → o caso encerra
+  como `unresolved`, sem decisão executável;
+- **o prazo vence em silêncio** → encerra como `unresolved`. Ratificar é
+  endossar um resultado que o próprio sistema ressalvou; ninguém é levado a
+  esse endosso por inércia. É o segundo ponto do fluxo, ao lado do
+  consentimento, em que a preclusão não opera a favor do andamento.
+
+Quem ratificou não pode contestar em seguida: a ratificação é o fundamento da
+attestation, e voltar atrás dela seria contradizer o próprio aceite.
+
+**A ratificação supera ressalvas de mérito, nunca a ausência de resultado.**
+Uma decisão inconclusiva ou produzida em modo seguro não tem split a executar, e
+nem o acordo das partes cria um: esses casos encerram direto como `unresolved`,
+com o relatório e a cadeia de auditoria íntegros. Encerrar sem decisão é um
+desfecho legítimo do procedimento, não uma falha — as partes ficam livres para
+buscar outro caminho levando consigo o registro do que foi produzido aqui.
 
 **O consentimento nunca preclui.** Adesão é voluntária: nenhum prazo transforma
 silêncio em aceite. Um caso sem o aceite das duas partes simplesmente não avança,
@@ -231,6 +267,7 @@ Variáveis do arquivo `.env`:
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
 | `CONTRADICTORY_RESPONSE_DAYS` | Dias do prazo de ciência e resposta aberto pelo rito; padrão 7 |
 | `SUBMISSION_CLOSURE_DAYS` | Dias para cada parte encerrar a própria produção; padrão 7 |
+| `RATIFICATION_DAYS` | Dias para as partes ratificarem uma decisão ressalvada; padrão 7 |
 | `COMPOSITION_MAX_ROUNDS` | Teto de rodadas de composição por caso; padrão 5 |
 | `CONTEST_WINDOW_DAYS` | Dias da janela de contestação após a attestation; padrão 7 |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
@@ -289,6 +326,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/composition/position` | Registrar a própria posição na rodada |
 | `POST /cases/{id}/composition/close` | Encerrar a composição |
+| `POST /cases/{id}/ratification` | Ratificar ou recusar decisão ressalvada |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
 | `GET /cases/{id}/retrieve` | Consultar evidências |
 | `POST /cases/{id}/contest` | Contestar a decisão dentro da janela |
@@ -333,7 +371,8 @@ que nenhum ato do procedimento é atribuído a um terceiro humano.
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
-- decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana;
+- decisões inconclusivas encerram o caso sem resultado executável: a
+  plataforma não oferece caminho de mérito além do que produziu;
 - o rito roda de forma síncrona dentro da requisição da parte: um caso que
   destrava várias etapas de uma vez encadeia várias chamadas ao modelo na mesma
   requisição. Antes de exposição pública isso deve virar um worker em segundo

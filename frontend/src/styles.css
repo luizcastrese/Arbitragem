@@ -1110,3 +1110,6 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .operations-card .card-title-row { align-items: flex-start; flex-direction: column; }
   .conclusion-facts, .human-review-note { grid-column: 1; }
 }
+.ratification-panel { display: grid; gap: 13px; margin-top: 14px; }
+.ratification-panel .consent-grid { margin: 0; }
+.ratification-panel .conciliation-buttons { margin-top: 2px; }

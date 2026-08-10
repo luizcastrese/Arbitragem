@@ -25,7 +25,11 @@ from app.agents.conciliator import assess_conciliation
 from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
-from app.core.attestation import AttestationError, build_decision_attestation
+from app.core.attestation import (
+    AttestationError,
+    build_decision_attestation,
+    decision_is_executable,
+)
 from app.core.audit import verify_audit_chain
 from app.core.config import get_settings
 from app.core.manifest import lock_case_manifest
@@ -42,12 +46,15 @@ from app.db.repository import (
     admit_document,
     append_audit,
     case_to_dict,
+    close_unresolved,
     consume_composition_inputs,
     get_case,
     get_document,
     lock_manifest as persist_manifest,
+    open_ratification,
     preclude_response,
     record_submission_closure,
+    resolve_ratification,
     save_nostr_anchor,
     save_stage,
 )
@@ -61,6 +68,7 @@ PARTIES = ("claimant", "respondent")
 RESPONDED_STATUSES = {"answered", "waived", "challenged", "precluded"}
 RESPONSE_DEADLINE_KIND = "contradictory"
 SUBMISSION_DEADLINE_KIND = "submission"
+RATIFICATION_DEADLINE_KIND = "ratification"
 
 # Teto de passos por invocação. Protege contra um agente que insista em
 # recomendar novas rodadas indefinidamente.
@@ -638,6 +646,190 @@ def _review(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
     return {"step": "review_generated", "approved": review.get("approved")}
 
 
+def _audit_reservations(data: Dict[str, Any]) -> List[str]:
+    """Ressalvas que impedem a execução automática e que cabe às partes
+    superar — ou não — ao ratificar."""
+    decision = data["decision"] or {}
+    review = data["review"] or {}
+    reservations = []
+    if not review.get("approved"):
+        reservations.append("A auditoria independente não aprovou a decisão.")
+    if decision.get("requires_human_review"):
+        reservations.append("O agente julgador indicou revisão humana.")
+    if review.get("requires_human_review"):
+        reservations.append("A auditoria independente indicou revisão humana.")
+    return reservations
+
+
+def _open_ratification(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Auditoria com ressalva: quem revisa são as partes.
+
+    O procedimento não tem terceiro humano a quem recorrer, e inventar um
+    revisor contrariaria a própria premissa. Então a decisão ressalvada volta
+    para quem é titular do conflito: cada parte é informada da ressalva e diz
+    se aceita o resultado assim mesmo.
+    """
+    if not data["review"] or data["attestation"]:
+        return None
+    if data["contest"]["contested"]:
+        return None
+    if data["ratification"]["outcome"] or data["ratification"]["open"]:
+        return None
+    if not decision_is_executable(data["decision"], data["review"]):
+        return None
+    reservations = _audit_reservations(data)
+    if not reservations:
+        # Sem ressalva, a execução é automática e a janela de contestação já é
+        # o controle das partes. Ratificar seria transformar decisão em acordo.
+        return None
+
+    open_ratification(db, case, reservations)
+    case = get_case(db, case.id)
+    settings = get_settings()
+    for party in PARTIES:
+        _open_deadline(
+            db,
+            case,
+            party=party,
+            label="Ratificação da decisão com ressalva da auditoria",
+            kind=RATIFICATION_DEADLINE_KIND,
+            reference_id=f"ratification:{party}",
+            days=settings.ratification_days,
+        )
+        create_notification(
+            db,
+            case.id,
+            party,
+            "ratification_opened",
+            "A decisão precisa da sua manifestação",
+            "A auditoria independente fez ressalva à decisão. "
+            + " ".join(reservations)
+            + " Você pode aceitar o resultado assim mesmo ou recusá-lo. "
+            "Sem o aceite das duas partes, o caso encerra sem decisão executável.",
+        )
+    db.commit()
+    return {"step": "ratification_opened", "reservations": reservations}
+
+
+def _resolve_ratification(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Fecha a ratificação quando as duas partes se manifestam, quando uma
+    recusa, ou quando o prazo vence.
+
+    Aqui o silêncio não vale como aceite: ratificar é endossar um resultado que
+    o próprio sistema ressalvou, e ninguém é levado a esse endosso por inércia.
+    Vencido o prazo, o caso encerra sem decisão executável.
+    """
+    ratification = data["ratification"]
+    if not ratification["open"]:
+        return None
+
+    if ratification["rejected_by"]:
+        parties = ", ".join(ratification["rejected_by"])
+        resolve_ratification(
+            db,
+            case,
+            "not_ratified",
+            f"A decisão com ressalva foi recusada por: {parties}.",
+        )
+        _notify_parties(
+            db,
+            case.id,
+            "ratification_resolved",
+            "Caso encerrado sem decisão executável",
+            "A decisão com ressalva não foi ratificada pelas duas partes. "
+            "O registro do procedimento continua íntegro e verificável.",
+        )
+        db.commit()
+        return {"step": "ratification_resolved", "outcome": "not_ratified"}
+
+    if ratification["complete"]:
+        resolve_ratification(
+            db,
+            case,
+            "ratified",
+            "As duas partes aceitaram a decisão apesar da ressalva da auditoria.",
+        )
+        _notify_parties(
+            db,
+            case.id,
+            "ratification_resolved",
+            "Decisão ratificada pelas duas partes",
+            "As duas partes aceitaram o resultado. A execução passa a se apoiar "
+            "nessa ratificação, e não na aprovação automática.",
+        )
+        db.commit()
+        return {"step": "ratification_resolved", "outcome": "ratified"}
+
+    expired = [
+        party
+        for party in PARTIES
+        if not ratification[party]["answered"]
+        and expired_deadline_for_reference(
+            db, case.id, f"ratification:{party}", RATIFICATION_DEADLINE_KIND
+        )
+    ]
+    if expired:
+        resolve_ratification(
+            db,
+            case,
+            "not_ratified",
+            "O prazo de ratificação venceu sem manifestação de: "
+            + ", ".join(expired)
+            + ". Silêncio não vale como aceite de decisão ressalvada.",
+        )
+        _notify_parties(
+            db,
+            case.id,
+            "ratification_resolved",
+            "Caso encerrado sem decisão executável",
+            "O prazo de ratificação venceu sem o aceite das duas partes.",
+        )
+        db.commit()
+        return {"step": "ratification_resolved", "outcome": "not_ratified"}
+    return None
+
+
+def _close_unresolved(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Encerra o caso quando não há resultado executável nem o que ratificar.
+
+    Decisão inconclusiva ou produzida em modo seguro não vira executável por
+    acordo: não existe split a executar. O desfecho honesto é encerrar sem
+    decisão, com o registro íntegro do que foi produzido.
+    """
+    if not data["review"] or data["attestation"]:
+        return None
+    if data["status"] in {"unresolved", "contested"}:
+        return None
+    if data["ratification"]["open"] or data["ratification"]["outcome"]:
+        return None
+    if decision_is_executable(data["decision"], data["review"]):
+        return None
+
+    decision = data["decision"] or {}
+    if decision.get("execution", {}).get("mode") == "safe_fallback":
+        reason = (
+            "A análise por IA não estava disponível: o caso não produziu "
+            "decisão de mérito."
+        )
+    else:
+        reason = (
+            "A decisão é inconclusiva e não tem resultado executável. "
+            "Nem a ratificação das partes criaria um."
+        )
+    close_unresolved(db, case, reason)
+    _notify_parties(
+        db,
+        case.id,
+        "case_closed_unresolved",
+        "Caso encerrado sem decisão executável",
+        reason
+        + " O relatório e a cadeia de auditoria continuam disponíveis e "
+        "verificáveis.",
+    )
+    db.commit()
+    return {"step": "case_closed_unresolved", "reason": reason}
+
+
 def _issue_attestation(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
     """Emite a attestation executável quando ela é cabível. Um caso
     inconclusivo, reprovado na auditoria ou que exige revisão humana
@@ -710,6 +902,9 @@ STEPS: tuple[Callable[[Session, Any, Dict[str, Any]], Optional[Dict]], ...] = (
     _decide,
     _review,
     _issue_attestation,
+    _resolve_ratification,
+    _open_ratification,
+    _close_unresolved,
 )
 
 
@@ -822,6 +1017,23 @@ def pending_actions(data: Dict[str, Any]) -> List[Dict[str, str]]:
                         ),
                     }
                 )
+
+    if data["ratification"]["open"]:
+        for party in PARTIES:
+            if not data["ratification"][party]["answered"]:
+                pending.append(
+                    _with_due(
+                        {
+                            "party": party,
+                            "action": "ratify",
+                            "detail": (
+                                "A auditoria fez ressalva à decisão. Aceitar o "
+                                "resultado assim mesmo ou recusá-lo."
+                            ),
+                        },
+                        f"ratification:{party}",
+                    )
+                )
     return pending
 
 
@@ -836,6 +1048,11 @@ def state(data: Dict[str, Any]) -> Dict[str, Any]:
         "waiting_on": sorted({item["party"] for item in pending}),
         "attestation_issued": bool(data["attestation"]),
         "contested": data["contest"]["contested"],
+        "ratification": {
+            "open": data["ratification"]["open"],
+            "outcome": data["ratification"]["outcome"],
+            "closed_reason": data["ratification"]["closed_reason"],
+        },
     }
 
 

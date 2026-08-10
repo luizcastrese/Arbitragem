@@ -131,7 +131,8 @@ def _reviewed_safe_case(client):
             ).status_code
             == 200
         )
-    assert client.get(f"/cases/{case_id}").json()["status"] == "reviewed"
+    # Sem IA, o caso termina explicitamente sem decisão executável.
+    assert client.get(f"/cases/{case_id}").json()["status"] == "unresolved"
     return case_id
 
 
@@ -190,3 +191,184 @@ def test_stateless_verify_rejects_garbage(client):
     assert response.status_code == 200
     body = response.json()
     assert body["valid"] is False
+
+
+def _reserved_decision_case(client, monkeypatch, *, outcome="partial"):
+    """Caso com decisão executável mas ressalvada pela auditoria: a execução
+    automática está bloqueada e só a ratificação das partes a destrava."""
+    from app.core import procedure
+
+    monkeypatch.setattr(
+        procedure,
+        "assess_conciliation",
+        lambda context, round_number: {
+            "round_number": round_number,
+            "convergence": "not_detected",
+            "recommended_path": "adjudication",
+            "neutral_summary": "Sem convergência.",
+            "common_interests": [],
+            "negotiable_issues": [],
+            "non_negotiable_issues": [],
+            "possible_terms": [],
+            "reasoning": [],
+            "confidence": 0.6,
+            "continue_recommended": False,
+            "recommended_additional_rounds": 0,
+            "next_round_focus": "",
+            "stop_reason": "Posições esgotadas.",
+            "requires_party_consent": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "organizer_organize_case",
+        lambda documents, chunks: {
+            "factual_overview": "Entrega parcial.",
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "judge_decide_case",
+        lambda context: {
+            "outcome": outcome,
+            "partial_claimant_bps": 6000,
+            "decision": "Divisão proporcional à entrega comprovada.",
+            "confidence": 0.55,
+            "requires_human_review": True,
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    monkeypatch.setattr(
+        procedure,
+        "review_decision",
+        lambda payload: {
+            "approved": False,
+            "requires_human_review": True,
+            "risks": ["Confiança baixa na proporção adotada."],
+            "execution": {"mode": "openai", "model": "fake", "reason": None},
+        },
+    )
+    return _reviewed_case_id(client)
+
+
+def _reviewed_case_id(client):
+    response = client.post(
+        "/cases",
+        json={
+            "title": "Entrega parcial de software",
+            "claimant": "Empresa Alfa",
+            "respondent": "Fornecedor Beta",
+            "creator_role": "claimant",
+        },
+    )
+    case = response.json()
+    case_id = case["id"]
+    CASE_CREDENTIALS[case_id] = case["access_credentials"]
+    for party in ("claimant", "respondent"):
+        client.post(
+            f"/cases/{case_id}/consent",
+            json={"party": party, "accepted": True},
+            headers=_headers(case_id, party),
+        )
+    document = client.post(
+        f"/cases/{case_id}/documents/text",
+        json={
+            "name": "contrato.txt",
+            "content": "Entrega até 30 de junho. Alegação de entrega parcial.",
+            "submitted_by": "claimant",
+            "material_type": "evidence",
+            "purpose": "Comprovar prazo e alegação.",
+        },
+        headers=_headers(case_id, "claimant"),
+    ).json()["document"]
+    client.post(
+        f"/cases/{case_id}/documents/{document['id']}/acknowledge",
+        json={"party": "respondent"},
+        headers=_headers(case_id, "respondent"),
+    )
+    client.post(
+        f"/cases/{case_id}/documents/{document['id']}/respond",
+        json={
+            "party": "respondent",
+            "response_status": "answered",
+            "response_text": "A empresa contesta a extensão da entrega parcial.",
+        },
+        headers=_headers(case_id, "respondent"),
+    )
+    for party in ("claimant", "respondent"):
+        client.post(
+            f"/cases/{case_id}/submission-complete",
+            json={"closed": True},
+            headers=_headers(case_id, party),
+        )
+    return case_id
+
+
+def test_party_ratification_unlocks_execution_and_is_recorded_in_the_artifact(
+    client, monkeypatch
+):
+    """A ratificação das duas partes supera a ressalva da auditoria — e a
+    attestation diz, de forma assinada, que a execução se apoia nela."""
+    case_id = _reserved_decision_case(client, monkeypatch)
+    assert client.get(f"/cases/{case_id}").json()["status"] == "ratification"
+
+    for party in ("claimant", "respondent"):
+        assert (
+            client.post(
+                f"/cases/{case_id}/ratification",
+                json={"accepted": True},
+                headers=_headers(case_id, party),
+            ).status_code
+            == 200
+        )
+
+    attestation = client.get(f"/cases/{case_id}/attestation").json()
+    assert attestation["basis"] == "party_ratification"
+    assert attestation["ratification"]["ratified"] is True
+    assert attestation["ratification"]["claimant_at"]
+    assert attestation["ratification"]["respondent_at"]
+    assert attestation["decision"]["split"] == {
+        "claimant_bps": 6000,
+        "respondent_bps": 4000,
+    }
+    # A ressalva continua visível no artefato: a ratificação não a apaga.
+    assert attestation["review"]["approved"] is False
+
+    verified = client.post(
+        "/attestations/verify", json={"attestation": attestation}
+    ).json()
+    assert verified["valid"] is True
+
+
+def test_a_party_that_ratified_cannot_then_contest(client, monkeypatch):
+    case_id = _reserved_decision_case(client, monkeypatch)
+    for party in ("claimant", "respondent"):
+        client.post(
+            f"/cases/{case_id}/ratification",
+            json={"accepted": True},
+            headers=_headers(case_id, party),
+        )
+    assert client.get(f"/cases/{case_id}/attestation").status_code == 200
+
+    contested = client.post(
+        f"/cases/{case_id}/contest",
+        json={"reason": "Mudei de ideia sobre a proporção adotada."},
+        headers=_headers(case_id, "claimant"),
+    )
+    assert contested.status_code == 409
+    assert "ratificou" in contested.json()["detail"]
+
+
+def test_ratification_never_makes_an_inconclusive_decision_executable(
+    client, monkeypatch
+):
+    """A ratificação supera ressalvas de mérito, nunca a ausência de
+    resultado: decisão inconclusiva não tem split a executar."""
+    case_id = _reserved_decision_case(client, monkeypatch, outcome="inconclusive")
+
+    case = client.get(f"/cases/{case_id}").json()
+    assert case["status"] == "unresolved"
+    assert case["ratification"]["open"] is False
+    assert client.get(f"/cases/{case_id}/attestation").status_code == 404
