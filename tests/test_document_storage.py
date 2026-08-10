@@ -107,6 +107,7 @@ def _create_case(client):
             "title": "Disputa com documentos",
             "claimant": "Cliente",
             "respondent": "Empresa",
+            "creator_role": "claimant",
         },
     )
     assert response.status_code == 201

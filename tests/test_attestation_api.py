@@ -70,6 +70,7 @@ def _reviewed_safe_case(client):
             "title": "Entrega parcial de software",
             "claimant": "Empresa Alfa",
             "respondent": "Fornecedor Beta",
+            "creator_role": "claimant",
         },
     )
     assert response.status_code == 201
@@ -119,43 +120,18 @@ def _reviewed_safe_case(client):
         ).status_code
         == 200
     )
-    assert (
-        client.post(
-            f"/cases/{case_id}/documents/{document['id']}/admit",
-            headers=_headers(case_id, "manager"),
-        ).status_code
-        == 200
-    )
-    assert (
-        client.post(
-            f"/cases/{case_id}/lock", headers=_headers(case_id, "manager")
-        ).status_code
-        == 200
-    )
-    assert (
-        client.post(
-            f"/cases/{case_id}/conciliation", headers=_headers(case_id, "manager")
-        ).status_code
-        == 200
-    )
-    assert (
-        client.post(
-            f"/cases/{case_id}/organize", headers=_headers(case_id, "manager")
-        ).status_code
-        == 200
-    )
-    assert (
-        client.post(
-            f"/cases/{case_id}/decide", headers=_headers(case_id, "manager")
-        ).status_code
-        == 200
-    )
-    assert (
-        client.post(
-            f"/cases/{case_id}/review", headers=_headers(case_id, "manager")
-        ).status_code
-        == 200
-    )
+    # Admissão, trava, composição, organização, decisão e auditoria são atos
+    # do próprio rito: basta as duas partes encerrarem a produção de material.
+    for party in ("claimant", "respondent"):
+        assert (
+            client.post(
+                f"/cases/{case_id}/submission-complete",
+                json={"closed": True},
+                headers=_headers(case_id, party),
+            ).status_code
+            == 200
+        )
+    assert client.get(f"/cases/{case_id}").json()["status"] == "reviewed"
     return case_id
 
 
@@ -169,11 +145,9 @@ def test_signing_key_is_published(client):
 
 
 def test_safe_mode_case_never_yields_attestation(client):
+    """O rito leva o caso até a auditoria sozinho, mas não emite attestation
+    para uma decisão inconclusiva — nem quando é ele próprio quem conduz."""
     case_id = _reviewed_safe_case(client)
-    response = client.post(
-        f"/cases/{case_id}/attestation", headers=_headers(case_id, "manager")
-    )
-    assert response.status_code == 409
     assert (
         client.get(
             f"/cases/{case_id}/attestation",
@@ -181,6 +155,11 @@ def test_safe_mode_case_never_yields_attestation(client):
         ).status_code
         == 404
     )
+    advanced = client.post(
+        f"/cases/{case_id}/advance", headers=_headers(case_id, "claimant")
+    )
+    assert advanced.status_code == 200
+    assert advanced.json()["attestation_issued"] is False
 
 
 def test_contest_requires_attestation_and_party_credential(client):
@@ -193,11 +172,12 @@ def test_contest_requires_attestation_and_party_credential(client):
     )
     assert response.status_code == 409
 
-    # Gestor não pode contestar
+    # Sem credencial de parte, contestar é 403. Não há terceiro no caso que
+    # pudesse contestar em nome de alguém.
     response = client.post(
         f"/cases/{case_id}/contest",
         json={"reason": "Tentativa indevida de contestação."},
-        headers=_headers(case_id, "manager"),
+        headers={"X-Actor-Token": "credencial-que-nao-pertence-ao-caso"},
     )
     assert response.status_code == 403
 

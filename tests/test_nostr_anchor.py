@@ -215,7 +215,7 @@ def test_save_nostr_anchor_does_not_touch_case_status():
             respondent="Empresa",
             claimant_token_hash="x",
             respondent_token_hash="y",
-            manager_token_hash="z",
+            created_by="claimant",
         )
         status_before = case.status
 

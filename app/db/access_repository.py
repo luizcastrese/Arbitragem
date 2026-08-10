@@ -200,6 +200,7 @@ def create_deadline(
     kind: str,
     assigned_to: str,
     due_at: datetime,
+    reference_id: Optional[str] = None,
 ) -> Deadline:
     deadline = Deadline(
         id=str(uuid.uuid4()),
@@ -207,12 +208,71 @@ def create_deadline(
         label=label.strip(),
         kind=kind.strip(),
         assigned_to=assigned_to,
+        reference_id=reference_id,
         due_at=due_at,
     )
     db.add(deadline)
     db.commit()
     db.refresh(deadline)
     return deadline
+
+
+def deadline_exists_for_reference(
+    db: Session,
+    case_id: str,
+    reference_id: str,
+    kind: str,
+) -> bool:
+    return (
+        db.query(Deadline)
+        .filter(
+            Deadline.case_id == case_id,
+            Deadline.reference_id == reference_id,
+            Deadline.kind == kind,
+        )
+        .first()
+        is not None
+    )
+
+
+def complete_deadlines_for_reference(
+    db: Session,
+    case_id: str,
+    reference_id: str,
+) -> list[Deadline]:
+    """Fecha os prazos abertos ligados a um objeto do procedimento. É o rito
+    dando baixa no próprio prazo assim que o ato esperado acontece."""
+    deadlines = (
+        db.query(Deadline)
+        .filter(
+            Deadline.case_id == case_id,
+            Deadline.reference_id == reference_id,
+            Deadline.completed_at.is_(None),
+        )
+        .all()
+    )
+    for deadline in deadlines:
+        deadline.completed_at = utc_now()
+    if deadlines:
+        db.commit()
+    return deadlines
+
+
+def case_roles_taken(db: Session, case_id: str) -> set[str]:
+    return {
+        row.role
+        for row in db.query(CaseMember).filter(CaseMember.case_id == case_id)
+    }
+
+
+def pending_invitation_roles(db: Session, case_id: str) -> set[str]:
+    return {
+        row.role
+        for row in db.query(Invitation).filter(
+            Invitation.case_id == case_id,
+            Invitation.status == "pending",
+        )
+    }
 
 
 def deadline_to_dict(deadline: Deadline) -> dict:
@@ -228,6 +288,7 @@ def deadline_to_dict(deadline: Deadline) -> dict:
         "label": deadline.label,
         "kind": deadline.kind,
         "assigned_to": deadline.assigned_to,
+        "reference_id": deadline.reference_id,
         "due_at": deadline.due_at.isoformat(),
         "completed_at": deadline.completed_at.isoformat() if deadline.completed_at else None,
         "status": status,

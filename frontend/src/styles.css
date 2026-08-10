@@ -824,6 +824,22 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #71
 .deadline-row.completed { opacity: .7; }
 .deadline-row small { color: var(--muted); font-size: 8px; }
 .empty-inline { display: block; padding: 10px; color: var(--muted); font-size: 9px; text-align: center; }
+.submission-state { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.submission-state .deadline-row { margin-bottom: 0; }
+.procedure-running { display: grid; gap: 8px; justify-items: start; margin-top: 14px; }
+.procedure-running p { margin: 0; color: var(--ink); font-size: 12px; }
+.procedure-running small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.waiting-slot {
+  display: flex;
+  align-items: center;
+  min-height: 88px;
+  padding: 10px 11px;
+  background: #f4f7f3;
+  border: 1px dashed #d6ded4;
+  border-radius: 9px;
+}
+.waiting-slot em { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font-size: 10px; font-style: normal; }
+.admission-note { display: block; margin-top: 9px; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .card-title-row { justify-content: space-between; gap: 15px; }
 .card-title-row h3 { margin: 5px 0 0; font-size: 18px; }
 .locked-badge, .verified {
