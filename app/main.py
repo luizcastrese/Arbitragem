@@ -1236,6 +1236,33 @@ def verify_manifest(
     }
 
 
+def _anchors_consistent(events: List[Dict], anchors: List[Dict]) -> bool:
+    """Confere a cadeia atual contra cada topo já ancorado publicamente.
+
+    Uma reescrita completa da cadeia no banco continua passando em
+    `verify_audit_chain` — o encadeamento é recalculável por qualquer um, já
+    que não há segredo nele. O que não é recalculável é o que já foi publicado:
+    o evento na posição ancorada tem que exibir exatamente o hash que a âncora
+    registrou. Se divergir, a cadeia de hoje não é a de então.
+
+    Continua sendo uma verificação local, e um adversário com escrita no banco
+    pode reescrever também as âncoras guardadas aqui. Contra isso vale a cópia
+    no relay, fora do alcance da plataforma — por isso `head_hash` e os
+    `event_id` das âncoras são devolvidos junto: é o que permite a um terceiro
+    refazer esta mesma conferência sem depender deste servidor.
+    """
+    for anchor in anchors:
+        position = anchor.get("event_count")
+        expected = anchor.get("audit_head_hash")
+        if not position or not expected:
+            continue
+        if position > len(events):
+            return False
+        if events[position - 1].get("event_hash") != expected:
+            return False
+    return True
+
+
 @app.get("/cases/{case_id}/audit")
 def get_audit(
     case_id: str,
@@ -1244,9 +1271,23 @@ def get_audit(
 ):
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
-    events = case_to_dict(case, include_content=False)["audit_log"]
+    data = case_to_dict(case, include_content=False)
+    events = data["audit_log"]
     valid, errors = verify_audit_chain(events)
-    return {"valid": valid, "errors": errors, "events": events}
+    anchors = data["audit_anchors"]
+    return {
+        "valid": valid,
+        "errors": errors,
+        # O topo é o que as âncoras públicas comprometem. Um verificador
+        # externo compara este valor com o que está no relay: se a cadeia foi
+        # reescrita por inteiro no banco — algo que a verificação local não
+        # detecta, por não haver segredo nela —, os dois deixam de bater.
+        "head_hash": events[-1]["event_hash"] if events else "",
+        "event_count": len(events),
+        "anchors": anchors,
+        "anchors_consistent": _anchors_consistent(events, anchors),
+        "events": events,
+    }
 
 
 @app.get("/cases/{case_id}/chunks")

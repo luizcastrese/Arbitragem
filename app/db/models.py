@@ -43,6 +43,8 @@ class Case(Base):
     review_json = Column(Text, nullable=True)
     attestation_json = Column(Text, nullable=True)
     nostr_anchor_json = Column(Text, nullable=True)
+    # Âncoras públicas do topo da cadeia de auditoria (lista, uma por marco).
+    audit_anchors_json = Column(Text, nullable=True)
     escrow_id = Column(String, nullable=True)
     contested_at = Column(String, nullable=True)
     contested_by = Column(String, nullable=True)

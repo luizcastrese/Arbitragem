@@ -261,6 +261,7 @@ def case_to_dict(
         "review": _json_load(case.review_json),
         "attestation": _json_load(case.attestation_json),
         "nostr_anchor": _json_load(case.nostr_anchor_json),
+        "audit_anchors": _json_load(case.audit_anchors_json) or [],
         "escrow_id": case.escrow_id,
         "contest": {
             "contested": bool(case.contested_at),
@@ -856,6 +857,36 @@ def save_nostr_anchor(db: Session, case: Case, anchor: Dict[str, Any]) -> Case:
         {
             "event_id": anchor.get("event_id"),
             "relays": anchor.get("relays"),
+            "actor": "procedure",
+        },
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_audit_anchor(db: Session, case: Case, anchor: Dict[str, Any]) -> Case:
+    """Acrescenta uma âncora do topo da cadeia de auditoria ao histórico.
+
+    As âncoras se acumulam em vez de se substituírem: cada uma congela o topo
+    de um momento do procedimento, e é a sequência delas que permite dizer até
+    onde a cadeia já estava publicamente comprometida.
+
+    O evento de auditoria correspondente entra *depois* da âncora — ele muda o
+    topo que acabou de ser ancorado, e é por isso que a próxima âncora sempre
+    encontra a cadeia mais adiantada do que a anterior deixou.
+    """
+    anchors = _json_load(case.audit_anchors_json) or []
+    anchors.append(anchor)
+    case.audit_anchors_json = _json_dump(anchors)
+    append_audit(
+        db,
+        case,
+        "audit_chain_anchored",
+        {
+            "event_id": anchor.get("event_id"),
+            "relays": anchor.get("relays"),
+            "audit_head_hash": anchor.get("audit_head_hash"),
+            "event_count": anchor.get("event_count"),
             "actor": "procedure",
         },
     )

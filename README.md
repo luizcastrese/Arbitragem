@@ -39,6 +39,8 @@ cadeia de auditoria encadeada por hashes.
 - Structured Outputs pela Responses API;
 - manifesto imutável assinado com HMAC-SHA256;
 - verificação do manifesto e da cadeia de auditoria;
+- ancoragem pública do topo da cadeia de auditoria em relays Nostr, na trava do
+  manifesto e no encerramento do caso;
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
@@ -290,7 +292,7 @@ Variáveis do arquivo `.env`:
 | `DOCUMENT_S3_ENDPOINT_URL` / `DOCUMENT_S3_REGION` | Endpoint e região S3-compatíveis |
 | `DOCUMENT_ENCRYPTION_KEY` | Chave AES-256-GCM (base64 de 32 bytes) para cifrar documentos |
 | `DOWNLOAD_URL_TTL_SECONDS` | Validade dos links de download assinados |
-| `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations em relays Nostr; opcional |
+| `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations e o topo da auditoria em relays Nostr; opcional |
 | `NOSTR_RELAYS` | Relays Nostr (`wss://...`, separados por vírgula) para a âncora pública |
 
 Gere um segredo local:
@@ -335,7 +337,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
 | `GET /cases/{id}/retrieve` | Consultar evidências |
 | `POST /cases/{id}/contest` | Contestar a decisão dentro da janela |
-| `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
+| `GET /cases/{id}/audit` | Verificar cadeia de auditoria, com o topo e as âncoras públicas |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
 | `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
 
@@ -376,6 +378,14 @@ que nenhum ato do procedimento é atribuído a um terceiro humano.
   falta rotação de chaves e um cofre dedicado;
 - prompts e avaliações ainda precisam de versionamento formal;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
+- a cadeia de auditoria é encadeada por SHA-256 sem segredo: ela detecta
+  adulteração parcial, mas quem tiver escrita no banco pode reescrevê-la
+  inteira e recalcular os hashes. Contra isso vale a âncora pública — o topo
+  da cadeia é publicado em relays na trava e no encerramento, e `GET
+  /cases/{id}/audit` devolve `head_hash`, `anchors` e `anchors_consistent`
+  para que a conferência possa ser refeita contra o relay, sem depender deste
+  servidor. Sem `NOSTR_RELAYS` configurado não há âncora, e a cadeia volta a
+  valer só dentro da plataforma;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;

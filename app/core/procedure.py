@@ -33,7 +33,7 @@ from app.core.attestation import (
 from app.core.audit import verify_audit_chain
 from app.core.config import get_settings
 from app.core.manifest import lock_case_manifest
-from app.core.nostr_anchor import publish_attestation_anchor
+from app.core.nostr_anchor import publish_attestation_anchor, publish_audit_anchor
 from app.core.email import deliver_deadline_email
 from app.db.access_repository import (
     complete_deadlines_for_reference,
@@ -55,6 +55,7 @@ from app.db.repository import (
     preclude_response,
     record_submission_closure,
     resolve_ratification,
+    save_audit_anchor,
     save_nostr_anchor,
     save_stage,
 )
@@ -73,6 +74,10 @@ RATIFICATION_DEADLINE_KIND = "ratification"
 # Teto de passos por invocação. Protege contra um agente que insista em
 # recomendar novas rodadas indefinidamente.
 _MAX_STEPS = 32
+
+# Estados em que o procedimento não avança mais por si: é neles que o topo da
+# cadeia de auditoria é ancorado pela última vez.
+TERMINAL_STATUSES = {"attested", "unresolved"}
 
 
 def counterparty(party: str) -> str:
@@ -889,6 +894,55 @@ def _issue_attestation(db: Session, case, data: Dict[str, Any]) -> Optional[Dict
     }
 
 
+def _anchor_audit_chain(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Publica o topo da cadeia de auditoria nos marcos do procedimento.
+
+    A cadeia local prova encadeamento, não origem: sem segredo nenhum, quem
+    tiver escrita no banco reescreve todos os eventos, recalcula os hashes e a
+    verificação volta a passar. Ancorar o topo em relays que a plataforma não
+    controla é o que transforma essa reescrita em algo detectável — a cópia
+    pública de então deixa de bater com a cadeia de agora.
+
+    Ancora em dois momentos, e não a cada evento: a trava do manifesto, que
+    fecha a fase de produção, e o encerramento do caso, que fecha o resto.
+    Cada topo ancorado se compromete com toda a cadeia que veio antes dele,
+    então os dois marcos cobrem o procedimento inteiro.
+
+    Falha de relay não interrompe nada: o passo simplesmente não registra
+    âncora, e uma chamada posterior de `advance` tenta de novo.
+    """
+    if not get_settings().nostr_anchor_enabled:
+        return None
+    if not case.manifest_locked:
+        return None
+
+    events = data["audit_log"]
+    if not events:
+        return None
+    chain_valid, _ = verify_audit_chain(events)
+    if not chain_valid:
+        # Ancorar uma cadeia já inválida daria aparência pública de integridade
+        # a um registro que não a tem.
+        return None
+
+    closed = case.status in TERMINAL_STATUSES or data["contest"]["contested"]
+    milestone = "case_closed" if closed else "manifest_locked"
+    anchored = data["audit_anchors"]
+    if any(item.get("milestone") == milestone for item in anchored):
+        return None
+
+    anchor = publish_audit_anchor(case.id, events)
+    if not anchor:
+        return None
+
+    save_audit_anchor(db, get_case(db, case.id), {**anchor, "milestone": milestone})
+    return {
+        "step": "audit_chain_anchored",
+        "milestone": milestone,
+        "event_count": anchor.get("event_count"),
+    }
+
+
 STEPS: tuple[Callable[[Session, Any, Dict[str, Any]], Optional[Dict]], ...] = (
     _preclude_expired_responses,
     _admit_ready_material,
@@ -897,6 +951,7 @@ STEPS: tuple[Callable[[Session, Any, Dict[str, Any]], Optional[Dict]], ...] = (
     _preclude_expired_submission_closures,
     _open_submission_deadlines,
     _lock_manifest,
+    _anchor_audit_chain,
     _run_composition_round,
     _organize,
     _decide,
