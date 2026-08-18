@@ -190,6 +190,7 @@ def test_production_forces_auth_and_disables_role_tokens(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "a-very-long-production-secret-value")
     monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://valinor.exemplo.com")
     config.get_settings.cache_clear()
     try:
         settings = config.get_settings()

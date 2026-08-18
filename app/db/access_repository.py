@@ -369,3 +369,37 @@ def notification_to_dict(notification: Notification) -> dict:
         "read_at": notification.read_at.isoformat() if notification.read_at else None,
         "created_at": notification.created_at.isoformat(),
     }
+
+
+def get_invitation(db: Session, case_id: str, invitation_id: str) -> Optional[Invitation]:
+    return (
+        db.query(Invitation)
+        .filter(Invitation.case_id == case_id, Invitation.id == invitation_id)
+        .one_or_none()
+    )
+
+
+def reissue_invitation(
+    db: Session,
+    invitation: Invitation,
+    invited_by_user_id: Optional[str],
+) -> tuple[str, Invitation]:
+    """Substitui um convite pendente por outro, com token novo.
+
+    O token só existe em claro no instante em que é gerado — o banco guarda
+    apenas o hash. Quem convidou e perdeu o link não tem como recuperá-lo, e
+    sem reemissão o caso morre esperando uma contraparte que nunca recebeu o
+    convite. O convite antigo é revogado no mesmo ato para que nunca haja dois
+    caminhos de entrada válidos para o mesmo papel.
+    """
+    if invitation.status != "pending":
+        raise ValueError("Só é possível reemitir um convite pendente")
+    invitation.status = "superseded"
+    db.commit()
+    return create_invitation(
+        db,
+        invitation.case_id,
+        invitation.email,
+        invitation.role,
+        invited_by_user_id,
+    )

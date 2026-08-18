@@ -819,6 +819,55 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #71
 .invite-link { display: grid; gap: 5px; margin-top: 9px; }
 .invite-link span { color: var(--green-700); font-size: 9px; font-weight: 750; }
 .invite-link input { min-height: 35px; color: #4f5d53; background: #eef5ec; font-size: 9px; }
+.invite-issued { display: grid; gap: 9px; margin-top: 11px; }
+.invite-delivery {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f7faf6;
+  color: var(--ink);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.invite-delivery svg { flex: none; margin-top: 1px; color: var(--green-700); }
+.invite-actions { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.invite-actions small { color: var(--muted); font-size: 8px; line-height: 1.45; }
+.invite-pending {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fffaf3;
+}
+.invite-pending svg { flex: none; color: #a87b3f; }
+.invite-pending div { flex: 1 1 190px; display: grid; gap: 2px; }
+.invite-pending strong { font-size: 9px; }
+.invite-pending span { color: var(--muted); font-size: 8px; line-height: 1.5; }
+.material-reader { display: grid; gap: 8px; margin-top: 10px; }
+.material-reader-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.material-reader-error { color: #a1443a; font-size: 9px; }
+.material-content {
+  max-height: 260px;
+  margin: 0;
+  padding: 11px 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfcfa;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .deadline-list { max-height: 155px; overflow: auto; }
 .deadline-row.overdue { border-color: #e7c8c3; background: #fff7f5; }
 .deadline-row.completed { opacity: .7; }

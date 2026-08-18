@@ -915,14 +915,28 @@ function CaseWorkspace({
 }
 
 function OperationsCard({ caseData, busy, run, request, actorHeaders, myParty }) {
-  const [inviteLink, setInviteLink] = useState('')
+  const [issuedInvite, setIssuedInvite] = useState(null)
+  const [copied, setCopied] = useState(false)
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
   const counterparty = myParty === 'claimant' ? 'respondent' : 'claimant'
   const counterpartyPresent = participants.some(
     (participant) => participant.role === counterparty
   )
-  const canInvite = Boolean(myParty) && !counterpartyPresent
+  const pendingInvitation = (caseData.invitations || []).find(
+    (item) => item.status === 'pending' && item.role === counterparty
+  )
+  const canInvite = Boolean(myParty) && !counterpartyPresent && !pendingInvitation
+
+  function keepInvite(data) {
+    setIssuedInvite({
+      email: data.email,
+      url: data.acceptance_url || `${window.location.origin}${data.acceptance_path}`,
+      delivery: data.email_delivery || {}
+    })
+    setCopied(false)
+    return data
+  }
 
   async function invite(event) {
     event.preventDefault()
@@ -934,10 +948,29 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, myParty })
         headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, myParty) },
         body: JSON.stringify({ email: form.get('email'), role: counterparty })
       })
-      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
       formElement.reset?.()
-      return data
+      return keepInvite(data)
     })
+  }
+
+  async function resendInvite() {
+    await run('Gerando um link novo para a contraparte...', async () => keepInvite(
+      await request(
+        `/cases/${caseData.id}/invitations/${pendingInvitation.id}/resend`,
+        { method: 'POST', headers: actorHeaders(caseData.id, myParty) }
+      )
+    ))
+  }
+
+  async function copyInviteLink() {
+    try {
+      await navigator.clipboard.writeText(issuedInvite.url)
+      setCopied(true)
+    } catch {
+      // Sem permissão de área de transferência o link continua visível e
+      // selecionável no campo abaixo.
+      setCopied(false)
+    }
   }
 
   async function downloadReport() {
@@ -989,11 +1022,66 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, myParty })
               Convidar a contraparte
             </button>
           </form>}
-          {inviteLink && (
-            <label className="invite-link">
-              <span>Link protegido para envio</span>
-              <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
-            </label>
+          {issuedInvite && (
+            <div className="invite-issued">
+              <div className="invite-delivery">
+                {issuedInvite.delivery.delivered ? (
+                  <>
+                    <Check size={15} />
+                    <span>
+                      Convite enviado por e-mail para <strong>{issuedInvite.email}</strong>.
+                      Se não chegar, o link abaixo serve para qualquer canal.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={15} />
+                    <span>
+                      O envio automático de e-mail não está disponível
+                      {issuedInvite.delivery.error ? ' no momento' : ''}.
+                      Entregue o link abaixo a <strong>{issuedInvite.email}</strong> por
+                      um canal que você já use.
+                    </span>
+                  </>
+                )}
+              </div>
+              <label className="invite-link">
+                <span>Link de acesso da contraparte</span>
+                <input
+                  value={issuedInvite.url}
+                  readOnly
+                  onFocus={(event) => event.target.select()}
+                />
+              </label>
+              <div className="invite-actions">
+                <button className="button secondary compact" onClick={copyInviteLink}>
+                  {copied ? <><Check size={15} /> Link copiado</> : 'Copiar link'}
+                </button>
+                <small>
+                  Só quem tiver uma conta com esse e-mail consegue usá-lo, e ele
+                  expira em 7 dias.
+                </small>
+              </div>
+            </div>
+          )}
+          {pendingInvitation && !issuedInvite && (
+            <div className="invite-pending">
+              <Clock3 size={16} />
+              <div>
+                <strong>Convite pendente para {pendingInvitation.email}</strong>
+                <span>
+                  Enquanto a contraparte não entrar, o caso não avança. Se o link
+                  se perdeu, gere outro — o anterior deixa de valer.
+                </span>
+              </div>
+              <button
+                className="button secondary compact"
+                onClick={resendInvite}
+                disabled={busy || !myParty}
+              >
+                Gerar link novo
+              </button>
+            </div>
           )}
           {!myParty && <small>Só as partes do caso podem convidar.</small>}
           {myParty && counterpartyPresent && (
@@ -1808,6 +1896,13 @@ function DocumentsCard({
               </small>
             )}
 
+            <MaterialReader
+              caseId={caseData.id}
+              document={document}
+              busy={busy}
+              request={request}
+            />
+
             {!locked && roles[document.counterparty] && !document.acknowledged_at && (
               <button
                 className="button secondary compact"
@@ -1916,6 +2011,66 @@ function DocumentsCard({
       )
     )
   }
+}
+
+function MaterialReader({ caseId, document, busy, request }) {
+  const [open, setOpen] = useState(false)
+  const [content, setContent] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [failure, setFailure] = useState('')
+
+  async function toggle() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setOpen(true)
+    if (content) return
+    setLoading(true)
+    setFailure('')
+    try {
+      const data = await request(`/cases/${caseId}/documents/${document.id}/content`)
+      setContent(data.content || '')
+    } catch (err) {
+      setFailure(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function openOriginal() {
+    setFailure('')
+    try {
+      const data = await request(
+        `/cases/${caseId}/documents/${document.id}/original-url`,
+        { method: 'POST' }
+      )
+      window.open(data.url, '_blank', 'noopener')
+    } catch (err) {
+      setFailure(err.message)
+    }
+  }
+
+  return (
+    <div className="material-reader">
+      <div className="material-reader-actions">
+        <button className="button ghost compact" onClick={toggle} disabled={busy}>
+          <FileText size={15} /> {open ? 'Fechar o material' : 'Ler o material'}
+        </button>
+        {document.has_original && (
+          <button className="button ghost compact" onClick={openOriginal} disabled={busy}>
+            <Download size={15} /> Baixar o arquivo original
+          </button>
+        )}
+      </div>
+      {failure && <small className="material-reader-error">{failure}</small>}
+      {open && (
+        loading
+          ? <small>Carregando o teor do material...</small>
+          : <pre className="material-content">{content}</pre>
+      )}
+    </div>
+  )
 }
 
 function EvidenceState({ done, label }) {

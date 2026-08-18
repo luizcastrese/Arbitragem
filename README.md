@@ -42,7 +42,10 @@ cadeia de auditoria encadeada por hashes.
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
-- convites por e-mail transacional (SMTP) com fallback para log quando não configurado;
+- convites por e-mail transacional (SMTP), com o link de aceite sempre
+  devolvido a quem convidou e reemissão quando o link se perde;
+- teor integral do material acessível a quem participa do caso, antes da
+  ciência e da resposta;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
@@ -276,7 +279,7 @@ Variáveis do arquivo `.env`:
 | `RATE_LIMIT_ENABLED` | Liga o rate limiting por IP; padrão ligado em produção |
 | `RATE_LIMIT_MAX_REQUESTS` | Requisições permitidas por janela e por IP |
 | `RATE_LIMIT_WINDOW_SECONDS` | Tamanho da janela de rate limiting em segundos |
-| `PUBLIC_BASE_URL` | URL pública usada no link de aceite do convite |
+| `PUBLIC_BASE_URL` | URL pública usada no link de aceite do convite; obrigatória e não-local em produção |
 | `SMTP_HOST` / `SMTP_PORT` | Servidor de e-mail transacional para convites |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | Credenciais SMTP |
 | `SMTP_FROM` | Remetente dos convites |
@@ -309,6 +312,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /auth/login` | Entrar e criar sessão expiráveis |
 | `POST /auth/logout` | Encerrar a sessão atual |
 | `POST /cases/{id}/invitations` | Convidar a contraparte por e-mail |
+| `POST /cases/{id}/invitations/{invitation_id}/resend` | Reemitir o convite pendente com link novo |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
 | `GET /cases/{id}/deadlines` | Consultar a agenda mantida pelo rito |
 | `GET /cases/{id}/procedure` | Estado do rito: etapa atual e o que falta, de quem |
@@ -321,6 +325,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |
 | `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
 | `POST /cases/{id}/submission-complete` | Encerrar ou reabrir a própria produção de material |
+| `GET /cases/{id}/documents/{document_id}/content` | Ler o teor integral do material |
 | `GET /cases/{id}/documents/{document_id}/original` | Baixar o arquivo original armazenado |
 | `POST /cases/{id}/documents/{document_id}/original-url` | Emitir link temporário e assinado do original |
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
@@ -346,7 +351,9 @@ npm audit --audit-level=moderate
 ```
 
 Os testes cobrem o fluxo integral conduzido pelo rito, contas, convites restritos
-à contraparte, isolamento entre os papéis, contraditório, admissão automática,
+à contraparte, o link de aceite alcançável em produção sem SMTP e sua reemissão,
+a leitura do material pela contraparte, isolamento entre os papéis,
+contraditório, admissão automática,
 trava automática e suas pré-condições, composição com a posição de cada parte,
 persistência, imutabilidade após o lock, idempotência do `advance`, PDF, agenda
 automática, relatório Word, assinatura e auditoria. Um teste específico verifica
@@ -359,8 +366,10 @@ que nenhum ato do procedimento é atribuído a um terceiro humano.
 - em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e
   os tokens por papel são desabilitados; o modo local com tokens permanece
   apenas em desenvolvimento;
-- o envio de convites por SMTP já existe, mas depende de um provedor
-  transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
+- o envio de convites por SMTP depende de um provedor transacional
+  configurado e de um domínio com SPF/DKIM para entrega confiável; sem ele o
+  caso não trava, porque o link de aceite é devolvido a quem convidou e pode
+  ser reemitido, mas a entrega passa a ser responsabilidade da parte;
 - os documentos ficam fora do banco (object store) e o texto dos chunks no
   banco, ambos cifrados em repouso com AES-256-GCM (`DOCUMENT_ENCRYPTION_KEY`,
   obrigatória em produção) e acessíveis por link temporário assinado; ainda

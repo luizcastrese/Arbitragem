@@ -22,7 +22,7 @@ from app.core.attestation import public_key_info, verify_attestation
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
-from app.core.email import deliver_invitation_email
+from app.core.email import build_accept_url, deliver_invitation_email
 from app.core.hashing import sha256_text
 from app.core.procedure import (
     PARTIES,
@@ -47,10 +47,12 @@ from app.db.access_repository import (
     create_notification,
     create_session,
     deadline_to_dict,
+    get_invitation,
     get_user_by_token,
     invitation_to_dict,
     pending_invitation_roles,
     register_user,
+    reissue_invitation,
     revoke_session,
     user_case_ids,
     user_has_role,
@@ -66,6 +68,7 @@ from app.db.repository import (
     get_document,
     get_case,
     list_cases,
+    load_document_content,
     load_document_original,
     record_composition_closure,
     record_composition_input,
@@ -570,6 +573,29 @@ def create_case(
     return result
 
 
+def _invitation_result(invitation, token: str, email_delivery: Dict) -> Dict:
+    """Devolve o convite com o link de aceite para quem convidou.
+
+    O rito não tem operador humano: as duas partes são as únicas pessoas do
+    procedimento. Se o link só existisse dentro do e-mail transacional, um
+    deploy sem SMTP — ou uma entrega que falha, cai em spam ou vai para um
+    endereço digitado errado — deixaria o caso parado para sempre, porque o
+    token não é recuperável nem pelo banco (guarda-se apenas o hash).
+
+    Entregar o link a quem convidou não afrouxa o vínculo do convite: aceitar
+    continua exigindo uma conta com exatamente aquele e-mail, e quem convida
+    não pode ocupar o outro polo do caso. Quem controla o endereço convidado
+    segue sendo o único que consegue entrar.
+    """
+    result = invitation_to_dict(invitation)
+    result["email_delivery"] = email_delivery
+    result["acceptance_url"] = build_accept_url(settings.public_base_url, token)
+    result["acceptance_path"] = f"/ui/?invite={token}"
+    if settings.allow_role_tokens:
+        result["acceptance_token"] = token
+    return result
+
+
 @app.get("/cases/{case_id}/invitations")
 def get_invitations(
     case_id: str,
@@ -652,15 +678,58 @@ def invite_participant(
         case_title=case.title,
         token=token,
     )
-    result = invitation_to_dict(invitation)
-    result["email_delivery"] = email_delivery
-    # O token de aceite só é exposto na resposta no modo local. Em produção o
-    # convite chega exclusivamente pelo e-mail transacional, evitando que o
-    # segredo trafegue por outro canal.
-    if settings.allow_role_tokens:
-        result["acceptance_token"] = token
-        result["acceptance_path"] = f"/ui/?invite={token}"
-    return result
+    return _invitation_result(invitation, token, email_delivery)
+
+
+@app.post("/cases/{case_id}/invitations/{invitation_id}/resend")
+def resend_invitation(
+    case_id: str,
+    invitation_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Emite um link novo para um convite que ainda não foi aceito.
+
+    O token anterior só existiu em claro no momento da criação. Sem esta rota,
+    quem convidou e perdeu o link fica preso: o papel já tem convite pendente,
+    então uma nova tentativa colide em 409 e a contraparte nunca entra.
+    """
+    case = _case_or_404(db, case_id)
+    actor_party = _actor_party(db, case, x_actor_token)
+    actor = get_user_by_token(db, x_actor_token)
+    invitation = get_invitation(db, case.id, invitation_id)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Convite não encontrado")
+    if invitation.role != party_counterparty(actor_party):
+        raise HTTPException(
+            status_code=403,
+            detail="Só é possível reemitir o convite da contraparte",
+        )
+    try:
+        token, invitation = reissue_invitation(
+            db, invitation, actor.id if actor else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    append_audit(
+        db,
+        case,
+        "invitation_reissued",
+        {
+            "email": invitation.email,
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+            "actor": actor_party,
+        },
+    )
+    db.commit()
+    email_delivery = deliver_invitation_email(
+        to_email=invitation.email,
+        role=invitation.role,
+        case_title=case.title,
+        token=token,
+    )
+    return _invitation_result(invitation, token, email_delivery)
 
 
 @app.post("/invitations/accept")
@@ -1019,6 +1088,37 @@ def respond_to_evidence(
     # A admissão vem em seguida, pelo próprio rito: cumprido o contraditório,
     # ela é consequência automática, não um juízo de terceiro.
     return _advance_and_reload(db, case_id)
+
+
+@app.get("/cases/{case_id}/documents/{document_id}/content")
+def read_document_content(
+    case_id: str,
+    document_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """O teor integral do material, para quem participa do caso.
+
+    Sem isto o contraditório é cerimônia: a parte confirma ciência e responde
+    a um documento que não tem como ler. Como o prazo de resposta corre contra
+    quem recebe o material e o silêncio preclui, a leitura precisa ser um
+    direito do caso — e não uma cortesia de quem apresentou.
+    """
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    document = _document_or_404(db, case_id, document_id)
+    if not document.disclosed_at:
+        raise HTTPException(status_code=409, detail="Material ainda não disponibilizado")
+    return {
+        "id": document.id,
+        "name": document.name,
+        "sha256": document.sha256,
+        "submitted_by": document.submitted_by,
+        "material_type": document.material_type,
+        "purpose": document.purpose,
+        "has_original": bool(document.original_key),
+        "content": load_document_content(document),
+    }
 
 
 @app.get("/cases/{case_id}/documents/{document_id}/original")

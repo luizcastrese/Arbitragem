@@ -15,6 +15,16 @@ def _split_csv(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _is_local_url(value: str) -> bool:
+    """Endereço que só resolve na própria máquina — inútil em um link enviado
+    a outra pessoa."""
+    lowered = value.strip().lower()
+    if not lowered:
+        return True
+    host = lowered.split("://")[-1].split("/")[0].split(":")[0]
+    return host in {"localhost", "127.0.0.1", "0.0.0.0", "::1", ""}
+
+
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -115,6 +125,15 @@ def get_settings() -> Settings:
                 "`python -m app.core.encryption` antes de subir o serviço."
             )
 
+    public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+    if is_production and _is_local_url(public_base_url):
+        raise RuntimeError(
+            "PUBLIC_BASE_URL precisa apontar para o endereço público real em "
+            "produção: é ele que monta o link de aceite do convite, o único "
+            "caminho de entrada da contraparte no caso. Apontando para "
+            f"localhost, o convite nasce inutilizável (valor atual: {public_base_url})."
+        )
+
     # Autenticação é segura por padrão e forçada mesmo se uma variável legada
     # tentar desabilitá-la em produção.
     auth_required = True if is_production else _env_flag("AUTH_REQUIRED", True)
@@ -153,7 +172,7 @@ def get_settings() -> Settings:
         rate_limit_enabled=rate_limit_enabled,
         rate_limit_max_requests=int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120")),
         rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
-        public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
+        public_base_url=public_base_url,
         smtp_host=os.getenv("SMTP_HOST", "").strip(),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),
         smtp_username=os.getenv("SMTP_USERNAME", "").strip(),
