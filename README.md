@@ -39,8 +39,9 @@ cadeia de auditoria encadeada por hashes.
 - Structured Outputs pela Responses API;
 - manifesto imutável assinado com HMAC-SHA256;
 - verificação do manifesto e da cadeia de auditoria;
-- ancoragem pública do topo da cadeia de auditoria em relays Nostr, na trava do
-  manifesto e no encerramento do caso;
+- ancoragem pública do topo da cadeia de auditoria na trava do manifesto e no
+  encerramento do caso, por dois publicadores independentes: relays Nostr e
+  carimbo do tempo OpenTimestamps (Bitcoin);
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
@@ -294,6 +295,7 @@ Variáveis do arquivo `.env`:
 | `DOWNLOAD_URL_TTL_SECONDS` | Validade dos links de download assinados |
 | `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations e o topo da auditoria em relays Nostr; opcional |
 | `NOSTR_RELAYS` | Relays Nostr (`wss://...`, separados por vírgula) para a âncora pública |
+| `OTS_CALENDARS` | Calendários OpenTimestamps que carimbam o topo da auditoria; ligado por padrão, vazio desliga |
 
 Gere um segredo local:
 
@@ -355,7 +357,8 @@ npm audit --audit-level=moderate
 Os testes cobrem o fluxo integral conduzido pelo rito, contas, convites restritos
 à contraparte, o link de aceite alcançável em produção sem SMTP e sua reemissão,
 a leitura do material pela contraparte, isolamento entre os papéis,
-contraditório, admissão automática,
+ancoragem e carimbo do topo da auditoria (contra relay Nostr e calendário
+OpenTimestamps locais, sem rede externa), contraditório, admissão automática,
 trava automática e suas pré-condições, composição com a posição de cada parte,
 persistência, imutabilidade após o lock, idempotência do `advance`, PDF, agenda
 automática, relatório Word, assinatura e auditoria. Um teste específico verifica
@@ -383,9 +386,24 @@ que nenhum ato do procedimento é atribuído a um terceiro humano.
   inteira e recalcular os hashes. Contra isso vale a âncora pública — o topo
   da cadeia é publicado em relays na trava e no encerramento, e `GET
   /cases/{id}/audit` devolve `head_hash`, `anchors` e `anchors_consistent`
-  para que a conferência possa ser refeita contra o relay, sem depender deste
-  servidor. Sem `NOSTR_RELAYS` configurado não há âncora, e a cadeia volta a
-  valer só dentro da plataforma;
+  para que a conferência possa ser refeita contra as cópias públicas, sem
+  depender deste servidor;
+- a âncora Nostr prova publicação, não instante: o `created_at` de um evento
+  Nostr é escrito pelo próprio autor, ou seja, por esta plataforma. Quem dá
+  data por consenso é o carimbo OpenTimestamps, que agrega o hash em uma
+  transação Bitcoin e produz uma prova autocontida, verificável anos depois com
+  a ferramenta oficial e sem nenhum servidor da Valinor no ar:
+
+  ```
+  printf '%s' <audit_head_hash> > head.txt   # e o .ots correspondente ao lado
+  ots verify head.txt.ots
+  ```
+
+  A prova nasce pendente e só vira carimbo em blockchain horas depois; até lá
+  vale como recibo de calendário. O amadurecimento acontece em qualquer
+  chamada posterior de `advance`, mas num caso encerrado ninguém mais age —
+  por isso `python -m app.core.timestamping upgrade` precisa rodar
+  periodicamente;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;

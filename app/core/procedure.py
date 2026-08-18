@@ -34,6 +34,7 @@ from app.core.audit import verify_audit_chain
 from app.core.config import get_settings
 from app.core.manifest import lock_case_manifest
 from app.core.nostr_anchor import publish_attestation_anchor, publish_audit_anchor
+from app.core.timestamping import stamp_head, upgrade_proof
 from app.core.email import deliver_deadline_email
 from app.db.access_repository import (
     complete_deadlines_for_reference,
@@ -54,6 +55,7 @@ from app.db.repository import (
     open_ratification,
     preclude_response,
     record_submission_closure,
+    replace_audit_anchors,
     resolve_ratification,
     save_audit_anchor,
     save_nostr_anchor,
@@ -908,10 +910,15 @@ def _anchor_audit_chain(db: Session, case, data: Dict[str, Any]) -> Optional[Dic
     Cada topo ancorado se compromete com toda a cadeia que veio antes dele,
     então os dois marcos cobrem o procedimento inteiro.
 
-    Falha de relay não interrompe nada: o passo simplesmente não registra
+    São dois publicadores independentes, e basta um responder. O Nostr dá
+    disponibilidade imediata e barata; o OpenTimestamps dá o que o Nostr não
+    dá — data por consenso, já que o `created_at` de um evento Nostr é escrito
+    pelo próprio autor e portanto pela plataforma.
+
+    Falha de rede não interrompe nada: o passo simplesmente não registra
     âncora, e uma chamada posterior de `advance` tenta de novo.
     """
-    if not get_settings().nostr_anchor_enabled:
+    if not get_settings().audit_anchor_enabled:
         return None
     if not case.manifest_locked:
         return None
@@ -931,16 +938,65 @@ def _anchor_audit_chain(db: Session, case, data: Dict[str, Any]) -> Optional[Dic
     if any(item.get("milestone") == milestone for item in anchored):
         return None
 
-    anchor = publish_audit_anchor(case.id, events)
-    if not anchor:
+    head_hash = events[-1]["event_hash"]
+    nostr = publish_audit_anchor(case.id, events)
+    opentimestamps = stamp_head(head_hash)
+    if not nostr and not opentimestamps:
         return None
 
-    save_audit_anchor(db, get_case(db, case.id), {**anchor, "milestone": milestone})
+    save_audit_anchor(
+        db,
+        get_case(db, case.id),
+        {
+            "milestone": milestone,
+            "audit_head_hash": head_hash,
+            "event_count": len(events),
+            "nostr": nostr,
+            "opentimestamps": opentimestamps,
+        },
+    )
     return {
         "step": "audit_chain_anchored",
         "milestone": milestone,
-        "event_count": anchor.get("event_count"),
+        "event_count": len(events),
+        "publishers": [
+            name
+            for name, value in (("nostr", nostr), ("opentimestamps", opentimestamps))
+            if value
+        ],
     }
+
+
+def _upgrade_audit_timestamps(db: Session, case, data: Dict[str, Any]) -> Optional[Dict]:
+    """Troca as atestações pendentes do OpenTimestamps pela confirmação em
+    Bitcoin, quando o calendário já a tiver.
+
+    A prova nasce pendente e só amadurece horas depois. Como o rito não tem
+    agendador, a tentativa acontece em toda passada de `advance` — e não faz
+    nada quando não há o que atualizar, que é o caso na esmagadora maioria
+    das vezes.
+    """
+    if not get_settings().opentimestamps_enabled:
+        return None
+    anchors = data["audit_anchors"]
+    if not anchors:
+        return None
+
+    updated: List[str] = []
+    novos = []
+    for anchor in anchors:
+        proof = (anchor.get("opentimestamps") or {}).get("proof_b64")
+        upgraded = upgrade_proof(proof) if proof else None
+        if upgraded:
+            novos.append({**anchor, "opentimestamps": {**anchor["opentimestamps"], **upgraded}})
+            updated.append(anchor.get("milestone"))
+        else:
+            novos.append(anchor)
+    if not updated:
+        return None
+
+    replace_audit_anchors(db, get_case(db, case.id), novos)
+    return {"step": "audit_timestamps_upgraded", "milestones": updated}
 
 
 STEPS: tuple[Callable[[Session, Any, Dict[str, Any]], Optional[Dict]], ...] = (
@@ -952,6 +1008,7 @@ STEPS: tuple[Callable[[Session, Any, Dict[str, Any]], Optional[Dict]], ...] = (
     _open_submission_deadlines,
     _lock_manifest,
     _anchor_audit_chain,
+    _upgrade_audit_timestamps,
     _run_composition_round,
     _organize,
     _decide,

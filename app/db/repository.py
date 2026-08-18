@@ -894,6 +894,19 @@ def save_audit_anchor(db: Session, case: Case, anchor: Dict[str, Any]) -> Case:
     return get_case(db, case.id)
 
 
+def replace_audit_anchors(db: Session, case: Case, anchors: list) -> Case:
+    """Substitui o histórico de âncoras após uma atualização de prova.
+
+    Não gera evento de auditoria: amadurecer um carimbo pendente não é ato do
+    procedimento, é a mesma âncora ficando verificável. Gerar evento aqui faria
+    a cadeia crescer sozinha e mudaria o topo que essas âncoras comprometem —
+    invalidando justamente o que elas provam.
+    """
+    case.audit_anchors_json = _json_dump(anchors)
+    db.commit()
+    return get_case(db, case.id)
+
+
 def register_contest(
     db: Session,
     case: Case,

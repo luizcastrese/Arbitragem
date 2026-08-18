@@ -62,6 +62,7 @@ class Settings:
     download_url_ttl_seconds: int
     nostr_private_key_hex: str
     nostr_relays: List[str]
+    opentimestamps_calendars: List[str]
 
     @property
     def openai_enabled(self) -> bool:
@@ -95,6 +96,15 @@ class Settings:
     @property
     def nostr_anchor_enabled(self) -> bool:
         return bool(self.nostr_private_key_hex and self.nostr_relays)
+
+    @property
+    def opentimestamps_enabled(self) -> bool:
+        return bool(self.opentimestamps_calendars)
+
+    @property
+    def audit_anchor_enabled(self) -> bool:
+        """Basta um publicador para valer a pena ancorar o topo da cadeia."""
+        return self.nostr_anchor_enabled or self.opentimestamps_enabled
 
 
 @lru_cache
@@ -182,4 +192,15 @@ def get_settings() -> Settings:
         download_url_ttl_seconds=int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "300")),
         nostr_private_key_hex=os.getenv("NOSTR_PRIVATE_KEY_HEX", "").strip(),
         nostr_relays=_split_csv(os.getenv("NOSTR_RELAYS", "")),
+        # Ligado por padrão: o carimbo é gratuito, e uma ancoragem que só
+        # funciona para quem lembrou de configurá-la não protege ninguém.
+        # Para desligar, defina OTS_CALENDARS vazio.
+        opentimestamps_calendars=_split_csv(
+            os.getenv(
+                "OTS_CALENDARS",
+                "https://a.pool.opentimestamps.org,"
+                "https://b.pool.opentimestamps.org,"
+                "https://finney.calendar.eternitywall.com",
+            )
+        ),
     )
