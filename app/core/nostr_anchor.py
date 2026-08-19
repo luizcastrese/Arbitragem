@@ -104,9 +104,16 @@ async def _publish(
         output = await asyncio.wait_for(
             client.send_event_builder(builder), timeout=PUBLISH_TIMEOUT_SECONDS
         )
+        accepted = [str(url) for url in output.success]
+        if not accepted:
+            # O envio pode "concluir" sem que relay nenhum tenha aceitado o
+            # evento — a assinatura local sempre funciona. Registrar isso como
+            # âncora seria o pior resultado possível: um comprovante público
+            # que não existe em lugar público nenhum.
+            raise ValueError("nenhum relay aceitou o evento")
         return {
             "event_id": output.id.to_hex(),
-            "relays": [str(url) for url in output.success],
+            "relays": accepted,
             "published_at_utc": datetime.now(timezone.utc).isoformat(),
         }
     finally:
