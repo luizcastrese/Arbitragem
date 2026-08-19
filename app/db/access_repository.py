@@ -58,6 +58,10 @@ def register_user(db: Session, display_name: str, email: str, password: str) -> 
     return user
 
 
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    return db.query(User).filter(User.email == email.strip().lower()).one_or_none()
+
+
 def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     user = db.query(User).filter(User.email == email.strip().lower()).one_or_none()
     if not user or not user.active or not verify_password(password, user.password_hash):

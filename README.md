@@ -57,6 +57,7 @@ cadeia de auditoria encadeada por hashes.
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
 - confirmação de posse do e-mail antes de a conta poder se tornar parte de um
   caso, com link de uso único que só chega pela caixa de entrada;
+- redefinição de senha por link de uso único, que derruba as sessões abertas;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
 - criptografia dos documentos em repouso (AES-256-GCM) e download por link temporário assinado que dispensa nova autenticação e expira sozinho;
@@ -328,6 +329,8 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
 | `POST /auth/verify-email` | Confirmar o e-mail com o link recebido |
 | `POST /auth/verify-email/request` | Reenviar o link de confirmação |
+| `POST /auth/password/forgot` | Pedir link de redefinição de senha |
+| `POST /auth/password/reset` | Redefinir a senha com o link recebido |
 | `GET /cases/{id}/deadlines` | Consultar a agenda mantida pelo rito |
 | `GET /cases/{id}/procedure` | Estado do rito: etapa atual e o que falta, de quem |
 | `POST /cases/{id}/advance` | Pedir ao rito que execute o que já é possível |
@@ -399,6 +402,8 @@ como recibo de calendário em vez de carimbo em blockchain.
   entrega, exigi-la trancaria todo mundo do lado de fora. Num deploy sem SMTP o
   vínculo entre convite e endereço deixa de valer, porque qualquer pessoa pode
   cadastrar o e-mail de outra;
+- a redefinição de senha depende de SMTP configurado: sem ele o link não chega
+  a ninguém e quem esquece a senha continua sem caminho de volta;
 - ainda não há autenticação multifator nem bloqueio após tentativas repetidas
   de login;
 - em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e

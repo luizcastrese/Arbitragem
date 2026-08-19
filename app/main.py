@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.core.email import (
     build_accept_url,
     deliver_invitation_email,
+    deliver_password_reset_email,
     deliver_verification_email,
 )
 from app.core.hashing import sha256_text
@@ -45,6 +46,7 @@ from app.core.signed_url import (
 from app.core.signing import verify_signature
 from app.db.access_repository import (
     EMAIL_VERIFICATION,
+    PASSWORD_RESET,
     accept_invitation,
     add_member,
     authenticate_user,
@@ -56,12 +58,14 @@ from app.db.access_repository import (
     create_session,
     deadline_to_dict,
     get_invitation,
+    get_user_by_email,
     get_user_by_token,
     invitation_to_dict,
     mark_email_verified,
     pending_invitation_roles,
     register_user,
     reissue_invitation,
+    set_password,
     revoke_session,
     user_case_ids,
     user_has_role,
@@ -98,6 +102,8 @@ from app.reports.docx_generator import build_docx_report
 from app.schemas import (
     AcceptInvitationRequest,
     AddDocumentRequest,
+    EmailRequest,
+    PasswordResetRequest,
     TokenRequest,
     AttestationVerifyRequest,
     CompositionPositionRequest,
@@ -556,6 +562,57 @@ def verify_email(payload: TokenRequest, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"user": user_to_dict(mark_email_verified(db, user))}
+
+
+@app.post("/auth/password/forgot", status_code=202)
+def request_password_reset(payload: EmailRequest, db: Session = Depends(get_db)):
+    """Pede a redefinição de senha.
+
+    Responde igual exista ou não a conta. A diferença de resposta transformaria
+    esta rota em um oráculo de quem tem conta na plataforma — e, como as contas
+    são de partes em disputas, isso já é informação sobre as pessoas.
+    """
+    user = get_user_by_email(db, payload.email)
+    if user and user.active:
+        token, _ = create_account_token(db, user, PASSWORD_RESET, duration_hours=1)
+        deliver_password_reset_email(to_email=user.email, token=token)
+    else:
+        logger.info("password_reset_requested_for_unknown_account")
+    return {
+        "message": (
+            "Se houver uma conta com esse endereço, o link de redefinição foi "
+            "enviado para ela."
+        )
+    }
+
+
+@app.post("/auth/password/reset")
+def reset_password(
+    payload: PasswordResetRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """Redefine a senha com o link recebido e abre uma sessão nova.
+
+    Quem redefine ou perdeu o acesso, ou suspeita de acesso alheio: as sessões
+    antigas caem junto, senão a redefinição preservaria exatamente o acesso que
+    pretende cortar. A sessão nova é a de quem acabou de provar posse do
+    endereço.
+    """
+    try:
+        user = consume_account_token(db, payload.token, PASSWORD_RESET)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    user = set_password(db, user, payload.password)
+    # Só se chega ao link pela caixa de entrada: quem redefine a senha por ele
+    # provou a posse do endereço, e não faz sentido pedir a mesma prova de novo.
+    user = mark_email_verified(db, user)
+    token, session = create_session(db, user)
+    _set_session_cookie(response, token)
+    return {
+        "user": user_to_dict(user),
+        "expires_at": session.expires_at.isoformat(),
+    }
 
 
 @app.get("/auth/me")
