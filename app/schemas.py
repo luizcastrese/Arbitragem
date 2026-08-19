@@ -99,9 +99,11 @@ class AddDocumentRequest(BaseModel):
 
 
 class ConsentRequest(BaseModel):
+    """A versão dos termos não vem daqui: quem a define é o servidor, para que
+    o registro diga o que foi apresentado e não o que o cliente afirmou."""
+
     party: str
     accepted: bool
-    terms_version: str = Field(default="2026-07-12", max_length=40)
 
     @field_validator("party")
     @classmethod

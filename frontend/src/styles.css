@@ -1162,3 +1162,21 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
 .ratification-panel { display: grid; gap: 13px; margin-top: 14px; }
 .ratification-panel .consent-grid { margin: 0; }
 .ratification-panel .conciliation-buttons { margin-top: 2px; }
+
+.legal-notice { display: grid; gap: 6px; margin-top: 10px; }
+.legal-notice small { color: var(--muted); font-size: 8px; line-height: 1.5; }
+.legal-draft {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  align-self: start;
+  padding: 5px 8px;
+  border: 1px solid #e6d3ae;
+  border-radius: 7px;
+  background: #fffaf3;
+  color: #8a6529;
+  font-size: 8px;
+  font-weight: 700;
+}
+.legal-links { display: flex; gap: 12px; }
+.legal-links a { color: var(--green-700); font-size: 9px; font-weight: 700; }

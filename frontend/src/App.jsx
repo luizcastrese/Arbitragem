@@ -1723,11 +1723,53 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria independente e possível revisão humana.</span>
+        <span>participação voluntária; acesso a todo material; oportunidade de resposta; preclusão pelo silêncio, que não é concordância; composição somente por acordo; decisão fundamentada por IA; auditoria independente; ratificação pelas partes quando houver ressalva.</span>
       </div>
+      <LegalNotice />
+    </div>
+  )
+}
+
+function LegalNotice() {
+  const [legal, setLegal] = useState(null)
+
+  useEffect(() => {
+    let vivo = true
+    fetch(`${API_BASE}/legal`, { credentials: 'include' })
+      .then((resposta) => (resposta.ok ? resposta.json() : null))
+      .then((dados) => { if (vivo) setLegal(dados) })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [])
+
+  if (!legal) return null
+  const minuta = legal.documents.some((item) => item.draft)
+
+  return (
+    <div className="legal-notice">
+      {minuta && (
+        <span className="legal-draft">
+          <AlertTriangle size={14} />
+          Documentos ainda em minuta, pendentes de revisão jurídica.
+        </span>
+      )}
       <small>
-        Versão dos termos: 2026-07-12. O aceite fica associado ao papel, ao momento e à cadeia de auditoria.
+        Versão dos termos: {legal.version}. O aceite fica associado ao papel, ao
+        momento e à cadeia de auditoria — e à versão que a plataforma
+        apresentou, registrada pelo servidor.
       </small>
+      <span className="legal-links">
+        {legal.documents.map((documento) => (
+          <a
+            key={documento.kind}
+            href={`${API_BASE}${documento.url}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {documento.title}
+          </a>
+        ))}
+      </span>
     </div>
   )
 }

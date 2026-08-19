@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import build_audit_event
+from app.core.legal import TERMS_VERSION
 from app.core.encryption import decrypt_chunk_text, encrypt_chunk_text
 from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
 from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
@@ -499,7 +500,7 @@ def record_consent(
     case: Case,
     party: str,
     accepted: bool,
-    terms_version: str = "2026-07-12",
+    terms_version: str = TERMS_VERSION,
 ) -> Case:
     now = datetime.now(timezone.utc).isoformat()
     setattr(case, f"{party}_consent", accepted)

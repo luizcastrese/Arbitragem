@@ -58,6 +58,8 @@ cadeia de auditoria encadeada por hashes.
 - confirmação de posse do e-mail antes de a conta poder se tornar parte de um
   caso, com link de uso único que só chega pela caixa de entrada;
 - redefinição de senha por link de uso único, que derruba as sessões abertas;
+- termos de uso e política de privacidade versionados e servidos pela API, com
+  a versão do aceite definida pelo servidor e registrada na auditoria;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
 - criptografia dos documentos em repouso (AES-256-GCM) e download por link temporário assinado que dispensa nova autenticação e expira sozinho;
@@ -331,6 +333,8 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /auth/verify-email/request` | Reenviar o link de confirmação |
 | `POST /auth/password/forgot` | Pedir link de redefinição de senha |
 | `POST /auth/password/reset` | Redefinir a senha com o link recebido |
+| `GET /legal` | Versão vigente dos documentos legais |
+| `GET /legal/{terms,privacy}` | Ler os termos de uso ou a política de privacidade |
 | `GET /cases/{id}/deadlines` | Consultar a agenda mantida pelo rito |
 | `GET /cases/{id}/procedure` | Estado do rito: etapa atual e o que falta, de quem |
 | `POST /cases/{id}/advance` | Pedir ao rito que execute o que já é possível |
@@ -444,6 +448,12 @@ como recibo de calendário em vez de carimbo em blockchain.
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
+- **os termos de uso e a política de privacidade são minutas**: descrevem com
+  precisão o que o sistema faz — verificado contra o código —, mas precisam de
+  revisão por advogado e da decisão dos campos `[A DEFINIR]`, com destaque para
+  os prazos de retenção, que hoje não existem: nada é apagado automaticamente.
+  A API marca os documentos com `draft: true` e a interface exibe o aviso
+  enquanto for o caso;
 - não há validação jurídica dos frameworks;
 - decisões inconclusivas encerram o caso sem resultado executável: a
   plataforma não oferece caminho de mérito além do que produziu;

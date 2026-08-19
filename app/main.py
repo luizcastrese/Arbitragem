@@ -29,6 +29,7 @@ from app.core.email import (
     deliver_verification_email,
 )
 from app.core.hashing import sha256_text
+from app.core.legal import TERMS_VERSION, documents_summary, load_document
 from app.core.procedure import (
     PARTIES,
     RESPONDED_STATUSES,
@@ -440,6 +441,20 @@ def root():
             if warning
         ],
     }
+
+
+@app.get("/legal")
+def legal_index():
+    """Versão vigente dos documentos e onde lê-los."""
+    return documents_summary()
+
+
+@app.get("/legal/{kind}")
+def legal_document(kind: str):
+    try:
+        return load_document(kind)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Documento não encontrado") from None
 
 
 @app.get("/health")
@@ -1071,7 +1086,10 @@ def set_case_consent(
             case,
             party=payload.party,
             accepted=payload.accepted,
-            terms_version=payload.terms_version,
+            # A versão vem do servidor, nunca do corpo da requisição: o registro
+            # tem de dizer o que a plataforma apresentou, não o que o cliente
+            # afirmou ter aceitado.
+            terms_version=TERMS_VERSION,
         )
     return _advance_and_reload(db, case_id)["consent"]
 
