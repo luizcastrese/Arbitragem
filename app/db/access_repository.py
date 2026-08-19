@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import hash_access_token, hash_password, verify_password
 from app.db.models import (
+    AccountToken,
     AuthSession,
     CaseMember,
     Deadline,
@@ -24,11 +25,19 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+EMAIL_VERIFICATION = "email_verification"
+PASSWORD_RESET = "password_reset"
+
+
 def user_to_dict(user: User) -> dict:
     return {
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
+        "email_verified": user.email_verified_at is not None,
+        "email_verified_at": (
+            user.email_verified_at.isoformat() if user.email_verified_at else None
+        ),
         "created_at": user.created_at.isoformat(),
     }
 
@@ -403,3 +412,84 @@ def reissue_invitation(
         invitation.role,
         invited_by_user_id,
     )
+
+
+def create_account_token(
+    db: Session,
+    user: User,
+    purpose: str,
+    duration_hours: int = 24,
+) -> tuple[str, AccountToken]:
+    """Emite um token de uso único para a conta, invalidando os anteriores.
+
+    Emitir um novo revoga os pendentes do mesmo propósito: dois links válidos
+    ao mesmo tempo multiplicam a superfície de quem interceptar um e-mail
+    antigo, sem nenhum ganho para quem pediu o reenvio.
+    """
+    now = utc_now()
+    pendentes = db.query(AccountToken).filter(
+        AccountToken.user_id == user.id,
+        AccountToken.purpose == purpose,
+        AccountToken.used_at.is_(None),
+    )
+    for anterior in pendentes:
+        anterior.used_at = now
+    token = secrets.token_urlsafe(40)
+    registro = AccountToken(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        purpose=purpose,
+        token_hash=hash_access_token(token),
+        expires_at=now + timedelta(hours=duration_hours),
+    )
+    db.add(registro)
+    db.commit()
+    db.refresh(registro)
+    return token, registro
+
+
+def consume_account_token(db: Session, token: str, purpose: str) -> User:
+    """Valida e queima o token, devolvendo a conta a que ele pertence."""
+    registro = (
+        db.query(AccountToken)
+        .filter(
+            AccountToken.token_hash == hash_access_token(token),
+            AccountToken.purpose == purpose,
+        )
+        .one_or_none()
+    )
+    if not registro or registro.used_at:
+        raise ValueError("Link inválido ou já utilizado")
+    if _as_utc(registro.expires_at) <= utc_now():
+        raise ValueError("Este link expirou")
+    user = db.query(User).filter(User.id == registro.user_id).one_or_none()
+    if not user or not user.active:
+        raise ValueError("Conta indisponível")
+    registro.used_at = utc_now()
+    db.commit()
+    return user
+
+
+def mark_email_verified(db: Session, user: User) -> User:
+    if user.email_verified_at is None:
+        user.email_verified_at = utc_now()
+        db.commit()
+        db.refresh(user)
+    return user
+
+
+def set_password(db: Session, user: User, password: str) -> User:
+    """Troca a senha e derruba todas as sessões da conta.
+
+    Quem redefine a senha ou perdeu o acesso, ou suspeita de acesso alheio. Nos
+    dois casos manter sessões antigas de pé preservaria exatamente o acesso que
+    a redefinição pretende cortar.
+    """
+    user.password_hash = hash_password(password)
+    db.query(AuthSession).filter(
+        AuthSession.user_id == user.id,
+        AuthSession.revoked_at.is_(None),
+    ).update({AuthSession.revoked_at: utc_now()}, synchronize_session=False)
+    db.commit()
+    db.refresh(user)
+    return user

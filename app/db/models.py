@@ -155,11 +155,37 @@ class User(Base):
     display_name = Column(String, nullable=False)
     password_hash = Column(Text, nullable=False)
     active = Column(Boolean, nullable=False, default=True)
+    # Posse do endereço comprovada. Enquanto for nulo, a conta existe mas não
+    # pode se tornar parte de um caso.
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
+    account_tokens = relationship(
+        "AccountToken", back_populates="user", cascade="all, delete-orphan"
+    )
     memberships = relationship("CaseMember", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user")
+
+
+class AccountToken(Base):
+    """Token de uso único ligado a uma conta: confirmar e-mail, redefinir senha.
+
+    Só o hash é guardado, como nos convites e nas sessões: um vazamento do
+    banco não pode entregar a capacidade de assumir contas alheias.
+    """
+
+    __tablename__ = "account_tokens"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    purpose = Column(String, nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    user = relationship("User", back_populates="account_tokens")
 
 
 class AuthSession(Base):

@@ -22,7 +22,11 @@ from app.core.attestation import public_key_info, verify_attestation
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
-from app.core.email import build_accept_url, deliver_invitation_email
+from app.core.email import (
+    build_accept_url,
+    deliver_invitation_email,
+    deliver_verification_email,
+)
 from app.core.hashing import sha256_text
 from app.core.procedure import (
     PARTIES,
@@ -40,9 +44,12 @@ from app.core.signed_url import (
 )
 from app.core.signing import verify_signature
 from app.db.access_repository import (
+    EMAIL_VERIFICATION,
     accept_invitation,
     add_member,
     authenticate_user,
+    consume_account_token,
+    create_account_token,
     case_roles_taken,
     create_invitation,
     create_notification,
@@ -51,6 +58,7 @@ from app.db.access_repository import (
     get_invitation,
     get_user_by_token,
     invitation_to_dict,
+    mark_email_verified,
     pending_invitation_roles,
     register_user,
     reissue_invitation,
@@ -90,6 +98,7 @@ from app.reports.docx_generator import build_docx_report
 from app.schemas import (
     AcceptInvitationRequest,
     AddDocumentRequest,
+    TokenRequest,
     AttestationVerifyRequest,
     CompositionPositionRequest,
     ConsentRequest,
@@ -468,6 +477,7 @@ def register(
     return {
         "user": user_to_dict(user),
         "expires_at": session.expires_at.isoformat(),
+        "email_verification": _issue_email_verification(db, user),
     }
 
 
@@ -486,6 +496,66 @@ def login(
         "user": user_to_dict(user),
         "expires_at": session.expires_at.isoformat(),
     }
+
+
+def _issue_email_verification(db: Session, user) -> Dict:
+    """Emite e envia o link de confirmação do endereço.
+
+    O token não volta na resposta nem vai para o log: quem prova posse do
+    endereço é quem lê a caixa de entrada dele, e devolvê-lo por outro canal
+    desmontaria a única coisa que a confirmação existe para estabelecer. Esta é
+    a diferença para o convite, cujo link é entregue a quem convidou porque ali
+    o destinatário é outra pessoa, e há alguém legitimamente encarregado de
+    fazê-lo chegar.
+    """
+    if user.email_verified_at is not None:
+        return {"required": False, "verified": True}
+    token, _ = create_account_token(db, user, EMAIL_VERIFICATION)
+    delivery = deliver_verification_email(to_email=user.email, token=token)
+    return {
+        "required": settings.require_email_verification,
+        "verified": False,
+        "delivery": delivery,
+    }
+
+
+def _require_verified_email(user) -> None:
+    """Exigido para se tornar parte de um caso.
+
+    Sem isso, qualquer pessoa registra uma conta com o e-mail de outra e aceita
+    o convite endereçado a ela: o vínculo entre convite e endereço, que é o que
+    sustenta quem está do outro lado do procedimento, valeria nada.
+    """
+    if not settings.require_email_verification:
+        return
+    if user is None or user.email_verified_at is not None:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Confirme seu e-mail antes de atuar em um procedimento. "
+            "Enviamos um link para o endereço da sua conta."
+        ),
+    )
+
+
+@app.post("/auth/verify-email/request")
+def request_email_verification(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Reenvia o link de confirmação para a conta autenticada."""
+    user = _session_user_or_401(db, x_session_token)
+    return _issue_email_verification(db, user)
+
+
+@app.post("/auth/verify-email")
+def verify_email(payload: TokenRequest, db: Session = Depends(get_db)):
+    try:
+        user = consume_account_token(db, payload.token, EMAIL_VERIFICATION)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"user": user_to_dict(mark_email_verified(db, user))}
 
 
 @app.get("/auth/me")
@@ -549,6 +619,7 @@ def create_case(
     user = get_user_by_token(db, x_session_token)
     if settings.auth_required and not user:
         raise HTTPException(status_code=401, detail="Entre para criar um caso")
+    _require_verified_email(user)
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -740,6 +811,7 @@ def accept_case_invitation(
     db: Session = Depends(get_db),
 ):
     user = _session_user_or_401(db, x_session_token)
+    _require_verified_email(user)
     try:
         invitation = accept_invitation(db, payload.token, user)
     except ValueError as exc:

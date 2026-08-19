@@ -63,6 +63,7 @@ class Settings:
     nostr_private_key_hex: str
     nostr_relays: List[str]
     opentimestamps_calendars: List[str]
+    require_email_verification: bool
 
     @property
     def openai_enabled(self) -> bool:
@@ -148,6 +149,14 @@ def get_settings() -> Settings:
     # tentar desabilitá-la em produção.
     auth_required = True if is_production else _env_flag("AUTH_REQUIRED", True)
 
+    # Exigir confirmação de e-mail só faz sentido onde ela pode ser entregue:
+    # sem SMTP, ninguém receberia o link e todo mundo ficaria trancado do lado
+    # de fora. O operador pode forçar o comportamento nos dois sentidos.
+    require_email_verification = _env_flag(
+        "REQUIRE_EMAIL_VERIFICATION",
+        bool(os.getenv("SMTP_HOST", "").strip() and os.getenv("SMTP_FROM", "").strip()),
+    )
+
     # Rate limiting fica ligado por padrão em produção.
     rate_limit_enabled = _env_flag("RATE_LIMIT_ENABLED", is_production)
 
@@ -195,6 +204,7 @@ def get_settings() -> Settings:
         # Ligado por padrão: o carimbo é gratuito, e uma ancoragem que só
         # funciona para quem lembrou de configurá-la não protege ninguém.
         # Para desligar, defina OTS_CALENDARS vazio.
+        require_email_verification=require_email_verification,
         opentimestamps_calendars=_split_csv(
             os.getenv(
                 "OTS_CALENDARS",

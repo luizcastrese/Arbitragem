@@ -27,6 +27,14 @@ def build_accept_url(base_url: str, token: str) -> str:
     return f"{base_url}/ui/?invite={token}"
 
 
+def build_verification_url(base_url: str, token: str) -> str:
+    return f"{base_url}/ui/?verify={token}"
+
+
+def build_password_reset_url(base_url: str, token: str) -> str:
+    return f"{base_url}/ui/?reset={token}"
+
+
 def build_invitation_message(
     *,
     to_email: str,
@@ -167,3 +175,76 @@ def deliver_invitation_email(
         sender=settings.smtp_from,
     )
     return _send(message, kind="invitation_email", to_email=to_email)
+
+
+def build_account_message(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    sender: str,
+) -> EmailMessage:
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = sender
+    message["To"] = to_email
+    message.set_content(body)
+    return message
+
+
+def deliver_verification_email(*, to_email: str, token: str) -> Dict[str, object]:
+    """Envia o link de confirmação do endereço. Nunca levanta exceção."""
+    settings = get_settings()
+    url = build_verification_url(settings.public_base_url, token)
+    body = (
+        "Confirme seu endereço de e-mail para poder atuar em um procedimento "
+        "na plataforma Valinor.\n\n"
+        f"{url}\n\n"
+        "A confirmação é o que garante à outra parte que quem entrou no caso "
+        "controla de fato este endereço. O link vale por 24 horas.\n\n"
+        "Se não foi você que criou esta conta, ignore esta mensagem."
+    )
+    if not settings.email_enabled:
+        # Sem SMTP não há como provar posse de endereço nenhum. O log serve
+        # para diagnóstico; nunca leva o token, que daria acesso à conta a
+        # quem tiver acesso aos logs.
+        logger.info("verification_email transport=log to=%s", to_email)
+        return {"delivered": False, "transport": "log"}
+    return _send(
+        build_account_message(
+            to_email=to_email,
+            subject="Confirme seu e-mail — Valinor",
+            body=body,
+            sender=settings.smtp_from,
+        ),
+        kind="verification_email",
+        to_email=to_email,
+    )
+
+
+def deliver_password_reset_email(*, to_email: str, token: str) -> Dict[str, object]:
+    """Envia o link de redefinição de senha. Nunca levanta exceção."""
+    settings = get_settings()
+    url = build_password_reset_url(settings.public_base_url, token)
+    body = (
+        "Recebemos um pedido para redefinir a senha da sua conta na plataforma "
+        "Valinor.\n\n"
+        f"{url}\n\n"
+        "O link vale por 1 hora e só pode ser usado uma vez. Ao redefinir, "
+        "todas as sessões abertas na sua conta são encerradas.\n\n"
+        "Se não foi você que pediu, ignore esta mensagem: sua senha continua a "
+        "mesma."
+    )
+    if not settings.email_enabled:
+        logger.info("password_reset_email transport=log to=%s", to_email)
+        return {"delivered": False, "transport": "log"}
+    return _send(
+        build_account_message(
+            to_email=to_email,
+            subject="Redefinição de senha — Valinor",
+            body=body,
+            sender=settings.smtp_from,
+        ),
+        kind="password_reset_email",
+        to_email=to_email,
+    )

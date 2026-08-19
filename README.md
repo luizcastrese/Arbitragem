@@ -55,6 +55,8 @@ cadeia de auditoria encadeada por hashes.
 - teor integral do material acessível a quem participa do caso, antes da
   ciência e da resposta;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
+- confirmação de posse do e-mail antes de a conta poder se tornar parte de um
+  caso, com link de uso único que só chega pela caixa de entrada;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
 - criptografia dos documentos em repouso (AES-256-GCM) e download por link temporário assinado que dispensa nova autenticação e expira sozinho;
@@ -301,6 +303,7 @@ Variáveis do arquivo `.env`:
 | `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations e o topo da auditoria em relays Nostr; opcional |
 | `NOSTR_RELAYS` | Relays Nostr (`wss://...`, separados por vírgula) para a âncora pública |
 | `OTS_CALENDARS` | Calendários OpenTimestamps que carimbam o topo da auditoria; ligado por padrão, vazio desliga |
+| `REQUIRE_EMAIL_VERIFICATION` | Exigir e-mail confirmado para atuar em caso; por padrão, ligado quando há SMTP |
 
 Gere um segredo local:
 
@@ -323,6 +326,8 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/invitations` | Convidar a contraparte por e-mail |
 | `POST /cases/{id}/invitations/{invitation_id}/resend` | Reemitir o convite pendente com link novo |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
+| `POST /auth/verify-email` | Confirmar o e-mail com o link recebido |
+| `POST /auth/verify-email/request` | Reenviar o link de confirmação |
 | `GET /cases/{id}/deadlines` | Consultar a agenda mantida pelo rito |
 | `GET /cases/{id}/procedure` | Estado do rito: etapa atual e o que falta, de quem |
 | `POST /cases/{id}/advance` | Pedir ao rito que execute o que já é possível |
@@ -390,8 +395,12 @@ como recibo de calendário em vez de carimbo em blockchain.
 
 ## Limites antes de produção pública
 
-- contas por e-mail reduzem o risco de compartilhamento indevido, mas ainda não
-  há verificação de e-mail, recuperação de acesso ou autenticação multifator;
+- a confirmação de e-mail só é exigida onde há SMTP configurado: sem canal de
+  entrega, exigi-la trancaria todo mundo do lado de fora. Num deploy sem SMTP o
+  vínculo entre convite e endereço deixa de valer, porque qualquer pessoa pode
+  cadastrar o e-mail de outra;
+- ainda não há autenticação multifator nem bloqueio após tentativas repetidas
+  de login;
 - em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e
   os tokens por papel são desabilitados; o modo local com tokens permanece
   apenas em desenvolvimento;
