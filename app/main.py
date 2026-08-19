@@ -26,6 +26,7 @@ from app.core.email import build_accept_url, deliver_invitation_email
 from app.core.hashing import sha256_text
 from app.core.procedure import (
     PARTIES,
+    RESPONDED_STATUSES,
     advance as advance_procedure,
     counterparty as party_counterparty,
     retrieve_admitted_chunks,
@@ -932,13 +933,17 @@ def set_case_consent(
             status_code=409,
             detail="O consentimento não pode ser alterado após a trava do processo",
         )
-    record_consent(
-        db,
-        case,
-        party=payload.party,
-        accepted=payload.accepted,
-        terms_version=payload.terms_version,
-    )
+    # Reafirmar o aceite que já está registrado é o mesmo aceite. Gravar de novo
+    # encheria a cadeia de auditoria de eventos que descrevem mal o que houve —
+    # e o retry de uma parte com rede instável viraria histórico.
+    if getattr(case, f"{payload.party}_consent") is not payload.accepted:
+        record_consent(
+            db,
+            case,
+            party=payload.party,
+            accepted=payload.accepted,
+            terms_version=payload.terms_version,
+        )
     return _advance_and_reload(db, case_id)["consent"]
 
 
@@ -1021,6 +1026,46 @@ def _document_or_404(db: Session, case_id: str, document_id: str):
     return document
 
 
+def _response_is_repeat(document, payload) -> bool:
+    """A manifestação sobre um material é ato único.
+
+    Reescrever a resposta depois de apresentada contornaria o contraditório: o
+    material já foi admitido como consequência dela, e a outra parte não é
+    notificada nem ganha prazo sobre o novo teor. Quem quiser dizer mais tem o
+    caminho próprio — apresentar material novo, que disponibiliza o conteúdo,
+    abre prazo para a contraparte e mantém a simetria do rito.
+
+    Reenviar exatamente a mesma resposta, porém, não é mudar de posição: é
+    retentativa, e uma conexão instável não pode virar erro na cara da parte.
+    Devolve `True` nesse caso, para que o ato não seja gravado de novo.
+    """
+    if document.response_status not in RESPONDED_STATUSES:
+        return False
+    if document.response_status == "precluded":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O prazo para se manifestar sobre este material venceu e a "
+                "oportunidade precluiu. Para trazer sua posição ao caso, "
+                "apresente material novo enquanto a produção estiver aberta."
+            ),
+        )
+    mesma = document.response_status == payload.response_status and (
+        (document.response_text or "") == payload.response_text
+    )
+    if mesma:
+        return True
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Sua manifestação sobre este material já foi apresentada e não pode "
+            "ser reescrita: a contraparte não seria notificada da mudança. "
+            "Para complementar ou corrigir, apresente material novo — a "
+            "contraparte recebe prazo para se manifestar sobre ele."
+        ),
+    )
+
+
 def _counterparty(document) -> str:
     return "respondent" if document.submitted_by == "claimant" else "claimant"
 
@@ -1045,7 +1090,8 @@ def acknowledge_evidence(
         )
     if not document.disclosed_at:
         raise HTTPException(status_code=409, detail="Material ainda não disponibilizado")
-    persist_acknowledgement(db, case, document, payload.party)
+    if not document.acknowledged_at:
+        persist_acknowledgement(db, case, document, payload.party)
     return _advance_and_reload(db, case_id)
 
 
@@ -1077,14 +1123,15 @@ def respond_to_evidence(
             status_code=422,
             detail="Informe a manifestação ou escolha renúncia à resposta",
         )
-    persist_response(
-        db,
-        case,
-        document,
-        payload.party,
-        payload.response_status,
-        payload.response_text,
-    )
+    if not _response_is_repeat(document, payload):
+        persist_response(
+            db,
+            case,
+            document,
+            payload.party,
+            payload.response_status,
+            payload.response_text,
+        )
     # A admissão vem em seguida, pelo próprio rito: cumprido o contraditório,
     # ela é consequência automática, não um juízo de terceiro.
     return _advance_and_reload(db, case_id)

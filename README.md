@@ -43,6 +43,9 @@ cadeia de auditoria encadeada por hashes.
   encerramento do caso, por dois publicadores independentes: relays Nostr e
   carimbo do tempo OpenTimestamps (Bitcoin);
 - etapas idempotentes e documentos imutáveis após o lock;
+- atos das partes idempotentes: reafirmar consentimento ou ciência não gera
+  registro novo, e a manifestação sobre um material é ato único — para mudar de
+  posição, apresenta-se material novo, que abre prazo para a contraparte;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
 - convites por e-mail transacional (SMTP), com o link de aceite sempre
@@ -358,7 +361,8 @@ Os testes cobrem o fluxo integral conduzido pelo rito, contas, convites restrito
 à contraparte, o link de aceite alcançável em produção sem SMTP e sua reemissão,
 a leitura do material pela contraparte, isolamento entre os papéis,
 ancoragem e carimbo do topo da auditoria (contra relay Nostr e calendário
-OpenTimestamps locais, sem rede externa), contraditório, admissão automática,
+OpenTimestamps locais, sem rede externa), idempotência dos atos das partes,
+contraditório, admissão automática,
 trava automática e suas pré-condições, composição com a posição de cada parte,
 persistência, imutabilidade após o lock, idempotência do `advance`, PDF, agenda
 automática, relatório Word, assinatura e auditoria. Um teste específico verifica
