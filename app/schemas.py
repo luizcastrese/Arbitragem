@@ -14,6 +14,11 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+# O procedimento tem exatamente dois papéis humanos. O terceiro que conduz o
+# rito não é uma pessoa e por isso não aparece em nenhum payload.
+PARTY_ROLES = {"claimant", "respondent"}
+
+
 class InvitationRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -22,28 +27,27 @@ class InvitationRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent", "manager"}:
-            raise ValueError("unsupported role")
+        if value not in PARTY_ROLES:
+            raise ValueError("role must be claimant or respondent")
         return value
+
+
+class EmailRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: str = Field(min_length=5, max_length=254)
+
+
+class TokenRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=300)
+
+
+class PasswordResetRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=300)
+    password: str = Field(min_length=10, max_length=200)
 
 
 class AcceptInvitationRequest(BaseModel):
     token: str = Field(min_length=20, max_length=300)
-
-
-class DeadlineRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-    label: str = Field(min_length=3, max_length=200)
-    kind: str = Field(default="procedural", max_length=50)
-    assigned_to: str
-    due_at: str
-
-    @field_validator("assigned_to")
-    @classmethod
-    def assigned_to_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent", "manager", "all"}:
-            raise ValueError("unsupported assignee")
-        return value
 
 
 class CreateCaseRequest(BaseModel):
@@ -52,6 +56,15 @@ class CreateCaseRequest(BaseModel):
     title: str = Field(min_length=3, max_length=200)
     claimant: str = Field(min_length=2, max_length=200)
     respondent: str = Field(min_length=2, max_length=200)
+    # Quem abre o caso declara de que lado está. Ninguém entra como terceiro.
+    creator_role: str
+
+    @field_validator("creator_role")
+    @classmethod
+    def creator_role_must_be_a_party(cls, value: str) -> str:
+        if value not in PARTY_ROLES:
+            raise ValueError("creator_role must be claimant or respondent")
+        return value
 
 
 class AddDocumentRequest(BaseModel):
@@ -86,9 +99,11 @@ class AddDocumentRequest(BaseModel):
 
 
 class ConsentRequest(BaseModel):
+    """A versão dos termos não vem daqui: quem a define é o servidor, para que
+    o registro diga o que foi apresentado e não o que o cliente afirmou."""
+
     party: str
     accepted: bool
-    terms_version: str = Field(default="2026-07-12", max_length=40)
 
     @field_validator("party")
     @classmethod
@@ -118,13 +133,37 @@ class EvidenceActionRequest(BaseModel):
         return value
 
 
-class ConciliationRoundRequest(BaseModel):
+class SubmissionClosureRequest(BaseModel):
+    """Encerramento (ou reabertura) da produção de material pela própria parte.
+    O papel de quem age vem da credencial, nunca do corpo da requisição."""
+
+    closed: bool = True
+
+
+class CompositionPositionRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    advance: bool = False
-    claimant_response: str = Field(default="", max_length=10_000)
-    respondent_response: str = Field(default="", max_length=10_000)
-    new_information: str = Field(default="", max_length=10_000)
+    position: str = Field(min_length=1, max_length=10_000)
+
+
+class RatificationRequest(BaseModel):
+    """Manifestação da parte sobre uma decisão que a auditoria ressalvou.
+
+    Aceitar dispensa justificativa; recusar exige, porque a recusa encerra o
+    caso sem decisão executável e o motivo passa a integrar o registro.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    accepted: bool
+    reason: str = Field(default="", max_length=10_000)
+
+    @field_validator("reason")
+    @classmethod
+    def rejection_needs_a_reason(cls, value: str, info) -> str:
+        if info.data.get("accepted") is False and len(value.strip()) < 10:
+            raise ValueError("Informe o motivo da recusa")
+        return value
 
 
 class ContestRequest(BaseModel):

@@ -215,7 +215,7 @@ def test_save_nostr_anchor_does_not_touch_case_status():
             respondent="Empresa",
             claimant_token_hash="x",
             respondent_token_hash="y",
-            manager_token_hash="z",
+            created_by="claimant",
         )
         status_before = case.status
 
@@ -239,3 +239,90 @@ def test_save_nostr_anchor_does_not_touch_case_status():
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)
+
+
+# --- Âncora do topo da cadeia de auditoria -----------------------------------
+
+
+def test_audit_anchor_payload_carries_only_the_head_and_the_count():
+    """A âncora da auditoria não pode virar um vazamento do procedimento.
+
+    Ela existe para congelar publicamente o topo da cadeia; o que a cadeia
+    contém — tipos de ato, carimbos, payloads — continua fora do relay.
+    """
+    from app.core.nostr_anchor import build_audit_anchor_payload
+
+    events = _audit_chain(4)
+    payload = build_audit_anchor_payload("case-audit-1", events)
+
+    assert set(payload.keys()) == {
+        "v",
+        "kind",
+        "case_id",
+        "audit_head_hash",
+        "event_count",
+    }
+    assert payload["audit_head_hash"] == events[-1]["event_hash"]
+    assert payload["event_count"] == 4
+    serialized = str(payload)
+    for event in events:
+        assert event["event_type"] not in serialized
+        assert event["timestamp_utc"] not in serialized
+
+    assert build_audit_anchor_payload("case-audit-1", []) is None
+
+
+def test_audit_anchor_publishes_end_to_end_and_keeps_its_own_identifier(
+    local_relay, monkeypatch
+):
+    """A âncora da auditoria não pode sobrescrever a da attestation.
+
+    Kind 30078 é parametrizado-substituível: dois eventos com o mesmo `d`
+    substituem um ao outro no relay. Se a âncora da auditoria reusasse o
+    `case_id` puro, publicá-la apagaria a âncora da attestation.
+    """
+    from app.core.nostr_anchor import publish_audit_anchor
+
+    monkeypatch.setenv("NOSTR_PRIVATE_KEY_HEX", Keys.generate().secret_key().to_hex())
+    monkeypatch.setenv("NOSTR_RELAYS", local_relay)
+    get_settings.cache_clear()
+    try:
+        events = _audit_chain(5)
+        result = publish_audit_anchor("case-audit-1", events)
+        assert result is not None
+        assert result["event_id"]
+        assert result["relays"] == [local_relay]
+        assert result["audit_head_hash"] == events[-1]["event_hash"]
+        assert result["event_count"] == 5
+
+        # Uma segunda âncora, com a cadeia mais adiantada, é um registro novo.
+        segunda = publish_audit_anchor("case-audit-1", _audit_chain(9))
+        assert segunda["event_id"] != result["event_id"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_audit_anchor_is_skipped_without_configuration(monkeypatch):
+    from app.core.nostr_anchor import publish_audit_anchor
+
+    monkeypatch.delenv("NOSTR_PRIVATE_KEY_HEX", raising=False)
+    monkeypatch.delenv("NOSTR_RELAYS", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert publish_audit_anchor("case-audit-1", _audit_chain()) is None
+    finally:
+        get_settings.cache_clear()
+
+
+def test_audit_anchor_fails_gracefully_when_relay_unreachable(monkeypatch):
+    from app.core.nostr_anchor import publish_audit_anchor
+
+    monkeypatch.setenv("NOSTR_PRIVATE_KEY_HEX", Keys.generate().secret_key().to_hex())
+    monkeypatch.setenv("NOSTR_RELAYS", "ws://127.0.0.1:1")
+    monkeypatch.setattr(nostr_anchor_module, "PUBLISH_TIMEOUT_SECONDS", 2)
+    get_settings.cache_clear()
+    try:
+        # O rito não pode parar porque um relay caiu.
+        assert publish_audit_anchor("case-audit-1", _audit_chain()) is None
+    finally:
+        get_settings.cache_clear()

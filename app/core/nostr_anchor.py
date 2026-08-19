@@ -25,6 +25,7 @@ logger = logging.getLogger("valinor.nostr")
 
 ANCHOR_KIND = 30078
 ANCHOR_TAG = "valinor-attestation"
+AUDIT_ANCHOR_TAG = "valinor-audit"
 PUBLISH_TIMEOUT_SECONDS = 10
 
 
@@ -50,6 +51,36 @@ def build_anchor_payload(attestation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_audit_anchor_payload(
+    case_id: str,
+    events: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Monta a âncora do topo da cadeia de auditoria.
+
+    A cadeia é encadeada por SHA-256 sem segredo: ela pega adulteração parcial
+    — reescrever um evento quebra o `previous_hash` do seguinte —, mas quem
+    tiver escrita no banco pode reescrever a cadeia inteira, recalcular todos
+    os hashes e a verificação local volta a passar. Publicar o hash do topo
+    fora do servidor fecha essa porta: o topo de então fica registrado em
+    relays que a plataforma não controla, e qualquer reescrita posterior passa
+    a divergir de uma cópia pública.
+
+    Vai só o hash do topo e a contagem de eventos. Nem tipo de evento, nem
+    payload, nem carimbo de ato — a existência do procedimento já é pública
+    pela âncora da attestation; o que ele contém continua fora do relay.
+    """
+    if not events:
+        return None
+    head = events[-1]
+    return {
+        "v": 1,
+        "kind": "audit_chain",
+        "case_id": case_id,
+        "audit_head_hash": head.get("event_hash"),
+        "event_count": len(events),
+    }
+
+
 def generate_private_key_hex() -> str:
     """Gera uma nova chave privada secp256k1 (formato Nostr) em hex."""
     return Keys.generate().secret_key().to_hex()
@@ -57,9 +88,10 @@ def generate_private_key_hex() -> str:
 
 async def _publish(
     payload: Dict[str, Any],
-    case_id: str,
+    identifier: str,
     keys: Keys,
     relays: List[str],
+    hashtag: str = ANCHOR_TAG,
 ) -> Dict[str, Any]:
     client = Client(NostrSigner.keys(keys))
     for url in relays:
@@ -68,13 +100,20 @@ async def _publish(
     try:
         builder = EventBuilder(
             Kind(ANCHOR_KIND), json.dumps(payload, ensure_ascii=False)
-        ).tags([Tag.identifier(case_id), Tag.hashtag(ANCHOR_TAG)])
+        ).tags([Tag.identifier(identifier), Tag.hashtag(hashtag)])
         output = await asyncio.wait_for(
             client.send_event_builder(builder), timeout=PUBLISH_TIMEOUT_SECONDS
         )
+        accepted = [str(url) for url in output.success]
+        if not accepted:
+            # O envio pode "concluir" sem que relay nenhum tenha aceitado o
+            # evento — a assinatura local sempre funciona. Registrar isso como
+            # âncora seria o pior resultado possível: um comprovante público
+            # que não existe em lugar público nenhum.
+            raise ValueError("nenhum relay aceitou o evento")
         return {
             "event_id": output.id.to_hex(),
-            "relays": [str(url) for url in output.success],
+            "relays": accepted,
             "published_at_utc": datetime.now(timezone.utc).isoformat(),
         }
     finally:
@@ -98,6 +137,45 @@ def publish_attestation_anchor(attestation: Dict[str, Any]) -> Optional[Dict[str
     except Exception:  # noqa: BLE001 - publicação é best-effort
         logger.warning(
             "Falha ao publicar âncora Nostr para o caso %s", case_id, exc_info=True
+        )
+        return None
+
+
+def publish_audit_anchor(
+    case_id: str,
+    events: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Tenta publicar a âncora do topo da cadeia de auditoria. Melhor esforço:
+    nunca levanta exceção, para que uma falha de relay não trave o rito.
+
+    O identificador carrega a contagem de eventos, de modo que cada âncora seja
+    um registro próprio. Sem isso, um evento parametrizado-substituível de
+    mesmo `d` sobrescreveria a âncora anterior no relay — e a âncora da
+    attestation, que usa o `case_id` puro, seria a primeira vítima.
+    """
+    settings = get_settings()
+    if not settings.nostr_anchor_enabled:
+        return None
+    if not case_id:
+        return None
+    payload = build_audit_anchor_payload(case_id, events)
+    if not payload:
+        return None
+    try:
+        keys = Keys.parse(settings.nostr_private_key_hex)
+        result = asyncio.run(
+            _publish(
+                payload,
+                f"{case_id}:audit:{payload['event_count']}",
+                keys,
+                settings.nostr_relays,
+                hashtag=AUDIT_ANCHOR_TAG,
+            )
+        )
+        return {**result, **payload}
+    except Exception:  # noqa: BLE001 - publicação é best-effort
+        logger.warning(
+            "Falha ao publicar âncora da auditoria do caso %s", case_id, exc_info=True
         )
         return None
 

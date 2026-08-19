@@ -84,10 +84,15 @@ function userHasRole(caseData, user, role) {
 const statusLabels = {
   draft: 'Recebendo documentos',
   locked: 'Documentos protegidos',
-  conciliation: 'Composição avaliada',
+  conciliation: 'Composição em curso',
   organized: 'Fatos organizados',
   decided: 'Decisão proferida',
-  reviewed: 'Decisão auditada'
+  reviewed: 'Decisão auditada',
+  ratification: 'Aguardando as partes',
+  ratified: 'Ratificada pelas partes',
+  attested: 'Decisão assinada',
+  contested: 'Decisão contestada',
+  unresolved: 'Encerrado sem decisão executável'
 }
 
 export default function App() {
@@ -107,7 +112,6 @@ export default function App() {
   const [showTechnical, setShowTechnical] = useState(false)
   const [claimantResponse, setClaimantResponse] = useState('')
   const [respondentResponse, setRespondentResponse] = useState('')
-  const [conciliationUpdate, setConciliationUpdate] = useState('')
   const [user, setUser] = useState(null)
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState('register')
@@ -184,7 +188,6 @@ export default function App() {
     setShowTechnical(false)
     setClaimantResponse('')
     setRespondentResponse('')
-    setConciliationUpdate('')
   }
 
   async function loadCases(selectId) {
@@ -252,7 +255,8 @@ export default function App() {
         body: JSON.stringify({
           title: form.get('title'),
           claimant: form.get('claimant'),
-          respondent: form.get('respondent')
+          respondent: form.get('respondent'),
+          creator_role: form.get('creator_role')
         })
       })
       delete data.access_credentials
@@ -493,10 +497,8 @@ export default function App() {
                 actorHeaders={actorHeaders}
                 claimantResponse={claimantResponse}
                 respondentResponse={respondentResponse}
-                conciliationUpdate={conciliationUpdate}
                 setClaimantResponse={setClaimantResponse}
                 setRespondentResponse={setRespondentResponse}
-                setConciliationUpdate={setConciliationUpdate}
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
                 user={user}
@@ -616,7 +618,7 @@ function AudienceValue() {
       <div className="role-strip">
         <div>
           <BriefcaseBusiness size={20} />
-          <span><strong>Gestor do procedimento</strong> organiza acesso, prazos e documentos; não decide o mérito.</span>
+          <span><strong>Sem terceiro humano</strong> o rito conduz acesso, prazos e etapas; as partes cuidam do que é delas.</span>
         </div>
         <div>
           <MessagesSquare size={20} />
@@ -653,12 +655,12 @@ function AudienceValue() {
             ]}
           />
           <Journey
-            title="Gestor do procedimento"
+            title="O rito (sem pessoa no meio)"
             steps={[
-              'Confere cadastro, consentimento, acesso e prazos.',
-              'Garante que os dois lados possam incluir seu material.',
-              'Opera as etapas e registra eventos sem escolher o vencedor.',
-              'Disponibiliza acordo, decisão e trilha final às partes.'
+              'Abre o prazo de ciência e resposta assim que um material entra.',
+              'Admite o material quando o contraditório se cumpre.',
+              'Trava o conjunto quando os dois lados encerram a produção.',
+              'Conduz composição, julgamento e auditoria sem escolher o vencedor.'
             ]}
           />
         </div>
@@ -751,6 +753,17 @@ function CreateCase({ busy, onSubmit, onCancel }) {
           <small>Empresa responsável por responder à reclamação.</small>
           <input name="respondent" placeholder="Ex.: Empresa Alfa" required minLength="2" />
         </label>
+        <label className="field full">
+          <span>Você está de que lado?</span>
+          <small>
+            Quem abre o caso entra como parte. Ninguém administra o próprio
+            litígio: quem conduz o procedimento é o rito, não uma pessoa.
+          </small>
+          <select name="creator_role" defaultValue="claimant" required>
+            <option value="claimant">Sou o cliente reclamante</option>
+            <option value="respondent">Sou a empresa reclamada</option>
+          </select>
+        </label>
 
         <div className="form-actions">
           {onCancel && (
@@ -790,21 +803,21 @@ function CaseWorkspace({
   actorHeaders,
   claimantResponse,
   respondentResponse,
-  conciliationUpdate,
   setClaimantResponse,
   setRespondentResponse,
-  setConciliationUpdate,
   showTechnical,
   setShowTechnical,
   user
 }) {
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : currentStage
+  // Só existem dois papéis humanos. Tudo o que antes exigia um gestor é
+  // executado pelo próprio rito, no servidor.
   const roles = {
     claimant: userHasRole(caseData, user, 'claimant'),
-    respondent: userHasRole(caseData, user, 'respondent'),
-    manager: userHasRole(caseData, user, 'manager')
+    respondent: userHasRole(caseData, user, 'respondent')
   }
+  const myParty = roles.claimant ? 'claimant' : roles.respondent ? 'respondent' : null
 
   return (
     <>
@@ -829,7 +842,7 @@ function CaseWorkspace({
 
       <ProcessSteps currentStage={displayedStage} blockedByAI={unavailable} />
 
-      {caseData.status !== 'reviewed' && (
+      {!['reviewed', 'unresolved'].includes(caseData.status) && (
         <NextAction
           caseData={caseData}
           busy={busy}
@@ -850,11 +863,10 @@ function CaseWorkspace({
           actorHeaders={actorHeaders}
           claimantResponse={claimantResponse}
           respondentResponse={respondentResponse}
-          conciliationUpdate={conciliationUpdate}
           setClaimantResponse={setClaimantResponse}
           setRespondentResponse={setRespondentResponse}
-          setConciliationUpdate={setConciliationUpdate}
           roles={roles}
+          myParty={myParty}
         />
       )}
 
@@ -882,10 +894,10 @@ function CaseWorkspace({
         run={run}
         request={request}
         actorHeaders={actorHeaders}
-        user={user}
+        myParty={myParty}
       />
 
-      {caseData.status === 'reviewed' && (
+      {['reviewed', 'unresolved', 'ratified', 'attested'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
 
@@ -902,40 +914,63 @@ function CaseWorkspace({
   )
 }
 
-function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
-  const [inviteLink, setInviteLink] = useState('')
+function OperationsCard({ caseData, busy, run, request, actorHeaders, myParty }) {
+  const [issuedInvite, setIssuedInvite] = useState(null)
+  const [copied, setCopied] = useState(false)
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
-  const isManager = userHasRole(caseData, user, 'manager')
+  const counterparty = myParty === 'claimant' ? 'respondent' : 'claimant'
+  const counterpartyPresent = participants.some(
+    (participant) => participant.role === counterparty
+  )
+  const pendingInvitation = (caseData.invitations || []).find(
+    (item) => item.status === 'pending' && item.role === counterparty
+  )
+  const canInvite = Boolean(myParty) && !counterpartyPresent && !pendingInvitation
+
+  function keepInvite(data) {
+    setIssuedInvite({
+      email: data.email,
+      url: data.acceptance_url || `${window.location.origin}${data.acceptance_path}`,
+      delivery: data.email_delivery || {}
+    })
+    setCopied(false)
+    return data
+  }
 
   async function invite(event) {
     event.preventDefault()
-    const form = new FormData(event.currentTarget)
+    const formElement = event.currentTarget
+    const form = new FormData(formElement)
     await run('Criando convite protegido...', async () => {
       const data = await request(`/cases/${caseData.id}/invitations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
-        body: JSON.stringify({ email: form.get('email'), role: form.get('role') })
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, myParty) },
+        body: JSON.stringify({ email: form.get('email'), role: counterparty })
       })
-      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
-      event.currentTarget?.reset?.()
-      return data
+      formElement.reset?.()
+      return keepInvite(data)
     })
   }
 
-  async function addDeadline(event) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    await run('Registrando prazo e notificações...', () => request(`/cases/${caseData.id}/deadlines`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
-      body: JSON.stringify({
-        label: form.get('label'),
-        assigned_to: form.get('assigned_to'),
-        kind: 'procedural',
-        due_at: new Date(form.get('due_at')).toISOString()
-      })
-    }))
+  async function resendInvite() {
+    await run('Gerando um link novo para a contraparte...', async () => keepInvite(
+      await request(
+        `/cases/${caseData.id}/invitations/${pendingInvitation.id}/resend`,
+        { method: 'POST', headers: actorHeaders(caseData.id, myParty) }
+      )
+    ))
+  }
+
+  async function copyInviteLink() {
+    try {
+      await navigator.clipboard.writeText(issuedInvite.url)
+      setCopied(true)
+    } catch {
+      // Sem permissão de área de transferência o link continua visível e
+      // selecionável no campo abaixo.
+      setCopied(false)
+    }
   }
 
   async function downloadReport() {
@@ -961,8 +996,8 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
     <section className="operations-card">
       <div className="card-title-row">
         <div>
-          <span className="section-label">Acesso, agenda e entrega</span>
-          <h3>Administração do procedimento</h3>
+          <span className="section-label">Participantes, agenda e entrega</span>
+          <h3>O caso por dentro</h3>
         </div>
         <button className="button secondary" onClick={downloadReport} disabled={busy}>
           <Download size={16} /> Baixar relatório Word
@@ -971,54 +1006,105 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
 
       <div className="operations-grid">
         <div className="operation-block">
-          <div className="operation-title"><Mail size={18} /><strong>Participantes</strong></div>
-          <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
+          <div className="operation-title"><Mail size={18} /><strong>Partes do caso</strong></div>
+          <p>
+            O procedimento tem exatamente dois participantes. Não há gestor,
+            mediador ou administrador: quem conduz o rito é o próprio sistema.
+          </p>
           {participants.map((participant) => (
             <span className="participant-row" key={`${participant.email}-${participant.role}`}>
-              <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
+              <strong>{participant.display_name}</strong> {partyRoleLabel(participant.role)} · {participant.email}
             </span>
           ))}
-          {isManager && <form className="compact-form" onSubmit={invite}>
-            <input name="email" type="email" required placeholder="E-mail da parte" />
-            <select name="role" defaultValue="claimant">
-              <option value="claimant">Cliente reclamante</option>
-              <option value="respondent">Empresa reclamada</option>
-              <option value="manager">Gestor</option>
-            </select>
-            <button className="button primary" disabled={busy}>Gerar convite</button>
+          {canInvite && <form className="compact-form" onSubmit={invite}>
+            <input name="email" type="email" required placeholder={`E-mail de ${partyRoleLabel(counterparty).toLowerCase()}`} />
+            <button className="button primary" disabled={busy}>
+              Convidar a contraparte
+            </button>
           </form>}
-          {inviteLink && (
-            <label className="invite-link">
-              <span>Link protegido para envio</span>
-              <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
-            </label>
+          {issuedInvite && (
+            <div className="invite-issued">
+              <div className="invite-delivery">
+                {issuedInvite.delivery.delivered ? (
+                  <>
+                    <Check size={15} />
+                    <span>
+                      Convite enviado por e-mail para <strong>{issuedInvite.email}</strong>.
+                      Se não chegar, o link abaixo serve para qualquer canal.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={15} />
+                    <span>
+                      O envio automático de e-mail não está disponível
+                      {issuedInvite.delivery.error ? ' no momento' : ''}.
+                      Entregue o link abaixo a <strong>{issuedInvite.email}</strong> por
+                      um canal que você já use.
+                    </span>
+                  </>
+                )}
+              </div>
+              <label className="invite-link">
+                <span>Link de acesso da contraparte</span>
+                <input
+                  value={issuedInvite.url}
+                  readOnly
+                  onFocus={(event) => event.target.select()}
+                />
+              </label>
+              <div className="invite-actions">
+                <button className="button secondary compact" onClick={copyInviteLink}>
+                  {copied ? <><Check size={15} /> Link copiado</> : 'Copiar link'}
+                </button>
+                <small>
+                  Só quem tiver uma conta com esse e-mail consegue usá-lo, e ele
+                  expira em 7 dias.
+                </small>
+              </div>
+            </div>
           )}
-          {!isManager && <small>Somente gestores podem criar novos convites.</small>}
+          {pendingInvitation && !issuedInvite && (
+            <div className="invite-pending">
+              <Clock3 size={16} />
+              <div>
+                <strong>Convite pendente para {pendingInvitation.email}</strong>
+                <span>
+                  Enquanto a contraparte não entrar, o caso não avança. Se o link
+                  se perdeu, gere outro — o anterior deixa de valer.
+                </span>
+              </div>
+              <button
+                className="button secondary compact"
+                onClick={resendInvite}
+                disabled={busy || !myParty}
+              >
+                Gerar link novo
+              </button>
+            </div>
+          )}
+          {!myParty && <small>Só as partes do caso podem convidar.</small>}
+          {myParty && counterpartyPresent && (
+            <small>Os dois lados já estão no caso.</small>
+          )}
         </div>
 
         <div className="operation-block">
           <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
-          <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
+          <p>
+            O rito abre o prazo de ciência e resposta quando um material é
+            disponibilizado, e dá baixa nele assim que a contraparte se
+            manifesta. Nenhuma pessoa define prazos aqui.
+          </p>
           <div className="deadline-list">
             {deadlines.map((deadline) => (
               <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
                 <strong>{deadline.label}</strong>
-                <small>{deadline.assigned_to} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
+                <small>{partyRoleLabel(deadline.assigned_to)} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
               </span>
             ))}
-            {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
+            {!deadlines.length && <span className="empty-inline">Nenhum prazo aberto no momento.</span>}
           </div>
-          {isManager && <form className="compact-form deadline-form" onSubmit={addDeadline}>
-            <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
-            <select name="assigned_to" defaultValue="all">
-              <option value="all">Todas as pessoas</option>
-              <option value="claimant">Cliente</option>
-              <option value="respondent">Empresa</option>
-              <option value="manager">Gestor</option>
-            </select>
-            <input name="due_at" type="datetime-local" required />
-            <button className="button secondary" disabled={busy}>Adicionar prazo</button>
-          </form>}
         </div>
       </div>
     </section>
@@ -1157,11 +1243,10 @@ function NextAction({
   actorHeaders,
   claimantResponse,
   respondentResponse,
-  conciliationUpdate,
   setClaimantResponse,
   setRespondentResponse,
-  setConciliationUpdate,
-  roles
+  roles,
+  myParty
 }) {
   const actionContent = {
     draft: {
@@ -1172,29 +1257,64 @@ function NextAction({
     },
     locked: {
       icon: <Handshake size={22} />,
-      label: 'Próximo passo',
-      title: 'Verifique se existe espaço para acordo',
-      description: 'A IA buscará interesses convergentes e indicará conciliação, mediação ou continuidade do julgamento.'
+      label: 'Em curso',
+      title: 'O rito está buscando espaço para acordo',
+      description: 'A IA identifica interesses convergentes e indica conciliação, mediação ou seguimento para julgamento.'
     },
     conciliation: {
-      icon: <Search size={22} />,
-      label: 'Sem acordo ou após a tentativa',
-      title: 'Prepare o caso para julgamento',
-      description: 'Se a composição não encerrar a disputa, o sistema organiza fatos, pedidos e evidências.'
+      icon: <Handshake size={22} />,
+      label: 'Sua vez',
+      title: 'Registre sua posição na composição',
+      description: 'A rodada seguinte só é aberta quando os dois lados se manifestam. Qualquer parte pode encerrar a composição.'
     },
     organized: {
       icon: <Gavel size={22} />,
-      label: 'Próximo passo',
-      title: 'Solicite a decisão da IA',
-      description: 'O agente julgador aplicará o framework Comercial Equilibrado às evidências do caso.'
+      label: 'Em curso',
+      title: 'O caso está sendo julgado',
+      description: 'O agente julgador aplica o framework Comercial Equilibrado às evidências admitidas.'
     },
     decided: {
       icon: <ShieldCheck size={22} />,
-      label: 'Último passo',
-      title: 'Audite a decisão',
-      description: 'Uma segunda IA verificará fundamentos, evidências, contradições e aderência às regras.'
+      label: 'Em curso',
+      title: 'A decisão está sendo auditada',
+      description: 'Uma segunda IA verifica fundamentos, evidências, contradições e aderência às regras.'
+    },
+    ratification: {
+      icon: <Gavel size={22} />,
+      label: 'Sua vez',
+      title: 'A auditoria fez ressalva à decisão',
+      description: 'A revisão é de vocês: cada parte diz se aceita o resultado assim mesmo. Sem o aceite dos dois lados, o caso encerra sem decisão executável.'
+    },
+    ratified: {
+      icon: <ShieldCheck size={22} />,
+      label: 'Ratificada',
+      title: 'As duas partes aceitaram o resultado',
+      description: 'A execução passa a se apoiar na ratificação das partes, e não na aprovação automática.'
+    },
+    unresolved: {
+      icon: <AlertTriangle size={22} />,
+      label: 'Encerrado',
+      title: 'O procedimento terminou sem decisão executável',
+      description: 'O registro, o relatório e a cadeia de auditoria continuam íntegros e verificáveis.'
+    },
+    attested: {
+      icon: <ShieldCheck size={22} />,
+      label: 'Janela de contestação',
+      title: 'A decisão foi assinada',
+      description: 'Enquanto a janela estiver aberta, qualquer uma das partes pode contestar o resultado.'
+    },
+    contested: {
+      icon: <AlertTriangle size={22} />,
+      label: 'Contestado',
+      title: 'Uma das partes contestou a decisão',
+      description: 'O caso fica registrado como contestado e nenhuma nova attestation é emitida.'
     }
-  }[caseData.status]
+  }[caseData.status] || {
+    icon: <Search size={22} />,
+    label: 'Em curso',
+    title: 'O procedimento está em andamento',
+    description: 'O rito segue conduzindo as etapas cujas pré-condições já estão cumpridas.'
+  }
 
   return (
     <section className="next-action">
@@ -1216,11 +1336,19 @@ function NextAction({
           actorHeaders={actorHeaders}
           claimantResponse={claimantResponse}
           respondentResponse={respondentResponse}
-          conciliationUpdate={conciliationUpdate}
           setClaimantResponse={setClaimantResponse}
           setRespondentResponse={setRespondentResponse}
-          setConciliationUpdate={setConciliationUpdate}
           roles={roles}
+          myParty={myParty}
+        />
+      ) : caseData.status === 'ratification' ? (
+        <RatificationPanel
+          caseData={caseData}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+          myParty={myParty}
         />
       ) : caseData.status === 'draft' ? (
         <>
@@ -1307,88 +1435,231 @@ function NextAction({
             </div>
           </div>
 
-          <div className="lock-explanation">
-            <LockKeyhole size={20} />
-            <div>
-              <strong>Quando terminar de adicionar documentos</strong>
-              <span>
-                Fixe o conjunto documental. Depois disso, nenhum arquivo poderá ser
-                incluído ou alterado, preservando a integridade do processo.
-              </span>
-            </div>
-            <button
-              className="button primary"
-              disabled={
-                busy
-                || !roles.manager
-                || !caseData.documents.length
-                || !caseData.consent?.complete
-                || !caseData.contradictory?.complete
-              }
-              onClick={() => run(
-                'Protegendo documentos e regras do processo...',
-                () => request(`/cases/${caseData.id}/lock`, {
-                  method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
-                })
-              )}
-            >
-              Fixar documentos e continuar <ArrowRight size={17} />
-            </button>
-          </div>
-          {(!caseData.consent?.complete || !caseData.contradictory?.complete) && (
-            <div className="blocking-note">
-              <AlertTriangle size={17} />
-              <span>
-                {!caseData.consent?.complete
-                  ? 'A adesão das duas partes ainda está pendente. '
-                  : ''}
-                {!caseData.contradictory?.complete
-                  ? 'Todos os materiais precisam de ciência, resposta ou renúncia e admissão antes da trava.'
-                  : ''}
-              </span>
-            </div>
-          )}
+          <SubmissionClosure
+            caseData={caseData}
+            busy={busy}
+            run={run}
+            request={request}
+            actorHeaders={actorHeaders}
+            myParty={myParty}
+          />
         </>
       ) : (
-        <button
-          className="button primary action-cta"
-          disabled={busy || !roles.manager}
-          onClick={() => {
-            if (caseData.status === 'locked') {
-              return run(
-                'Buscando interesses convergentes e possibilidades de composição...',
-                () => request(`/cases/${caseData.id}/conciliation`, {
-                  method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
-                })
-              )
-            }
-            if (caseData.status === 'organized') {
-              return run(
-                'A IA está julgando o caso e fundamentando a decisão...',
-                () => request(`/cases/${caseData.id}/decide`, {
-                  method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
-                })
-              )
-            }
-            return run(
-              'A segunda IA está auditando a decisão...',
-              () => request(`/cases/${caseData.id}/review`, {
-                method: 'POST',
-                headers: actorHeaders(caseData.id, 'manager')
-              })
-            )
-          }}
-        >
-          {caseData.status === 'locked' && 'Avaliar conciliação ou mediação'}
-          {caseData.status === 'organized' && 'Proferir decisão'}
-          {caseData.status === 'decided' && 'Auditar decisão'}
-          <ArrowRight size={18} />
-        </button>
+        <ProcedureRunning
+          caseData={caseData}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+          myParty={myParty}
+        />
       )}
     </section>
+  )
+}
+
+function RatificationPanel({ caseData, busy, run, request, actorHeaders, myParty }) {
+  const [reason, setReason] = useState('')
+  const ratification = caseData.ratification || {}
+  const mine = myParty ? ratification[myParty] : null
+  const review = caseData.review || {}
+  const decision = caseData.decision || {}
+
+  const reservations = [
+    !review.approved && 'A auditoria independente não aprovou a decisão.',
+    decision.requires_human_review && 'O agente julgador indicou revisão humana.',
+    review.requires_human_review && 'A auditoria independente indicou revisão humana.'
+  ].filter(Boolean)
+
+  function answer(accepted) {
+    return run(
+      accepted
+        ? 'Registrando o seu aceite da decisão...'
+        : 'Registrando a sua recusa...',
+      () => request(`/cases/${caseData.id}/ratification`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...actorHeaders(caseData.id, myParty)
+        },
+        body: JSON.stringify({ accepted, reason })
+      })
+    )
+  }
+
+  return (
+    <div className="ratification-panel">
+      <div className="blocking-note">
+        <AlertTriangle size={17} />
+        <span>
+          {reservations.join(' ')} Por isso a execução automática está
+          bloqueada. Não há terceiro para revisar: quem decide se o resultado
+          vale assim mesmo são vocês.
+        </span>
+      </div>
+
+      <div className="consent-grid">
+        {['claimant', 'respondent'].map((party) => (
+          <div className={`consent-party ${ratification[party]?.accepted ? 'accepted' : ''}`} key={party}>
+            <div>
+              <span>{partyRoleLabel(party)}</span>
+              <strong>{party === 'claimant' ? caseData.claimant : caseData.respondent}</strong>
+            </div>
+            {ratification[party]?.answered ? (
+              ratification[party]?.accepted
+                ? <em><Check size={14} /> Aceitou</em>
+                : <em><AlertTriangle size={14} /> Recusou</em>
+            ) : (
+              <em><Clock3 size={14} /> Aguardando a parte</em>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {myParty && !mine?.answered && (
+        <>
+          <label className="mini-field full">
+            <span>Motivo (obrigatório para recusar)</span>
+            <textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Se for recusar, explique o que na decisão não se sustenta."
+            />
+          </label>
+          <div className="conciliation-buttons">
+            <button
+              className="button primary"
+              disabled={busy}
+              onClick={() => answer(true)}
+            >
+              <Check size={17} /> Aceito o resultado
+            </button>
+            <button
+              className="button ghost"
+              disabled={busy || reason.trim().length < 10}
+              onClick={() => answer(false)}
+            >
+              Recuso a decisão
+            </button>
+          </div>
+        </>
+      )}
+
+      <small className="consent-note">
+        O silêncio não vale como aceite: se o prazo vencer sem manifestação das
+        duas partes, o caso encerra sem decisão executável. Recusar não é
+        derrota — apenas devolve o conflito a vocês, com o registro íntegro do
+        que foi produzido aqui.
+      </small>
+    </div>
+  )
+}
+
+function SubmissionClosure({ caseData, busy, run, request, actorHeaders, myParty }) {
+  const submission = caseData.submission || {}
+  const mine = myParty ? submission[myParty] : null
+  const consentPending = !caseData.consent?.complete
+  const contradictoryPending = !caseData.contradictory?.complete
+
+  return (
+    <>
+      <div className="lock-explanation">
+        <LockKeyhole size={20} />
+        <div>
+          <strong>Quando terminar de apresentar seu material</strong>
+          <span>
+            Declare que encerrou a sua produção. Quando os dois lados encerrarem
+            — e todo material tiver passado pelo contraditório — o próprio rito
+            trava o conjunto documental. Ninguém decide isso por vocês. Se o
+            prazo vencer sem declaração, o rito encerra a produção por decurso
+            de prazo.
+          </span>
+        </div>
+        {myParty && (
+          <button
+            className={`button ${mine?.closed ? 'ghost' : 'primary'}`}
+            disabled={busy || (!mine?.closed && !caseData.documents.length)}
+            onClick={() => run(
+              mine?.closed
+                ? 'Reabrindo a sua produção de material...'
+                : 'Registrando o encerramento da sua produção...',
+              () => request(`/cases/${caseData.id}/submission-complete`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...actorHeaders(caseData.id, myParty)
+                },
+                body: JSON.stringify({ closed: !mine?.closed })
+              })
+            )}
+          >
+            {mine?.closed ? 'Reabrir minha produção' : 'Encerrei minha produção'}
+            {!mine?.closed && <ArrowRight size={17} />}
+          </button>
+        )}
+      </div>
+
+      <div className="submission-state">
+        {['claimant', 'respondent'].map((party) => (
+          <span className={`deadline-row ${submission[party]?.closed ? 'completed' : 'open'}`} key={party}>
+            <strong>{partyRoleLabel(party)}</strong>
+            <small>
+              {submission[party]?.closed
+                ? 'encerrou a produção de material'
+                : 'ainda pode apresentar material'}
+            </small>
+          </span>
+        ))}
+      </div>
+
+      {(consentPending || contradictoryPending) && (
+        <div className="blocking-note">
+          <AlertTriangle size={17} />
+          <span>
+            {consentPending ? 'A adesão das duas partes ainda está pendente. ' : ''}
+            {contradictoryPending
+              ? 'Todo material precisa de ciência e de resposta ou renúncia da contraparte antes da trava. A admissão é automática.'
+              : ''}
+          </span>
+        </div>
+      )}
+    </>
+  )
+}
+
+function ProcedureRunning({ caseData, busy, run, request, actorHeaders, myParty }) {
+  const stageMessage = {
+    locked: 'O conjunto documental está travado. O rito abriu a fase de composição.',
+    conciliation: 'A composição está em curso.',
+    organized: 'Os fatos foram organizados. O julgamento vem em seguida.',
+    decided: 'A decisão foi proferida e segue para a auditoria independente.',
+    attested: 'A decisão foi assinada e a janela de contestação está aberta.',
+    contested: 'O caso foi contestado por uma das partes.'
+  }[caseData.status] || 'O rito está conduzindo o procedimento.'
+
+  return (
+    <div className="procedure-running">
+      <p>{stageMessage}</p>
+      <small>
+        Nenhuma destas etapas depende de uma pessoa. Cada uma executa quando as
+        pré-condições da anterior estão cumpridas.
+      </small>
+      {myParty && (
+        <button
+          className="button secondary action-cta"
+          disabled={busy}
+          onClick={() => run(
+            'Verificando o que o rito já pode executar...',
+            () => request(`/cases/${caseData.id}/advance`, {
+              method: 'POST',
+              headers: actorHeaders(caseData.id, myParty)
+            })
+          )}
+        >
+          Atualizar o andamento <ArrowRight size={18} />
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -1452,11 +1723,53 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria independente e possível revisão humana.</span>
+        <span>participação voluntária; acesso a todo material; oportunidade de resposta; preclusão pelo silêncio, que não é concordância; composição somente por acordo; decisão fundamentada por IA; auditoria independente; ratificação pelas partes quando houver ressalva.</span>
       </div>
+      <LegalNotice />
+    </div>
+  )
+}
+
+function LegalNotice() {
+  const [legal, setLegal] = useState(null)
+
+  useEffect(() => {
+    let vivo = true
+    fetch(`${API_BASE}/legal`, { credentials: 'include' })
+      .then((resposta) => (resposta.ok ? resposta.json() : null))
+      .then((dados) => { if (vivo) setLegal(dados) })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [])
+
+  if (!legal) return null
+  const minuta = legal.documents.some((item) => item.draft)
+
+  return (
+    <div className="legal-notice">
+      {minuta && (
+        <span className="legal-draft">
+          <AlertTriangle size={14} />
+          Documentos ainda em minuta, pendentes de revisão jurídica.
+        </span>
+      )}
       <small>
-        Versão dos termos: 2026-07-12. O aceite fica associado ao papel, ao momento e à cadeia de auditoria.
+        Versão dos termos: {legal.version}. O aceite fica associado ao papel, ao
+        momento e à cadeia de auditoria — e à versão que a plataforma
+        apresentou, registrada pelo servidor.
       </small>
+      <span className="legal-links">
+        {legal.documents.map((documento) => (
+          <a
+            key={documento.kind}
+            href={`${API_BASE}${documento.url}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {documento.title}
+          </a>
+        ))}
+      </span>
     </div>
   )
 }
@@ -1469,41 +1782,30 @@ function ConciliationActions({
   actorHeaders,
   claimantResponse,
   respondentResponse,
-  conciliationUpdate,
   setClaimantResponse,
   setRespondentResponse,
-  setConciliationUpdate,
-  roles
+  myParty
 }) {
   const rounds = caseData.conciliation_rounds || []
   const latest = rounds[rounds.length - 1] || caseData.conciliation || {}
-  const canAdvance = latest.continue_recommended
-    || claimantResponse.trim()
-    || respondentResponse.trim()
-    || conciliationUpdate.trim()
+  const composition = caseData.composition || {}
+  const myPosition = myParty === 'respondent' ? respondentResponse : claimantResponse
+  const setMyPosition = myParty === 'respondent' ? setRespondentResponse : setClaimantResponse
+  const alreadySubmitted = Boolean(myParty && composition[myParty]?.submitted)
 
-  async function generateNextRound() {
+  async function submitPosition() {
     const result = await run(
-      `Preparando a rodada ${rounds.length + 1} com base nas respostas das partes...`,
-      () => request(`/cases/${caseData.id}/conciliation`, {
+      'Registrando a sua posição para a próxima rodada...',
+      () => request(`/cases/${caseData.id}/composition/position`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...actorHeaders(caseData.id, 'manager')
+          ...actorHeaders(caseData.id, myParty)
         },
-        body: JSON.stringify({
-          advance: true,
-          claimant_response: claimantResponse,
-          respondent_response: respondentResponse,
-          new_information: conciliationUpdate
-        })
+        body: JSON.stringify({ position: myPosition })
       })
     )
-    if (result) {
-      setClaimantResponse('')
-      setRespondentResponse('')
-      setConciliationUpdate('')
-    }
+    if (result) setMyPosition('')
   }
 
   return (
@@ -1512,71 +1814,68 @@ function ConciliationActions({
         <span>Rodada {latest.round_number || rounds.length}</span>
         <strong>
           {latest.continue_recommended
-            ? `A IA recomenda continuar a negociação`
+            ? 'A IA recomenda continuar a negociação'
             : 'A IA não recomenda repetir a mesma tentativa'}
         </strong>
         <p>
           {latest.continue_recommended
-            ? `${latest.recommended_additional_rounds || 1} rodada(s) adicional(is) parecem úteis. Foco sugerido: ${latest.next_round_focus || 'aproximar as posições ainda negociáveis'}.`
-            : `${latest.stop_reason || 'As posições parecem esgotadas.'} Fatos ou posições novas ainda podem justificar outra rodada.`}
+            ? `${latest.recommended_additional_rounds || 1} rodada(s) adicional(is) parecem úteis. Foco sugerido: ${latest.next_round_focus || 'aproximar as posições ainda negociáveis'}. A próxima rodada é aberta assim que os dois lados se manifestarem.`
+            : `${latest.stop_reason || 'As posições parecem esgotadas.'} O rito segue para o julgamento.`}
         </p>
       </div>
 
       <div className="party-response-grid">
-        <label className="mini-field">
-          <span>Resposta do cliente reclamante</span>
-          <textarea
-            disabled={!roles.claimant}
-            value={claimantResponse}
-            onChange={(event) => setClaimantResponse(event.target.value)}
-            placeholder="O que aceita, rejeita ou gostaria de alterar?"
-          />
-        </label>
-        <label className="mini-field">
-          <span>Resposta da empresa reclamada</span>
-          <textarea
-            disabled={!roles.respondent}
-            value={respondentResponse}
-            onChange={(event) => setRespondentResponse(event.target.value)}
-            placeholder="Qual concessão, condição ou contraproposta a empresa apresenta?"
-          />
-        </label>
-        <label className="mini-field full">
-          <span>Fatos novos ou orientação para a próxima rodada</span>
-          <textarea
-            disabled={!roles.manager}
-            value={conciliationUpdate}
-            onChange={(event) => setConciliationUpdate(event.target.value)}
-            placeholder="Ex.: novo prazo possível, pagamento já realizado ou interesse em manter a relação."
-          />
-        </label>
+        {['claimant', 'respondent'].map((party) => (
+          <label className="mini-field" key={party}>
+            <span>
+              Posição de {partyRoleLabel(party).toLowerCase()}
+              {composition[party]?.submitted ? ' · registrada' : ''}
+            </span>
+            {party === myParty && !alreadySubmitted ? (
+              <textarea
+                value={myPosition}
+                onChange={(event) => setMyPosition(event.target.value)}
+                placeholder="O que você aceita, rejeita ou gostaria de alterar nesta rodada?"
+              />
+            ) : (
+              <div className="waiting-slot">
+                {composition[party]?.submitted
+                  ? <em><Check size={14} /> Posição registrada para esta rodada</em>
+                  : <em><Clock3 size={14} /> Aguardando a manifestação da parte</em>}
+              </div>
+            )}
+          </label>
+        ))}
       </div>
 
-      <div className="conciliation-buttons">
-        <button
-          className="button secondary"
-          disabled={busy || !roles.manager || !canAdvance}
-          onClick={generateNextRound}
-        >
-          <Handshake size={17} /> Gerar rodada {rounds.length + 1}
-        </button>
-        <button
-          className="button primary"
-          disabled={busy || !roles.manager}
-          onClick={() => run(
-            'Encerrando a fase consensual e organizando o caso...',
-            () => request(`/cases/${caseData.id}/organize`, {
-              method: 'POST',
-              headers: actorHeaders(caseData.id, 'manager')
-            })
-          )}
-        >
-          Seguir para julgamento <ArrowRight size={17} />
-        </button>
-      </div>
+      {myParty && (
+        <div className="conciliation-buttons">
+          <button
+            className="button secondary"
+            disabled={busy || alreadySubmitted || !myPosition.trim()}
+            onClick={submitPosition}
+          >
+            <Handshake size={17} /> Registrar minha posição
+          </button>
+          <button
+            className="button ghost"
+            disabled={busy}
+            onClick={() => run(
+              'Encerrando a composição e seguindo para o julgamento...',
+              () => request(`/cases/${caseData.id}/composition/close`, {
+                method: 'POST',
+                headers: actorHeaders(caseData.id, myParty)
+              })
+            )}
+          >
+            Encerrar a composição <ArrowRight size={17} />
+          </button>
+        </div>
+      )}
       <small className="consent-note">
-        Nenhuma proposta é aceita automaticamente. Cada parte decide se concorda,
-        contrapropõe ou encerra a negociação.
+        Cada parte fala por si: ninguém redige a manifestação da outra. A
+        composição é voluntária — basta um dos lados encerrá-la para o rito
+        seguir para o julgamento.
       </small>
     </div>
   )
@@ -1630,6 +1929,21 @@ function DocumentsCard({
               />
               <EvidenceState done={document.admitted} label="Admitido para decisão" />
             </div>
+
+            {document.response_status === 'precluded' && (
+              <small className="admission-note">
+                O prazo para se manifestar sobre este material venceu sem
+                resposta. A oportunidade foi encerrada por preclusão — o que não
+                significa concordância com o conteúdo.
+              </small>
+            )}
+
+            <MaterialReader
+              caseId={caseData.id}
+              document={document}
+              busy={busy}
+              request={request}
+            />
 
             {!locked && roles[document.counterparty] && !document.acknowledged_at && (
               <button
@@ -1694,26 +2008,13 @@ function DocumentsCard({
             )}
 
             {!locked
-              && roles.manager
               && document.response_status !== 'pending'
               && !document.admitted
               && (
-                <button
-                  className="button primary compact"
-                  disabled={busy}
-                  onClick={() => run(
-                    'Admitindo o material após o contraditório...',
-                    () => request(
-                      `/cases/${caseData.id}/documents/${document.id}/admit`,
-                      {
-                        method: 'POST',
-                        headers: actorHeaders(caseData.id, 'manager')
-                      }
-                    )
-                  )}
-                >
-                  Admitir para a decisão
-                </button>
+                <small className="admission-note">
+                  Contraditório cumprido: o rito admite este material
+                  automaticamente, sem intervenção de terceiros.
+                </small>
               )}
 
             {document.response_text && (
@@ -1752,6 +2053,66 @@ function DocumentsCard({
       )
     )
   }
+}
+
+function MaterialReader({ caseId, document, busy, request }) {
+  const [open, setOpen] = useState(false)
+  const [content, setContent] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [failure, setFailure] = useState('')
+
+  async function toggle() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setOpen(true)
+    if (content) return
+    setLoading(true)
+    setFailure('')
+    try {
+      const data = await request(`/cases/${caseId}/documents/${document.id}/content`)
+      setContent(data.content || '')
+    } catch (err) {
+      setFailure(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function openOriginal() {
+    setFailure('')
+    try {
+      const data = await request(
+        `/cases/${caseId}/documents/${document.id}/original-url`,
+        { method: 'POST' }
+      )
+      window.open(data.url, '_blank', 'noopener')
+    } catch (err) {
+      setFailure(err.message)
+    }
+  }
+
+  return (
+    <div className="material-reader">
+      <div className="material-reader-actions">
+        <button className="button ghost compact" onClick={toggle} disabled={busy}>
+          <FileText size={15} /> {open ? 'Fechar o material' : 'Ler o material'}
+        </button>
+        {document.has_original && (
+          <button className="button ghost compact" onClick={openOriginal} disabled={busy}>
+            <Download size={15} /> Baixar o arquivo original
+          </button>
+        )}
+      </div>
+      {failure && <small className="material-reader-error">{failure}</small>}
+      {open && (
+        loading
+          ? <small>Carregando o teor do material...</small>
+          : <pre className="material-content">{content}</pre>
+      )}
+    </div>
+  )
 }
 
 function EvidenceState({ done, label }) {
@@ -2018,6 +2379,13 @@ function partyLabel(party, caseData) {
   return 'parte não identificada'
 }
 
+function partyRoleLabel(role) {
+  return {
+    claimant: 'Cliente reclamante',
+    respondent: 'Empresa reclamada'
+  }[role] || role
+}
+
 function materialTypeLabel(type) {
   return type === 'argument' ? 'Alegação' : 'Prova'
 }
@@ -2027,7 +2395,8 @@ function responseStatusLabel(status) {
     pending: 'Resposta pendente',
     answered: 'Respondido',
     challenged: 'Contestado',
-    waived: 'Resposta dispensada'
+    waived: 'Resposta dispensada',
+    precluded: 'Prazo vencido sem resposta'
   }[status] || 'Resposta pendente'
 }
 

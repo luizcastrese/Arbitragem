@@ -16,3 +16,4 @@ nostr-sdk>=0.44,<0.45
 # Development and verification
 httpx>=0.27,<1
 pytest>=8,<9
+opentimestamps==0.4.5

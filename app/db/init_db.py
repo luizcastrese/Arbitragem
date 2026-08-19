@@ -12,6 +12,9 @@ def _upgrade_sqlite_schema():
     document_columns = {
         column["name"] for column in inspect(engine).get_columns("documents")
     }
+    deadline_columns = {
+        column["name"] for column in inspect(engine).get_columns("deadlines")
+    }
     case_additions = {
         "conciliation_json": "TEXT",
         "claimant_consent": "BOOLEAN NOT NULL DEFAULT 1",
@@ -20,8 +23,14 @@ def _upgrade_sqlite_schema():
         "respondent_consent_at": "TEXT",
         "claimant_token_hash": "TEXT",
         "respondent_token_hash": "TEXT",
-        "manager_token_hash": "TEXT",
+        "claimant_submission_closed": "BOOLEAN NOT NULL DEFAULT 0",
+        "respondent_submission_closed": "BOOLEAN NOT NULL DEFAULT 0",
+        "claimant_submission_closed_at": "TEXT",
+        "respondent_submission_closed_at": "TEXT",
+        "composition_inputs_json": "TEXT",
+        "ratification_json": "TEXT",
     }
+    deadline_additions = {"reference_id": "TEXT"}
     document_additions = {
         "submitted_by": "TEXT NOT NULL DEFAULT 'claimant'",
         "material_type": "TEXT NOT NULL DEFAULT 'evidence'",
@@ -56,6 +65,19 @@ def _upgrade_sqlite_schema():
                 connection.exec_driver_sql(
                     f"ALTER TABLE documents ADD COLUMN {name} {definition}"
                 )
+        for name, definition in deadline_additions.items():
+            if name not in deadline_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE deadlines ADD COLUMN {name} {definition}"
+                )
+        # O papel de gestor humano foi abolido: nenhum vínculo ou convite pode
+        # continuar concedendo poderes de terceiro a uma pessoa.
+        connection.exec_driver_sql(
+            "DELETE FROM case_members WHERE role = 'manager'"
+        )
+        connection.exec_driver_sql(
+            "DELETE FROM invitations WHERE role = 'manager'"
+        )
         if document_additions.keys() - document_columns:
             connection.exec_driver_sql(
                 "UPDATE documents SET "

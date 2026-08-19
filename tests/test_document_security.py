@@ -181,7 +181,12 @@ def client():
 def _upload_pdf(client):
     case = client.post(
         "/cases",
-        json={"title": "Caso", "claimant": "Cliente", "respondent": "Empresa"},
+        json={
+            "title": "Caso",
+            "claimant": "Cliente",
+            "respondent": "Empresa",
+            "creator_role": "claimant",
+        },
     ).json()
     case_id = case["id"]
     credentials = case["access_credentials"]
@@ -228,7 +233,12 @@ def test_signed_download_rejects_bad_token(client):
 def test_signed_url_404_for_text_document(client):
     case = client.post(
         "/cases",
-        json={"title": "Caso", "claimant": "Cliente", "respondent": "Empresa"},
+        json={
+            "title": "Caso",
+            "claimant": "Cliente",
+            "respondent": "Empresa",
+            "creator_role": "claimant",
+        },
     ).json()
     case_id = case["id"]
     credentials = case["access_credentials"]
@@ -305,7 +315,7 @@ def test_add_document_stores_encrypted_chunk_text_in_db(monkeypatch):
                 respondent="Empresa",
                 claimant_token_hash="x",
                 respondent_token_hash="y",
-                manager_token_hash="z",
+                created_by="claimant",
             )
             secret_text = "Informação confidencial da parte reclamante sobre o contrato."
             add_document(
