@@ -39,6 +39,8 @@ cadeia de auditoria encadeada por hashes.
 - Structured Outputs pela Responses API;
 - manifesto imutável assinado com HMAC-SHA256;
 - verificação do manifesto e da cadeia de auditoria;
+- varredura periódica (`python -m app.core.worker`) que faz a preclusão
+  disparar sem depender de alguém agir, e amadurece as provas de carimbo;
 - ancoragem pública do topo da cadeia de auditoria na trava do manifesto e no
   encerramento do caso, por dois publicadores independentes: relays Nostr e
   carimbo do tempo OpenTimestamps (Bitcoin);
@@ -368,6 +370,24 @@ persistência, imutabilidade após o lock, idempotência do `advance`, PDF, agen
 automática, relatório Word, assinatura e auditoria. Um teste específico verifica
 que nenhum ato do procedimento é atribuído a um terceiro humano.
 
+## Manutenção periódica
+
+O rito se conduz sozinho, mas só acorda quando uma parte age. O que depende da
+passagem do tempo precisa de uma varredura no ar:
+
+```
+python -m app.core.worker
+```
+
+De hora em hora basta — os prazos são contados em dias. A varredura é
+idempotente: não faz nada quando não há o que fazer.
+
+Sem ela, duas coisas deixam de acontecer. A **preclusão** não dispara: se a
+parte que se beneficia do silêncio da outra nunca abrir o aplicativo, o prazo
+vence e o caso fica parado, que é o oposto do que a preclusão existe para
+garantir. E as **provas OpenTimestamps** nunca amadurecem, ficando para sempre
+como recibo de calendário em vez de carimbo em blockchain.
+
 ## Limites antes de produção pública
 
 - contas por e-mail reduzem o risco de compartilhamento indevido, mas ainda não
@@ -406,8 +426,7 @@ que nenhum ato do procedimento é atribuído a um terceiro humano.
   A prova nasce pendente e só vira carimbo em blockchain horas depois; até lá
   vale como recibo de calendário. O amadurecimento acontece em qualquer
   chamada posterior de `advance`, mas num caso encerrado ninguém mais age —
-  por isso `python -m app.core.timestamping upgrade` precisa rodar
-  periodicamente;
+  por isso a varredura periódica precisa estar no ar (ver abaixo);
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
