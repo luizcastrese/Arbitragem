@@ -77,6 +77,17 @@ def sweep() -> Dict[str, Any]:
         "steps": steps,
         "failures": failures,
     }
+    if examined and failures == examined:
+        # Todo caso falhando não é coincidência de casos ruins: é a varredura
+        # rodando com ambiente diferente do da aplicação. O sintoma clássico é
+        # faltar DOCUMENT_ENCRYPTION_KEY, sem a qual nada pode ser lido — e o
+        # efeito é silencioso, com a preclusão simplesmente nunca acontecendo.
+        logger.error(
+            "todos os %s casos falharam: verifique se a varredura roda com as "
+            "mesmas variáveis de ambiente da aplicação "
+            "(DATABASE_URL, DOCUMENT_ENCRYPTION_KEY, PLATFORM_SIGNING_SECRET)",
+            examined,
+        )
     logger.info("varredura concluída: %s", summary)
     return summary
 

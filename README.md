@@ -394,6 +394,12 @@ python -m app.core.worker
 De hora em hora basta — os prazos são contados em dias. A varredura é
 idempotente: não faz nada quando não há o que fazer.
 
+**Ela precisa das mesmas variáveis de ambiente da aplicação** — em especial
+`DATABASE_URL` e `DOCUMENT_ENCRYPTION_KEY`. Sem a chave, nenhum caso pode ser
+lido e a varredura falha em todos eles; quando isso acontece ela registra um
+erro dizendo exatamente isso, porque o sintoma de fora é apenas a preclusão
+nunca acontecer.
+
 Sem ela, duas coisas deixam de acontecer. A **preclusão** não dispara: se a
 parte que se beneficia do silêncio da outra nunca abrir o aplicativo, o prazo
 vence e o caso fica parado, que é o oposto do que a preclusão existe para
