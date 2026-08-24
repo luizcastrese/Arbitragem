@@ -2,8 +2,9 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from app.core.config import get_settings
+from app.agents.execution import fallback_execution, openai_execution
 from app.core.llm import call_openai_structured
+from app.core.prompt_registry import register_prompt
 
 
 class DecisionOutput(BaseModel):
@@ -49,6 +50,8 @@ Regras obrigatórias:
 - Responda em português do Brasil.
 """
 
+PROMPT = register_prompt("judge", "1.0.0", SYSTEM_PROMPT)
+
 
 def _safe_fallback(reason: str) -> Dict:
     return {
@@ -69,27 +72,20 @@ def _safe_fallback(reason: str) -> Dict:
             f"Motivo técnico: {reason}.",
         ],
         "requires_human_review": True,
-        "execution": {
-            "mode": "safe_fallback",
-            "model": None,
-            "reason": reason,
-        },
+        "execution": fallback_execution(PROMPT, reason),
     }
 
 
 def decide_case(decision_context: Dict) -> Dict:
     try:
         result = call_openai_structured(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=PROMPT.text,
             user_payload=decision_context,
             response_model=DecisionOutput,
         )
     except Exception as exc:
         return _safe_fallback(type(exc).__name__)
 
-    result["execution"] = {
-        "mode": "openai",
-        "model": get_settings().openai_model,
-        "reason": None,
-    }
-    return result
+    decision = dict(result.data)
+    decision["execution"] = openai_execution(PROMPT, result)
+    return decision

@@ -112,6 +112,9 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState('register')
   const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '')
+  const [terms, setTerms] = useState(null)
+  const [authNotice, setAuthNotice] = useState('')
 
   const currentStage = useMemo(
     () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
@@ -153,6 +156,62 @@ export default function App() {
       setShowAuth(false)
       setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
       await loadCases()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resendVerification() {
+    setError('')
+    try {
+      const data = await request('/auth/verify-email/resend', { method: 'POST' })
+      setAuthNotice(data.message)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function requestPasswordReset(event) {
+    event.preventDefault()
+    const email = new FormData(event.currentTarget).get('email')
+    setBusy(true)
+    setError('')
+    try {
+      const data = await request('/auth/password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      })
+      // Em produção o link só chega por e-mail; no modo local ele volta aqui.
+      setAuthNotice(data.reset_path
+        ? `${data.message} Link local: ${data.reset_path}`
+        : data.message)
+      setAuthMode('login')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirmPasswordReset(event) {
+    event.preventDefault()
+    const password = new FormData(event.currentTarget).get('password')
+    setBusy(true)
+    setError('')
+    try {
+      const data = await request('/auth/password-reset/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, password })
+      })
+      setAuthNotice(data.message)
+      setUser(null)
+      setResetToken('')
+      setAuthMode('login')
+      window.history.replaceState({}, '', window.location.pathname)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -204,6 +263,24 @@ export default function App() {
       try {
         const root = await request('/')
         setSystem(root)
+        try {
+          setTerms(await request('/terms'))
+        } catch { /* sem os termos, o painel de aceite avisa e não deixa aceitar às cegas */ }
+
+        const verifyToken = new URLSearchParams(window.location.search).get('verify')
+        if (verifyToken) {
+          try {
+            const verified = await request('/auth/verify-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: verifyToken })
+            })
+            setAuthNotice(`E-mail ${verified.user.email} confirmado.`)
+          } catch (err) {
+            setError(err.message)
+          }
+          window.history.replaceState({}, '', window.location.pathname)
+        }
         try {
           setUser(await request('/auth/me'))
           const items = await request('/cases')
@@ -371,12 +448,49 @@ export default function App() {
 
         <AudienceValue />
 
-        {showAuth && (
+        {authNotice && (
+          <div className="invite-banner">
+            <Mail size={20} />
+            <div>
+              <strong>{authNotice}</strong>
+            </div>
+            <button className="button ghost compact" onClick={() => setAuthNotice('')}>Fechar</button>
+          </div>
+        )}
+
+        {resetToken && (
+          <PasswordResetPanel
+            busy={busy}
+            onSubmit={confirmPasswordReset}
+            onCancel={() => {
+              setResetToken('')
+              window.history.replaceState({}, '', window.location.pathname)
+            }}
+          />
+        )}
+
+        {user && user.email_verified === false && (
+          <div className="invite-banner">
+            <Mail size={20} />
+            <div>
+              <strong>Confirme seu e-mail para atuar no procedimento</strong>
+              <span>
+                Enviamos um link para {user.email}. Enquanto ele não for confirmado,
+                sua conta não pratica atos no caso.
+              </span>
+            </div>
+            <button className="button primary" onClick={resendVerification} disabled={busy}>
+              Reenviar link
+            </button>
+          </div>
+        )}
+
+        {showAuth && !resetToken && (
           <AuthPanel
             mode={authMode}
             setMode={setAuthMode}
             busy={busy}
-            onSubmit={authenticate}
+            onSubmit={authMode === 'forgot' ? requestPasswordReset : authenticate}
             onClose={() => setShowAuth(false)}
           />
         )}
@@ -683,13 +797,32 @@ function Journey({ title, steps }) {
   )
 }
 
+const AUTH_COPY = {
+  register: {
+    title: 'Crie sua conta',
+    description: 'Uma conta permite receber convites, acessar apenas os casos vinculados e atuar com o papel correto. Confirmamos seu e-mail antes do primeiro ato no procedimento.',
+    submit: 'Criar conta'
+  },
+  login: {
+    title: 'Entre na plataforma',
+    description: 'Uma conta permite receber convites, acessar apenas os casos vinculados e atuar com o papel correto.',
+    submit: 'Entrar'
+  },
+  forgot: {
+    title: 'Recuperar acesso',
+    description: 'Informe o e-mail da conta. Se existir cadastro, enviamos um link de uso único para escolher uma nova senha. Redefinir a senha encerra todas as sessões abertas.',
+    submit: 'Enviar link'
+  }
+}
+
 function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
+  const copy = AUTH_COPY[mode] || AUTH_COPY.login
   return (
     <section className="auth-panel">
       <div>
         <span className="section-label">Acesso protegido</span>
-        <h2>{mode === 'register' ? 'Crie sua conta' : 'Entre na plataforma'}</h2>
-        <p>Uma conta permite receber convites, acessar apenas os casos vinculados e atuar com o papel correto.</p>
+        <h2>{copy.title}</h2>
+        <p>{copy.description}</p>
       </div>
       <form onSubmit={onSubmit} className="auth-form">
         {mode === 'register' && (
@@ -702,18 +835,47 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
           <span>E-mail</span>
           <input name="email" type="email" required placeholder="voce@empresa.com" />
         </label>
-        <label className="mini-field">
-          <span>Senha</span>
-          <input name="password" type="password" minLength={mode === 'register' ? 10 : 1} required placeholder="Mínimo de 10 caracteres" />
-        </label>
+        {mode !== 'forgot' && (
+          <label className="mini-field">
+            <span>Senha</span>
+            <input name="password" type="password" minLength={mode === 'register' ? 10 : 1} required placeholder="Mínimo de 10 caracteres" />
+          </label>
+        )}
         <div className="auth-actions">
           <button type="button" className="button ghost" onClick={onClose}>Agora não</button>
-          <button className="button primary" disabled={busy}>{mode === 'register' ? 'Criar conta' : 'Entrar'}</button>
+          <button className="button primary" disabled={busy}>{copy.submit}</button>
         </div>
       </form>
-      <button className="auth-switch" onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>
-        {mode === 'register' ? 'Já tenho uma conta' : 'Quero criar uma conta'}
-      </button>
+      <div className="auth-links">
+        <button className="auth-switch" onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>
+          {mode === 'register' ? 'Já tenho uma conta' : 'Quero criar uma conta'}
+        </button>
+        <button className="auth-switch" onClick={() => setMode(mode === 'forgot' ? 'login' : 'forgot')}>
+          {mode === 'forgot' ? 'Voltar para o acesso' : 'Esqueci minha senha'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function PasswordResetPanel({ busy, onSubmit, onCancel }) {
+  return (
+    <section className="auth-panel">
+      <div>
+        <span className="section-label">Redefinição de senha</span>
+        <h2>Escolha uma nova senha</h2>
+        <p>Ao concluir, todas as sessões abertas nesta conta são encerradas e você entra de novo com a senha nova.</p>
+      </div>
+      <form onSubmit={onSubmit} className="auth-form">
+        <label className="mini-field">
+          <span>Nova senha</span>
+          <input name="password" type="password" minLength={10} required placeholder="Mínimo de 10 caracteres" />
+        </label>
+        <div className="auth-actions">
+          <button type="button" className="button ghost" onClick={onCancel}>Cancelar</button>
+          <button className="button primary" disabled={busy}>Redefinir senha</button>
+        </div>
+      </form>
     </section>
   )
 }
@@ -1231,6 +1393,7 @@ function NextAction({
             request={request}
             actorHeaders={actorHeaders}
             roles={roles}
+            terms={terms}
           />
 
           <div className="submission-context">
@@ -1392,7 +1555,8 @@ function NextAction({
   )
 }
 
-function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
+function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms }) {
+  const [showTerms, setShowTerms] = useState(false)
   const entries = [
     {
       party: 'claimant',
@@ -1429,7 +1593,10 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
             ) : roles[entry.party] ? (
               <button
                 className="button secondary compact"
-                disabled={busy}
+                // Sem o texto carregado não há o que aceitar: o aceite grava o
+                // hash do que foi exibido, não uma versão suposta.
+                disabled={busy || !terms}
+                title={terms ? undefined : 'Carregando os termos...'}
                 onClick={() => run(
                   `Registrando a adesão de ${entry.name}...`,
                   () => request(`/cases/${caseData.id}/consent`, {
@@ -1438,7 +1605,13 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
                       'Content-Type': 'application/json',
                       ...actorHeaders(caseData.id, entry.party)
                     },
-                    body: JSON.stringify({ party: entry.party, accepted: true })
+                    body: JSON.stringify({
+                      party: entry.party,
+                      accepted: true,
+                      // Aceita-se a versão que esta tela exibiu, não a que o
+                      // servidor considerar vigente no momento do clique.
+                      terms_version: terms.version
+                    })
                   })
                 )}
               >
@@ -1453,9 +1626,18 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles }) {
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
         <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria independente e possível revisão humana.</span>
+        <button className="link-button" onClick={() => setShowTerms(!showTerms)}>
+          {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
+        </button>
+        {showTerms && (
+          <pre className="terms-text">{terms?.text || 'Carregando os termos...'}</pre>
+        )}
       </div>
       <small>
-        Versão dos termos: 2026-07-12. O aceite fica associado ao papel, ao momento e à cadeia de auditoria.
+        {terms
+          ? <>Versão dos termos: {terms.version} · SHA-256 {terms.sha256.slice(0, 16)}…</>
+          : 'Carregando a versão vigente dos termos...'}
+        {' '}O aceite grava a versão e o hash deste texto na cadeia de auditoria, junto ao papel e ao momento.
       </small>
     </div>
   )

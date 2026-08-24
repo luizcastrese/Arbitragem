@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Type
 
 from openai import OpenAI
@@ -19,6 +20,21 @@ class LLMQuotaExceeded(LLMCallError):
     pass
 
 
+@dataclass(frozen=True)
+class LLMResult:
+    """Saída estruturada mais a procedência da chamada.
+
+    `model` é o modelo que a API declara ter respondido, não o que pedimos:
+    aliases como `gpt-5-mini` resolvem para uma versão datada, e é essa que
+    precisa ficar registrada na decisão.
+    """
+
+    data: Dict[str, Any]
+    model: str
+    response_id: Optional[str] = None
+    usage: Dict[str, int] = field(default_factory=dict)
+
+
 def openai_configured() -> bool:
     return get_settings().openai_enabled
 
@@ -30,12 +46,26 @@ def _client() -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key)
 
 
+def _usage_to_dict(usage: Any) -> Dict[str, int]:
+    if usage is None:
+        return {}
+    return {
+        key: value
+        for key, value in (
+            ("input_tokens", getattr(usage, "input_tokens", None)),
+            ("output_tokens", getattr(usage, "output_tokens", None)),
+            ("total_tokens", getattr(usage, "total_tokens", None)),
+        )
+        if isinstance(value, int)
+    }
+
+
 def call_openai_structured(
     system_prompt: str,
     user_payload: Dict[str, Any],
     response_model: Type[BaseModel],
     model: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> LLMResult:
     settings = get_settings()
     try:
         response = _client().responses.parse(
@@ -60,9 +90,13 @@ def call_openai_structured(
         raise LLMCallError("OpenAI returned no structured output")
 
     parsed = response.output_parsed
-    if hasattr(parsed, "model_dump"):
-        return parsed.model_dump()
-    return parsed.dict()
+    data = parsed.model_dump() if hasattr(parsed, "model_dump") else parsed.dict()
+    return LLMResult(
+        data=data,
+        model=getattr(response, "model", None) or model or settings.openai_model,
+        response_id=getattr(response, "id", None),
+        usage=_usage_to_dict(getattr(response, "usage", None)),
+    )
 
 
 def generate_embedding(text: str, model: Optional[str] = None) -> List[float]:

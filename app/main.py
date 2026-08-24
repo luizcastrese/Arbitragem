@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from io import BytesIO
 import logging
@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.agents.conciliator import assess_conciliation
+from app.agents.execution import with_drift
 from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
@@ -31,10 +32,15 @@ from app.core.attestation import (
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
-from app.core.email import deliver_invitation_email
+from app.core.email import (
+    deliver_invitation_email,
+    deliver_password_reset_email,
+    deliver_verification_email,
+)
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
 from app.core.nostr_anchor import publish_attestation_anchor
+from app.core.prompt_registry import detect_drift
 from app.core.ratelimit import SlidingWindowRateLimiter
 from app.core.signed_url import (
     SignedUrlError,
@@ -42,19 +48,33 @@ from app.core.signed_url import (
     verify_download_token,
 )
 from app.core.signing import verify_signature
+from app.core.terms import (
+    TermsNotFound,
+    current_terms,
+    get_terms,
+    list_versions as list_terms_versions,
+)
 from app.db.access_repository import (
+    EMAIL_VERIFICATION,
+    PASSWORD_RESET,
+    AccountLocked,
     accept_invitation,
     add_member,
     authenticate_user,
+    consume_auth_token,
     create_deadline,
     create_invitation,
     create_notification,
     create_session,
     deadline_to_dict,
+    get_user_by_email,
     get_user_by_token,
     invitation_to_dict,
+    issue_auth_token,
+    mark_email_verified,
     register_user,
     revoke_session,
+    set_password,
     user_case_ids,
     user_has_role,
     user_to_dict,
@@ -100,7 +120,10 @@ from app.schemas import (
     EvidenceActionRequest,
     InvitationRequest,
     LoginRequest,
+    PasswordResetConfirmRequest,
+    PasswordResetRequest,
     RegisterRequest,
+    VerifyEmailRequest,
 )
 
 
@@ -118,6 +141,25 @@ rate_limiter = SlidingWindowRateLimiter(
     window_seconds=settings.rate_limit_window_seconds,
     enabled=settings.rate_limit_enabled,
 )
+
+# As rotas de credencial (login, cadastro, verificação e redefinição) têm um
+# limite próprio e bem mais estreito que o limite geral: são elas que um
+# atacante repete para adivinhar senha ou varrer e-mails cadastrados. Fica
+# ligado sempre, inclusive em desenvolvimento.
+auth_rate_limiter = SlidingWindowRateLimiter(
+    max_requests=settings.auth_rate_limit_max_requests,
+    window_seconds=settings.auth_rate_limit_window_seconds,
+    enabled=True,
+)
+
+AUTH_RATE_LIMITED_PATHS = {
+    "/auth/register",
+    "/auth/login",
+    "/auth/verify-email",
+    "/auth/verify-email/resend",
+    "/auth/password-reset",
+    "/auth/password-reset/confirm",
+}
 
 
 @asynccontextmanager
@@ -154,9 +196,31 @@ async def observability_and_rate_limit(request: Request, call_next):
         request.scope["headers"] = headers
 
     request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    client_key = request.client.host if request.client else "unknown"
+
+    if request.url.path in AUTH_RATE_LIMITED_PATHS and request.method == "POST":
+        allowed, retry_after = auth_rate_limiter.allow(f"auth:{client_key}")
+        if not allowed:
+            logger.warning(
+                "auth_rate_limited request_id=%s client=%s path=%s",
+                request_id,
+                client_key,
+                request.url.path,
+            )
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "detail": (
+                        "Muitas tentativas de acesso a partir deste endereço. "
+                        "Aguarde antes de tentar de novo."
+                    )
+                },
+            )
+            response.headers["Retry-After"] = str(int(retry_after) + 1)
+            response.headers["X-Request-ID"] = request_id
+            return response
 
     if rate_limiter.enabled:
-        client_key = request.client.host if request.client else "unknown"
         allowed, retry_after = rate_limiter.allow(client_key)
         if not allowed:
             logger.warning(
@@ -224,6 +288,23 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _require_verified_email(user) -> None:
+    """Nenhuma conta pratica atos no procedimento antes de comprovar o
+    controle do e-mail. A leitura do caso continua liberada: a parte precisa
+    conseguir ver o que está pendente enquanto confirma o endereço."""
+    if not settings.email_verification_required:
+        return
+    if user is None or user.email_verified_at:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Confirme seu e-mail antes de praticar atos no procedimento. "
+            "Reenvie o link em /auth/verify-email/resend."
+        ),
+    )
+
+
 def _require_actor(db: Session, case, token: str, expected_party: str):
     if settings.allow_role_tokens:
         stored_hash = getattr(case, f"{expected_party}_token_hash", None)
@@ -233,12 +314,69 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
             return None
     user = get_user_by_token(db, token)
     if user and user_has_role(db, case.id, user.id, expected_party):
+        _require_verified_email(user)
         return user
 
     raise HTTPException(
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
     )
+
+
+def _record_prompt_provenance(case_data: Dict, agent: str, stage: Dict) -> Dict:
+    """Compara o prompt que rodou com o que o manifesto travou e anota a
+    divergência na própria etapa. Um prompt trocado depois da trava deixa de
+    ser invisível: aparece na etapa, no evento de auditoria e no relatório."""
+    drift = detect_drift(case_data.get("locked_manifest"), agent)
+    if drift:
+        logger.warning(
+            "prompt_drift agent=%s case=%s locked=%s running=%s",
+            agent,
+            case_data.get("id"),
+            drift.get("locked_sha256"),
+            drift.get("running_sha256"),
+        )
+        stage["execution"] = with_drift(stage.get("execution", {}), drift)
+    return stage
+
+
+def _assert_consent_terms_reproducible(case_data: Dict) -> None:
+    """Impede travar o caso quando o aceite de alguma parte não pode mais ser
+    reproduzido: versão ausente, desconhecida ou com hash diferente do texto
+    publicado. Sem isso, o manifesto assinado registraria um consentimento que
+    a plataforma não consegue mais exibir."""
+    consent = case_data.get("consent") or {}
+    for party in ("claimant", "respondent"):
+        entry = consent.get(party) or {}
+        version = entry.get("terms_version")
+        recorded = entry.get("terms_sha256")
+        if not version or not recorded:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"O aceite de {party} foi registrado sem versão e hash dos "
+                    "termos. Peça um novo aceite antes de travar o caso."
+                ),
+            )
+        try:
+            terms = get_terms(version)
+        except TermsNotFound as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"O aceite de {party} aponta para a versão de termos "
+                    f"{version}, que não existe mais na plataforma."
+                ),
+            ) from exc
+        if terms.sha256 != recorded:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"O texto dos termos {version} mudou depois do aceite de "
+                    f"{party}. Publique uma versão nova e colha novo aceite: "
+                    "versões publicadas não podem ser editadas."
+                ),
+            )
 
 
 def _assert_evidence_mutable(case) -> None:
@@ -426,6 +564,32 @@ def _require_case_view(db: Session, case, x_session_token: str):
     return user
 
 
+def _send_verification(db: Session, user) -> Dict:
+    """Emite e envia um novo link de verificação. No modo local (sem produção)
+    o token volta na resposta para permitir testar sem SMTP configurado."""
+    token, record = issue_auth_token(
+        db,
+        user,
+        EMAIL_VERIFICATION,
+        timedelta(hours=settings.email_verification_ttl_hours),
+    )
+    delivery = deliver_verification_email(
+        to_email=user.email,
+        display_name=user.display_name,
+        token=token,
+    )
+    result = {
+        "required": settings.email_verification_required,
+        "verified": user.email_verified_at is not None,
+        "expires_at": record.expires_at.isoformat(),
+        "delivery": delivery,
+    }
+    if settings.allow_role_tokens:
+        result["verification_token"] = token
+        result["verification_path"] = f"/ui/?verify={token}"
+    return result
+
+
 @app.post("/auth/register", status_code=201)
 def register(
     payload: RegisterRequest,
@@ -436,11 +600,13 @@ def register(
         user = register_user(db, payload.display_name, payload.email, payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    verification = _send_verification(db, user)
     token, session = create_session(db, user)
     _set_session_cookie(response, token)
     return {
         "user": user_to_dict(user),
         "expires_at": session.expires_at.isoformat(),
+        "email_verification": verification,
     }
 
 
@@ -450,7 +616,19 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    user = authenticate_user(db, payload.email, payload.password)
+    try:
+        user = authenticate_user(db, payload.email, payload.password)
+    except AccountLocked as locked:
+        minutes = max(1, round(locked.retry_after_seconds / 60))
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Conta temporariamente bloqueada por tentativas de senha "
+                f"malsucedidas. Tente novamente em cerca de {minutes} min ou "
+                "redefina a senha."
+            ),
+            headers={"Retry-After": str(locked.retry_after_seconds)},
+        ) from locked
     if not user:
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos")
     token, session = create_session(db, user)
@@ -458,6 +636,98 @@ def login(
     return {
         "user": user_to_dict(user),
         "expires_at": session.expires_at.isoformat(),
+    }
+
+
+@app.post("/auth/verify-email")
+def verify_email(
+    payload: VerifyEmailRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        user = consume_auth_token(db, payload.token, EMAIL_VERIFICATION)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    user = mark_email_verified(db, user)
+    return {"message": "E-mail verificado", "user": user_to_dict(user)}
+
+
+@app.post("/auth/verify-email/resend")
+def resend_verification(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    user = _session_user_or_401(db, x_session_token)
+    if user.email_verified_at:
+        return {
+            "message": "Este e-mail já está verificado",
+            "email_verification": {"required": settings.email_verification_required, "verified": True},
+        }
+    return {
+        "message": "Novo link de verificação enviado",
+        "email_verification": _send_verification(db, user),
+    }
+
+
+@app.post("/auth/password-reset", status_code=202)
+def request_password_reset(
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+):
+    """Sempre responde igual, exista ou não a conta: a resposta não pode
+    servir para descobrir quais e-mails estão cadastrados."""
+    generic = {
+        "message": (
+            "Se existir uma conta com este e-mail, o link de redefinição foi "
+            "enviado para ele."
+        )
+    }
+    user = get_user_by_email(db, payload.email)
+    if not user or not user.active:
+        return generic
+
+    token, _ = issue_auth_token(
+        db,
+        user,
+        PASSWORD_RESET,
+        timedelta(minutes=settings.password_reset_ttl_minutes),
+    )
+    deliver_password_reset_email(
+        to_email=user.email,
+        display_name=user.display_name,
+        token=token,
+    )
+    if settings.allow_role_tokens:
+        # Modo local: sem SMTP configurado o link precisa sair por algum
+        # canal. Em produção isso nunca é exposto.
+        return {**generic, "reset_token": token, "reset_path": f"/ui/?reset={token}"}
+    return generic
+
+
+@app.post("/auth/password-reset/confirm")
+def confirm_password_reset(
+    payload: PasswordResetConfirmRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    try:
+        user = consume_auth_token(db, payload.token, PASSWORD_RESET)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    user = set_password(db, user, payload.password)
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        secure=settings.is_production,
+        httponly=True,
+        samesite="lax",
+    )
+    return {
+        "message": (
+            "Senha redefinida. Todas as sessões abertas foram encerradas: "
+            "entre novamente com a nova senha."
+        ),
+        "user": user_to_dict(user),
     }
 
 
@@ -522,6 +792,7 @@ def create_case(
     user = get_user_by_token(db, x_session_token)
     if settings.auth_required and not user:
         raise HTTPException(status_code=401, detail="Entre para criar um caso")
+    _require_verified_email(user)
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -616,6 +887,10 @@ def accept_case_invitation(
         invitation = accept_invitation(db, payload.token, user)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # O convite é entregue exclusivamente por e-mail e vinculado ao endereço:
+    # apresentá-lo prova o controle da caixa, o mesmo que a verificação faria.
+    if not settings.allow_role_tokens:
+        user = mark_email_verified(db, user)
     case = _case_or_404(db, invitation.case_id)
     append_audit(
         db,
@@ -695,6 +970,29 @@ def complete_deadline(
     return deadline_to_dict(deadline)
 
 
+@app.get("/terms")
+def get_current_terms():
+    """Texto vigente dos termos, com versão e hash. É este texto que a parte
+    precisa ver antes de aceitar."""
+    return {**current_terms().as_dict(), "available_versions": list_terms_versions()}
+
+
+@app.get("/terms/{version}")
+def get_terms_version(version: str):
+    try:
+        terms = get_terms(version)
+    except TermsNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Versão de termos desconhecida: {version}",
+        ) from exc
+    return {
+        **terms.as_dict(),
+        "current": version == current_terms().version,
+        "available_versions": list_terms_versions(),
+    }
+
+
 @app.post("/cases/{case_id}/consent")
 def set_case_consent(
     case_id: str,
@@ -709,12 +1007,23 @@ def set_case_consent(
             status_code=409,
             detail="O consentimento não pode ser alterado após a trava do processo",
         )
+    try:
+        terms = get_terms(payload.terms_version)
+    except TermsNotFound as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Versão de termos desconhecida: {payload.terms_version}. "
+                "Recarregue os termos vigentes em /terms antes de aceitar."
+            ),
+        ) from exc
     updated = record_consent(
         db,
         case,
         party=payload.party,
         accepted=payload.accepted,
-        terms_version=payload.terms_version,
+        terms_version=terms.version,
+        terms_sha256=terms.sha256,
     )
     return case_to_dict(updated, include_content=False, include_embeddings=False)[
         "consent"
@@ -1004,6 +1313,7 @@ def lock_manifest(
             status_code=409,
             detail=f"Contraditório pendente nos materiais: {pending}",
         )
+    _assert_consent_terms_reproducible(case_data)
 
     manifest = lock_case_manifest(case_data)
     persist_manifest(db, case, manifest)
@@ -1163,7 +1473,11 @@ def assess_case_conciliation(
         },
     }
     round_number = len(rounds) + 1
-    conciliation = assess_conciliation(context, round_number)
+    conciliation = _record_prompt_provenance(
+        case_data,
+        "conciliator",
+        assess_conciliation(context, round_number),
+    )
     updated_rounds = [*rounds, conciliation]
     save_stage(
         db,
@@ -1213,9 +1527,13 @@ def organize_case(
     if case_data["organized"]:
         return case_data["organized"]
 
-    organized = organizer_organize_case(
-        documents=case_data["documents"],
-        chunks=case_data["chunks"],
+    organized = _record_prompt_provenance(
+        case_data,
+        "organizer",
+        organizer_organize_case(
+            documents=case_data["documents"],
+            chunks=case_data["chunks"],
+        ),
     )
     save_stage(
         db,
@@ -1265,7 +1583,11 @@ def decide_case(
             ),
         },
     }
-    decision = judge_decide_case(decision_context)
+    decision = _record_prompt_provenance(
+        case_data,
+        "judge",
+        judge_decide_case(decision_context),
+    )
     save_stage(
         db,
         case,
@@ -1306,7 +1628,11 @@ def review_case(
         "organized_case": case_data["organized"],
         "decision": case_data["decision"],
     }
-    review = review_decision(review_payload)
+    review = _record_prompt_provenance(
+        case_data,
+        "reviewer",
+        review_decision(review_payload),
+    )
     save_stage(
         db,
         case,

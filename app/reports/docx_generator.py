@@ -195,6 +195,45 @@ def _join_items(items: Any) -> str:
     return str(items)
 
 
+def _terms_reference(entry: Any) -> str:
+    """Versão e hash do texto que a parte aceitou: é o que permite conferir
+    depois exatamente o que foi acordado."""
+    entry = entry or {}
+    version = entry.get("terms_version")
+    digest = entry.get("terms_sha256")
+    if not version or not digest:
+        return "Não registrado"
+    return f"{version} (SHA-256 {digest})"
+
+
+AI_STAGES = (
+    ("Conciliação", "conciliation"),
+    ("Organização", "organized"),
+    ("Decisão", "decision"),
+    ("Auditoria", "review"),
+)
+
+
+def _stage_provenance(case: Dict[str, Any]) -> list[tuple[str, str]]:
+    """Com qual modelo e com qual versão de prompt cada etapa foi produzida."""
+    rows = []
+    for label, field in AI_STAGES:
+        stage = case.get(field) or {}
+        execution = stage.get("execution") or {}
+        if not execution:
+            continue
+        prompt = execution.get("prompt") or {}
+        model = execution.get("model") or "não executado por IA"
+        prompt_text = (
+            f" | prompt {prompt.get('version')} ({prompt.get('sha256')})"
+            if prompt.get("version")
+            else ""
+        )
+        drift = " | PROMPT DIVERGENTE DO MANIFESTO" if execution.get("prompt_drift") else ""
+        rows.append((label, f"{model}{prompt_text}{drift}"))
+    return rows
+
+
 def build_docx_report(case: Dict[str, Any]) -> BytesIO:
     document = Document()
     _configure_styles(document)
@@ -231,7 +270,9 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
         (
             ("Aceite bilateral", "Completo" if consent.get("complete") else "Pendente"),
             ("Aceite do cliente", _format_timestamp((consent.get("claimant") or {}).get("accepted_at"))),
+            ("Termos aceitos pelo cliente", _terms_reference(consent.get("claimant"))),
             ("Aceite da empresa", _format_timestamp((consent.get("respondent") or {}).get("accepted_at"))),
+            ("Termos aceitos pela empresa", _terms_reference(consent.get("respondent"))),
             ("Contraditório", "Completo" if contradictory.get("complete") else "Pendente"),
             ("Manifesto", "Travado" if case.get("manifest_locked") else "Ainda aberto"),
         ),
@@ -344,6 +385,19 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
             ("Algoritmo", str(manifest.get("signature_algorithm", "Não disponível"))),
         ),
     )
+    provenance = _stage_provenance(case)
+    if provenance:
+        document.add_heading("Procedência das etapas por IA", level=2)
+        _add_key_value_table(document, provenance)
+        if any("DIVERGENTE" in value for _, value in provenance):
+            _add_callout(
+                document,
+                "Divergência de prompt",
+                "Uma ou mais etapas rodaram com prompt diferente do fixado no "
+                "manifesto travado. O resultado exige conferência humana.",
+                warning=True,
+            )
+
     events = case.get("audit_log") or []
     document.add_heading(f"Eventos registrados ({len(events)})", level=2)
     for event in events:

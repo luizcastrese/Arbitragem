@@ -1,19 +1,26 @@
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from app.core.auth import hash_access_token, hash_password, verify_password
+from app.core.config import get_settings
 from app.db.models import (
     AuthSession,
+    AuthToken,
     CaseMember,
     Deadline,
     Invitation,
     Notification,
     User,
 )
+
+
+EMAIL_VERIFICATION = "email_verification"
+PASSWORD_RESET = "password_reset"
 
 
 def utc_now() -> datetime:
@@ -29,6 +36,10 @@ def user_to_dict(user: User) -> dict:
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
+        "email_verified": user.email_verified_at is not None,
+        "email_verified_at": (
+            user.email_verified_at.isoformat() if user.email_verified_at else None
+        ),
         "created_at": user.created_at.isoformat(),
     }
 
@@ -49,10 +60,167 @@ def register_user(db: Session, display_name: str, email: str, password: str) -> 
     return user
 
 
+class AccountLocked(Exception):
+    """Conta temporariamente bloqueada por excesso de tentativas de senha."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("Conta temporariamente bloqueada")
+        self.retry_after_seconds = retry_after_seconds
+
+
+@lru_cache(maxsize=1)
+def _dummy_password_hash() -> str:
+    """Hash descartável usado quando o e-mail não existe: mantém o custo da
+    verificação parecido com o de uma conta real e evita descobrir contas
+    cadastradas pelo tempo de resposta."""
+    return hash_password("conta-inexistente-valinor")
+
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    return db.query(User).filter(User.email == email.strip().lower()).one_or_none()
+
+
+def lock_seconds_remaining(user: User) -> int:
+    if not user.locked_until:
+        return 0
+    remaining = (_as_utc(user.locked_until) - utc_now()).total_seconds()
+    return int(remaining) + 1 if remaining > 0 else 0
+
+
+def register_failed_login(db: Session, user: User) -> int:
+    """Conta a tentativa e bloqueia a conta ao atingir o limite. Devolve os
+    segundos de bloqueio (0 quando ainda não bloqueou)."""
+    settings = get_settings()
+    user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+    locked_for = 0
+    if user.failed_login_attempts >= settings.login_max_attempts:
+        locked_for = settings.login_lockout_seconds
+        user.locked_until = utc_now() + timedelta(seconds=locked_for)
+        user.failed_login_attempts = 0
+    db.commit()
+    return locked_for
+
+
+def clear_failed_logins(db: Session, user: User) -> None:
+    if user.failed_login_attempts or user.locked_until:
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.commit()
+
+
 def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
-    user = db.query(User).filter(User.email == email.strip().lower()).one_or_none()
-    if not user or not user.active or not verify_password(password, user.password_hash):
+    """Autentica respeitando o bloqueio por tentativas. Levanta AccountLocked
+    quando a conta está (ou acabou de ser) bloqueada."""
+    user = get_user_by_email(db, email)
+    if not user or not user.active:
+        verify_password(password, _dummy_password_hash())
         return None
+
+    remaining = lock_seconds_remaining(user)
+    if remaining:
+        raise AccountLocked(remaining)
+
+    if not verify_password(password, user.password_hash):
+        locked_for = register_failed_login(db, user)
+        if locked_for:
+            raise AccountLocked(locked_for)
+        return None
+
+    clear_failed_logins(db, user)
+    return user
+
+
+def issue_auth_token(
+    db: Session,
+    user: User,
+    purpose: str,
+    ttl: timedelta,
+) -> tuple[str, AuthToken]:
+    """Emite um token de uso único e invalida os anteriores da mesma
+    finalidade: um novo pedido sempre cancela o link antigo."""
+    now = utc_now()
+    for previous in (
+        db.query(AuthToken)
+        .filter(
+            AuthToken.user_id == user.id,
+            AuthToken.purpose == purpose,
+            AuthToken.used_at.is_(None),
+        )
+        .all()
+    ):
+        previous.used_at = now
+
+    token = secrets.token_urlsafe(40)
+    record = AuthToken(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        purpose=purpose,
+        token_hash=hash_access_token(token),
+        expires_at=now + ttl,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return token, record
+
+
+def consume_auth_token(db: Session, token: str, purpose: str) -> User:
+    record = (
+        db.query(AuthToken)
+        .filter(
+            AuthToken.token_hash == hash_access_token(token),
+            AuthToken.purpose == purpose,
+        )
+        .one_or_none()
+    )
+    if not record or record.used_at:
+        raise ValueError("Link inválido ou já utilizado")
+    if _as_utc(record.expires_at) <= utc_now():
+        raise ValueError("Este link expirou")
+    user = db.query(User).filter(User.id == record.user_id).one_or_none()
+    if not user or not user.active:
+        raise ValueError("Conta indisponível")
+    record.used_at = utc_now()
+    db.commit()
+    return user
+
+
+def mark_email_verified(db: Session, user: User) -> User:
+    if not user.email_verified_at:
+        user.email_verified_at = utc_now()
+        db.commit()
+        db.refresh(user)
+    return user
+
+
+def revoke_user_sessions(db: Session, user: User) -> int:
+    now = utc_now()
+    sessions = (
+        db.query(AuthSession)
+        .filter(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+        .all()
+    )
+    for session in sessions:
+        session.revoked_at = now
+    if sessions:
+        db.commit()
+    return len(sessions)
+
+
+def set_password(db: Session, user: User, password: str) -> User:
+    """Troca a senha, derruba todas as sessões abertas e libera o bloqueio.
+
+    Concluir a redefinição prova o controle do e-mail, então a conta também
+    passa a valer como verificada.
+    """
+    user.password_hash = hash_password(password)
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    if not user.email_verified_at:
+        user.email_verified_at = utc_now()
+    db.commit()
+    revoke_user_sessions(db, user)
+    db.refresh(user)
     return user
 
 

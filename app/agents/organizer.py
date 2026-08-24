@@ -2,8 +2,9 @@ from typing import Dict, List
 
 from pydantic import BaseModel
 
-from app.core.config import get_settings
+from app.agents.execution import fallback_execution, openai_execution
 from app.core.llm import call_openai_structured
+from app.core.prompt_registry import register_prompt
 from app.documents.embeddings import retrieve_by_embedding
 from app.documents.retrieval import retrieve_relevant_chunks
 
@@ -41,6 +42,8 @@ Regras:
 - Aponte evidência fraca, contraditória ou ausente.
 - Responda em português do Brasil.
 """
+
+PROMPT = register_prompt("organizer", "1.0.0", SYSTEM_PROMPT)
 
 
 def _safe_retrieve(query: str, chunks: List[Dict], limit: int = 3) -> List[Dict]:
@@ -82,11 +85,7 @@ def _fallback_organization(
             "É necessária revisão humana dos documentos.",
         ],
         "retrieved_context_used": retrieved_context,
-        "execution": {
-            "mode": "safe_fallback",
-            "model": None,
-            "reason": reason,
-        },
+        "execution": fallback_execution(PROMPT, reason),
     }
 
 
@@ -116,7 +115,7 @@ def organize_case(documents: List[Dict], chunks: List[Dict]) -> Dict:
 
     try:
         result = call_openai_structured(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=PROMPT.text,
             user_payload=payload,
             response_model=OrganizerOutput,
         )
@@ -127,10 +126,7 @@ def organize_case(documents: List[Dict], chunks: List[Dict]) -> Dict:
             type(exc).__name__,
         )
 
-    result["retrieved_context_used"] = retrieved_context
-    result["execution"] = {
-        "mode": "openai",
-        "model": get_settings().openai_model,
-        "reason": None,
-    }
-    return result
+    organized = dict(result.data)
+    organized["retrieved_context_used"] = retrieved_context
+    organized["execution"] = openai_execution(PROMPT, result)
+    return organized
