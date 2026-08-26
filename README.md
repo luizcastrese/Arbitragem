@@ -48,6 +48,16 @@ cadeia de auditoria encadeada por hashes.
   opcionalmente contra o modelo real;
 - manifesto imutável assinado com HMAC-SHA256;
 - verificação do manifesto e da cadeia de auditoria;
+- Decision Attestation assinada em Ed25519: artefato que um executor externo
+  (instituição de pagamento ou contrato inteligente) verifica offline com a
+  chave pública publicada em `/.well-known/valinor-signing-key`, emitido apenas
+  com a cadeia de auditoria íntegra e sujeito a uma janela de contestação em que
+  qualquer das partes pode barrar a execução;
+- âncora pública opcional da attestation em relays Nostr (só hash, assinatura e
+  identificadores — nunca o teor da decisão ou das partes), dando timestamp
+  independente do servidor da Valinor; a âncora só é registrada quando algum
+  relay aceita o evento, para a auditoria nunca apontar uma prova pública
+  inexistente;
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
@@ -74,6 +84,9 @@ caso
   -> decisão da IA
   -> auditoria independente
   -> relatório
+  -> attestation assinada (opcional)
+  -> janela de contestação
+  -> execução externa do escrow
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
@@ -81,10 +94,12 @@ uma parte, disponibilizado à contraparte, reconhecido como recebido e respondid
 ou expressamente dispensado. O gestor só pode admitir o material depois desse
 percurso, e o lock é bloqueado enquanto houver pendência.
 
-O aceite registra a versão dos termos exibidos às partes: participação
-voluntária, acesso a todo material, oportunidade de resposta, composição
-consensual, decisão fundamentada por IA, auditoria independente e revisão
-humana quando indicada.
+O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
+participação voluntária, acesso a todo material, oportunidade de resposta,
+composição consensual, decisão fundamentada por IA, auditoria independente e
+revisão humana quando indicada. O texto vive em `app/terms/<versão>.md` e é
+servido por `GET /terms`; versões publicadas nunca são editadas, e o caso não
+pode ser travado se o aceite de alguma parte não puder mais ser reproduzido.
 
 Depois do lock, novos documentos não são aceitos. Cada rodada de composição
 considera as posições atualizadas das partes. A IA informa se vale continuar,
@@ -165,11 +180,14 @@ Variáveis do arquivo `.env`:
 | `OPENAI_API_KEY` | Ativa embeddings e os quatro agentes |
 | `OPENAI_MODEL` | Modelo dos agentes; padrão `gpt-5-mini` |
 | `OPENAI_EMBEDDING_MODEL` | Modelo de embedding |
+| `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |
 | `DATABASE_URL` | Banco SQLAlchemy |
 | `POSTGRES_DB` | Banco criado pelo Docker Compose |
 | `POSTGRES_USER` | Usuário PostgreSQL do Compose |
 | `POSTGRES_PASSWORD` | Senha PostgreSQL do Compose |
-| `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
+| `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 e os links de download |
+| `PLATFORM_ED25519_PRIVATE_KEY` | Seed de 32 bytes (base64) que assina as Decision Attestations; vazia desabilita a emissão |
+| `CONTEST_WINDOW_DAYS` | Dias de contestação após a emissão da attestation, antes da execução externa |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
 | `AUTH_REQUIRED` | Exige conta e participação; padrão `true` e obrigatório em produção |
@@ -197,10 +215,20 @@ Variáveis do arquivo `.env`:
 | `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations em relays Nostr; opcional |
 | `NOSTR_RELAYS` | Relays Nostr (`wss://...`, separados por vírgula) para a âncora pública |
 
-Gere um segredo local:
+Gere os segredos:
 
 ```bash
+# PLATFORM_SIGNING_SECRET (obrigatório em produção)
 python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# DOCUMENT_ENCRYPTION_KEY, AES-256-GCM (obrigatória em produção)
+python -m app.core.encryption
+
+# PLATFORM_ED25519_PRIVATE_KEY, assina as Decision Attestations (opcional)
+python -m app.core.attestation
+
+# NOSTR_PRIVATE_KEY_HEX, âncora pública da attestation (opcional)
+python -m app.core.nostr_anchor
 ```
 
 Sem `OPENAI_API_KEY`, o sistema continua executável. Ele organiza o material
@@ -219,11 +247,15 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /auth/verify-email/resend` | Reenviar o link de confirmação |
 | `POST /auth/password-reset` | Pedir link de redefinição de senha |
 | `POST /auth/password-reset/confirm` | Definir a nova senha e encerrar as sessões |
+| `GET /auth/me` | Conta da sessão atual, com o estado de verificação do e-mail |
 | `GET /terms` | Texto vigente dos termos, com versão e hash |
 | `GET /terms/{version}` | Texto de uma versão específica dos termos |
+| `GET /cases/{id}/invitations` | Listar convites do caso (gestor) |
 | `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
+| `GET /cases/{id}/deadlines` | Listar a agenda processual |
 | `POST /cases/{id}/deadlines` | Criar prazo e notificações |
+| `POST /cases/{id}/deadlines/{deadline_id}/complete` | Marcar o prazo como cumprido |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte |
@@ -237,7 +269,9 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/lock` | Travar manifesto |
 | `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `GET /cases/{id}/manifest` | Ler o manifesto travado |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
+| `GET /cases/{id}/chunks` | Listar os trechos indexados do caso |
 | `GET /cases/{id}/retrieve` | Consultar evidências |
 | `POST /cases/{id}/organize` | Organizar registro |
 | `POST /cases/{id}/decide` | Proferir decisão da IA |
@@ -245,6 +279,13 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
 | `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
+| `POST /cases/{id}/attestation` | Emitir a Decision Attestation assinada |
+| `GET /cases/{id}/attestation` | Ler a attestation emitida |
+| `GET /cases/{id}/attestation/nostr-anchor` | Ler a âncora pública da attestation |
+| `POST /cases/{id}/contest` | Contestar a decisão dentro da janela |
+| `POST /attestations/verify` | Verificar uma attestation avulsa, sem contexto de caso |
+| `GET /.well-known/valinor-signing-key` | Publicar a chave pública Ed25519 da plataforma |
+| `GET /health` | Saúde da API, do banco e do modo de IA |
 
 ## Testes
 
