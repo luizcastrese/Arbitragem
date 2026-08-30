@@ -1,0 +1,45 @@
+{
+  "id": "conciliador_contingencia_vai_para_triagem_humana",
+  "agent": "conciliator",
+  "description": "Sem análise por IA, a composição não pode sugerir termos: o caminho recomendado é triagem humana, sem propostas inventadas.",
+  "offline_only": true,
+  "simulate_failure": "LLMUnavailable",
+  "input": {
+    "manifest": {
+      "case_id": "case-eval-001",
+      "framework": {
+        "id": "commercial_balanced_v1",
+        "name": "Comercial Equilibrado"
+      }
+    },
+    "round_number": 1,
+    "parties": {
+      "claimant": "Contratante",
+      "respondent": "Fornecedora"
+    },
+    "previous_rounds": [],
+    "current_party_responses": {
+      "claimant": "Quero a devolução proporcional.",
+      "respondent": "Houve alteração de escopo.",
+      "new_information": ""
+    }
+  },
+  "record": {
+    "document_ids": [
+      "doc-contrato",
+      "doc-defesa"
+    ],
+    "chunk_ids": [
+      "chunk-1",
+      "chunk-2",
+      "chunk-3"
+    ],
+    "corpus_text": "A Fornecedora entregará o sistema de gestão até 30 de junho de 2026. O valor total do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apenas 50% das funcionalidades foram entregues até 15 de julho de 2026 e que o módulo fiscal não foi iniciado. A Fornecedora sustenta que houve alteração de escopo pedida pela Contratante e reconhece atraso parcial."
+  },
+  "expectations": {
+    "execution_mode": "safe_fallback",
+    "recommended_path": "human_screening",
+    "figures_supported": true,
+    "provenance_recorded": true
+  }
+}

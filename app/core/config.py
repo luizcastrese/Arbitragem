@@ -35,9 +35,16 @@ class Settings:
     cors_origins: List[str]
     max_upload_bytes: int
     auth_required: bool
+    email_verification_required: bool
+    email_verification_ttl_hours: int
+    password_reset_ttl_minutes: int
+    login_max_attempts: int
+    login_lockout_seconds: int
     rate_limit_enabled: bool
     rate_limit_max_requests: int
     rate_limit_window_seconds: int
+    auth_rate_limit_max_requests: int
+    auth_rate_limit_window_seconds: int
     public_base_url: str
     smtp_host: str
     smtp_port: int
@@ -118,6 +125,14 @@ def get_settings() -> Settings:
     # Rate limiting fica ligado por padrão em produção.
     rate_limit_enabled = _env_flag("RATE_LIMIT_ENABLED", is_production)
 
+    # Em produção, nenhuma conta pratica atos no caso antes de comprovar o
+    # controle do endereço de e-mail: todo o contraditório depende de saber
+    # quem é a parte. Em desenvolvimento a exigência é opcional para não
+    # travar o fluxo local sem SMTP configurado.
+    email_verification_required = (
+        True if is_production else _env_flag("EMAIL_VERIFICATION_REQUIRED", False)
+    )
+
     return Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite:///./data/arbitragem.db"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
@@ -140,9 +155,24 @@ def get_settings() -> Settings:
         ),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))),
         auth_required=auth_required,
+        email_verification_required=email_verification_required,
+        email_verification_ttl_hours=int(
+            os.getenv("EMAIL_VERIFICATION_TTL_HOURS", "48")
+        ),
+        password_reset_ttl_minutes=int(
+            os.getenv("PASSWORD_RESET_TTL_MINUTES", "60")
+        ),
+        login_max_attempts=int(os.getenv("LOGIN_MAX_ATTEMPTS", "5")),
+        login_lockout_seconds=int(os.getenv("LOGIN_LOCKOUT_SECONDS", "900")),
         rate_limit_enabled=rate_limit_enabled,
         rate_limit_max_requests=int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120")),
         rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
+        auth_rate_limit_max_requests=int(
+            os.getenv("AUTH_RATE_LIMIT_MAX_REQUESTS", "12")
+        ),
+        auth_rate_limit_window_seconds=int(
+            os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "300")
+        ),
         public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
         smtp_host=os.getenv("SMTP_HOST", "").strip(),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),

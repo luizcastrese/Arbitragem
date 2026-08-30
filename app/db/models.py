@@ -22,6 +22,12 @@ class Case(Base):
     respondent_consent = Column(Boolean, nullable=False, default=False)
     claimant_consent_at = Column(String, nullable=True)
     respondent_consent_at = Column(String, nullable=True)
+    # Versão e hash do texto de termos efetivamente exibido e aceito por cada
+    # parte. O hash é o que permite provar, depois, o que foi aceito.
+    claimant_terms_version = Column(String, nullable=True)
+    claimant_terms_sha256 = Column(String, nullable=True)
+    respondent_terms_version = Column(String, nullable=True)
+    respondent_terms_sha256 = Column(String, nullable=True)
     claimant_token_hash = Column(String, nullable=True)
     respondent_token_hash = Column(String, nullable=True)
     manager_token_hash = Column(String, nullable=True)
@@ -143,11 +149,39 @@ class User(Base):
     display_name = Column(String, nullable=False)
     password_hash = Column(Text, nullable=False)
     active = Column(Boolean, nullable=False, default=True)
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    failed_login_attempts = Column(Integer, nullable=False, default=0)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
     memberships = relationship("CaseMember", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user")
+    auth_tokens = relationship(
+        "AuthToken",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class AuthToken(Base):
+    """Token de uso único para verificação de e-mail e redefinição de senha.
+
+    Só o hash é persistido: quem tem acesso ao banco não consegue reconstruir
+    o link enviado por e-mail.
+    """
+
+    __tablename__ = "auth_tokens"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    purpose = Column(String, nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    user = relationship("User", back_populates="auth_tokens")
 
 
 class AuthSession(Base):

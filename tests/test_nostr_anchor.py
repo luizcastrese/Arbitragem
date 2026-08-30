@@ -174,6 +174,45 @@ def test_publish_anchor_fails_gracefully_when_relay_unreachable(attestation, mon
         get_settings.cache_clear()
 
 
+def test_publish_without_any_accepting_relay_is_not_an_anchor(attestation, monkeypatch):
+    """O SDK ora levanta erro, ora devolve um envio que nenhum relay aceitou.
+    Os dois casos são ausência de âncora: registrar o segundo colocaria na
+    cadeia de auditoria uma prova pública que ninguém consegue buscar."""
+
+    class _EventId:
+        def to_hex(self):
+            return "f" * 64
+
+    class _Output:
+        id = _EventId()
+        success = []
+
+    class _ClientSemRelay:
+        def __init__(self, _signer):
+            pass
+
+        async def add_relay(self, _url):
+            return None
+
+        async def connect(self):
+            return None
+
+        async def send_event_builder(self, _builder):
+            return _Output()
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setenv("NOSTR_PRIVATE_KEY_HEX", Keys.generate().secret_key().to_hex())
+    monkeypatch.setenv("NOSTR_RELAYS", "ws://127.0.0.1:1")
+    monkeypatch.setattr(nostr_anchor_module, "Client", _ClientSemRelay)
+    get_settings.cache_clear()
+    try:
+        assert publish_attestation_anchor(attestation) is None
+    finally:
+        get_settings.cache_clear()
+
+
 def test_publish_anchor_skipped_when_attestation_has_no_case_id(monkeypatch):
     monkeypatch.setenv("NOSTR_PRIVATE_KEY_HEX", Keys.generate().secret_key().to_hex())
     monkeypatch.setenv("NOSTR_RELAYS", "ws://127.0.0.1:1")

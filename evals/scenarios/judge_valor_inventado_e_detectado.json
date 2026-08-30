@@ -1,0 +1,88 @@
+{
+  "id": "judge_valor_inventado_e_detectado",
+  "agent": "judge",
+  "description": "Controle negativo: decisão que inventa um valor e cita um trecho inexistente. As métricas precisam acusar as duas coisas.",
+  "offline_only": true,
+  "input": {
+    "manifest": {
+      "case_id": "case-eval-001",
+      "framework": {
+        "id": "commercial_balanced_v1",
+        "name": "Comercial Equilibrado"
+      }
+    },
+    "conciliation_rounds": [],
+    "organized_case": {
+      "summary": "Disputa sobre entrega parcial de sistema de gestão.",
+      "undisputed_facts": [
+        "Existe contrato de desenvolvimento entre as partes."
+      ],
+      "disputed_facts": [
+        "Extensão do escopo efetivamente entregue."
+      ],
+      "claimant_requests": [
+        "Devolução proporcional ao não entregue."
+      ],
+      "respondent_arguments": [
+        "Houve alteração de escopo pedida pela Contratante."
+      ],
+      "relevant_evidence": [
+        "doc-contrato/chunk-1",
+        "doc-defesa/chunk-3"
+      ]
+    },
+    "retrieved_evidence": {
+      "delivery": [
+        {
+          "id": "chunk-1",
+          "document_id": "doc-contrato",
+          "text": "A Fornecedora entregará o sistema de gestão até 30 de junho de 2026. O valor total do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apena"
+        }
+      ],
+      "payment": [
+        {
+          "id": "chunk-2",
+          "document_id": "doc-contrato",
+          "text": "al do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apenas 50% das funcionalidades foram entregue"
+        }
+      ]
+    }
+  },
+  "record": {
+    "document_ids": [
+      "doc-contrato",
+      "doc-defesa"
+    ],
+    "chunk_ids": [
+      "chunk-1",
+      "chunk-2",
+      "chunk-3"
+    ],
+    "corpus_text": "A Fornecedora entregará o sistema de gestão até 30 de junho de 2026. O valor total do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apenas 50% das funcionalidades foram entregues até 15 de julho de 2026 e que o módulo fiscal não foi iniciado. A Fornecedora sustenta que houve alteração de escopo pedida pela Contratante e reconhece atraso parcial."
+  },
+  "recorded_output": {
+    "framework": "Comercial Equilibrado",
+    "outcome": "partial",
+    "partial_claimant_bps": 7800,
+    "decision": "Fixa-se a devolução de R$ 62.500,00, correspondente a 78% do valor contratado.",
+    "reasoning": [
+      "Estimativa do escopo não entregue."
+    ],
+    "evidence_cited": [
+      "doc-contrato/chunk-9",
+      "doc-inexistente"
+    ],
+    "principles_applied": [
+      "proporcionalidade"
+    ],
+    "confidence": 0.9,
+    "limitations": [],
+    "requires_human_review": false
+  },
+  "expectations": {
+    "citations_grounded": false,
+    "figures_supported": false,
+    "partial_requires_bps": true,
+    "provenance_recorded": true
+  }
+}

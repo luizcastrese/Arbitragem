@@ -1,0 +1,82 @@
+{
+  "id": "reviewer_aprovando_contingencia_e_detectado",
+  "agent": "reviewer",
+  "description": "Controle negativo: auditoria que aprova uma decisão em contingência precisa ser reprovada pela métrica.",
+  "offline_only": true,
+  "input": {
+    "manifest": {
+      "case_id": "case-eval-001",
+      "framework": {
+        "id": "commercial_balanced_v1",
+        "name": "Comercial Equilibrado"
+      }
+    },
+    "conciliation_rounds": [],
+    "organized_case": {
+      "summary": "Disputa sobre entrega parcial de sistema de gestão.",
+      "undisputed_facts": [
+        "Existe contrato de desenvolvimento entre as partes."
+      ],
+      "disputed_facts": [
+        "Extensão do escopo efetivamente entregue."
+      ],
+      "claimant_requests": [
+        "Devolução proporcional ao não entregue."
+      ],
+      "respondent_arguments": [
+        "Houve alteração de escopo pedida pela Contratante."
+      ],
+      "relevant_evidence": [
+        "doc-contrato/chunk-1",
+        "doc-defesa/chunk-3"
+      ]
+    },
+    "decision": {
+      "framework": "Comercial Equilibrado",
+      "outcome": "inconclusive",
+      "decision": "A IA não pôde proferir uma decisão de mérito com segurança.",
+      "reasoning": [
+        "O agente julgador não concluiu a etapa decisória."
+      ],
+      "evidence_cited": [],
+      "principles_applied": [],
+      "confidence": 0.0,
+      "limitations": [
+        "Nenhuma decisão financeira automática foi produzida."
+      ],
+      "requires_human_review": true,
+      "execution": {
+        "mode": "safe_fallback",
+        "model": null,
+        "reason": "LLMUnavailable"
+      }
+    }
+  },
+  "record": {
+    "document_ids": [
+      "doc-contrato",
+      "doc-defesa"
+    ],
+    "chunk_ids": [
+      "chunk-1",
+      "chunk-2",
+      "chunk-3"
+    ],
+    "corpus_text": "A Fornecedora entregará o sistema de gestão até 30 de junho de 2026. O valor total do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apenas 50% das funcionalidades foram entregues até 15 de julho de 2026 e que o módulo fiscal não foi iniciado. A Fornecedora sustenta que houve alteração de escopo pedida pela Contratante e reconhece atraso parcial."
+  },
+  "recorded_output": {
+    "approved": true,
+    "issues": [],
+    "risks": [],
+    "contradictions": [],
+    "missing_evidence": [],
+    "framework_alignment": "alinhado",
+    "confidence_assessment": 0.8,
+    "requires_human_review": false
+  },
+  "expectations": {
+    "approved": true,
+    "fallback_never_approved": false,
+    "provenance_recorded": true
+  }
+}

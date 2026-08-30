@@ -2,8 +2,9 @@ from typing import Dict, List
 
 from pydantic import BaseModel, Field
 
-from app.core.config import get_settings
+from app.agents.execution import fallback_execution, openai_execution
 from app.core.llm import call_openai_structured
+from app.core.prompt_registry import register_prompt
 
 
 class ReviewOutput(BaseModel):
@@ -34,6 +35,8 @@ Uma decisão inconclusiva ou produzida em modo fallback não pode ser aprovada
 como decisão final do sistema. Responda em português do Brasil.
 """
 
+PROMPT = register_prompt("reviewer", "1.0.0", SYSTEM_PROMPT)
+
 
 def _safe_fallback(review_payload: Dict, reason: str) -> Dict:
     decision = review_payload.get("decision") or {}
@@ -46,27 +49,20 @@ def _safe_fallback(review_payload: Dict, reason: str) -> Dict:
         "framework_alignment": "não verificado",
         "confidence_assessment": 0.0,
         "requires_human_review": True,
-        "execution": {
-            "mode": "safe_fallback",
-            "model": None,
-            "reason": reason,
-        },
+        "execution": fallback_execution(PROMPT, reason),
     }
 
 
 def review_decision(review_payload: Dict) -> Dict:
     try:
         result = call_openai_structured(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=PROMPT.text,
             user_payload=review_payload,
             response_model=ReviewOutput,
         )
     except Exception as exc:
         return _safe_fallback(review_payload, type(exc).__name__)
 
-    result["execution"] = {
-        "mode": "openai",
-        "model": get_settings().openai_model,
-        "reason": None,
-    }
-    return result
+    review = dict(result.data)
+    review["execution"] = openai_execution(PROMPT, result)
+    return review

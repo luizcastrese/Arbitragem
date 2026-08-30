@@ -25,9 +25,13 @@ cadeia de auditoria encadeada por hashes.
 - casos persistidos em SQLite;
 - autorização separada para cliente, empresa e gestor em cada caso;
 - contas com senha derivada por PBKDF2 e sessões expiráveis em cookie HttpOnly;
+- verificação de e-mail, redefinição de senha por link de uso único e bloqueio
+  da conta após tentativas de senha malsucedidas;
 - convites de uso único vinculados ao e-mail e ao papel no caso;
 - agenda processual com responsável, vencimento e notificações internas;
-- aceite individual das duas partes antes da formação do procedimento;
+- aceite individual das duas partes antes da formação do procedimento, com o
+  texto dos termos versionado no servidor e o hash SHA-256 do que foi exibido
+  gravado no caso, na auditoria e no manifesto assinado;
 - upload de texto e PDF;
 - contraditório documentado: disponibilização, ciência, resposta ou renúncia e
   admissão antes do uso pela IA;
@@ -37,8 +41,23 @@ cadeia de auditoria encadeada por hashes.
 - agentes conciliador, organizador, julgador e revisor;
 - rodadas de composição com respostas separadas da empresa e do cliente;
 - Structured Outputs pela Responses API;
+- prompts versionados e endereçados por hash, fixados no manifesto travado, com
+  o modelo efetivamente usado e eventual divergência de prompt registrados em
+  cada etapa;
+- bateria de avaliação dos agentes (`evals/`), determinística no modo offline e
+  opcionalmente contra o modelo real;
 - manifesto imutável assinado com HMAC-SHA256;
 - verificação do manifesto e da cadeia de auditoria;
+- Decision Attestation assinada em Ed25519: artefato que um executor externo
+  (instituição de pagamento ou contrato inteligente) verifica offline com a
+  chave pública publicada em `/.well-known/valinor-signing-key`, emitido apenas
+  com a cadeia de auditoria íntegra e sujeito a uma janela de contestação em que
+  qualquer das partes pode barrar a execução;
+- âncora pública opcional da attestation em relays Nostr (só hash, assinatura e
+  identificadores — nunca o teor da decisão ou das partes), dando timestamp
+  independente do servidor da Valinor; a âncora só é registrada quando algum
+  relay aceita o evento, para a auditoria nunca apontar uma prova pública
+  inexistente;
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
@@ -65,6 +84,9 @@ caso
   -> decisão da IA
   -> auditoria independente
   -> relatório
+  -> attestation assinada (opcional)
+  -> janela de contestação
+  -> execução externa do escrow
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
@@ -72,10 +94,12 @@ uma parte, disponibilizado à contraparte, reconhecido como recebido e respondid
 ou expressamente dispensado. O gestor só pode admitir o material depois desse
 percurso, e o lock é bloqueado enquanto houver pendência.
 
-O aceite registra a versão dos termos exibidos às partes: participação
-voluntária, acesso a todo material, oportunidade de resposta, composição
-consensual, decisão fundamentada por IA, auditoria independente e revisão
-humana quando indicada.
+O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
+participação voluntária, acesso a todo material, oportunidade de resposta,
+composição consensual, decisão fundamentada por IA, auditoria independente e
+revisão humana quando indicada. O texto vive em `app/terms/<versão>.md` e é
+servido por `GET /terms`; versões publicadas nunca são editadas, e o caso não
+pode ser travado se o aceite de alguma parte não puder mais ser reproduzido.
 
 Depois do lock, novos documentos não são aceitos. Cada rodada de composição
 considera as posições atualizadas das partes. A IA informa se vale continuar,
@@ -156,14 +180,24 @@ Variáveis do arquivo `.env`:
 | `OPENAI_API_KEY` | Ativa embeddings e os quatro agentes |
 | `OPENAI_MODEL` | Modelo dos agentes; padrão `gpt-5-mini` |
 | `OPENAI_EMBEDDING_MODEL` | Modelo de embedding |
+| `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |
 | `DATABASE_URL` | Banco SQLAlchemy |
 | `POSTGRES_DB` | Banco criado pelo Docker Compose |
 | `POSTGRES_USER` | Usuário PostgreSQL do Compose |
 | `POSTGRES_PASSWORD` | Senha PostgreSQL do Compose |
-| `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 |
+| `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 e os links de download |
+| `PLATFORM_ED25519_PRIVATE_KEY` | Seed de 32 bytes (base64) que assina as Decision Attestations; vazia desabilita a emissão |
+| `CONTEST_WINDOW_DAYS` | Dias de contestação após a emissão da attestation, antes da execução externa |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
 | `AUTH_REQUIRED` | Exige conta e participação; padrão `true` e obrigatório em produção |
+| `EMAIL_VERIFICATION_REQUIRED` | Exige e-mail confirmado para atos no caso; forçado em produção |
+| `EMAIL_VERIFICATION_TTL_HOURS` | Validade do link de confirmação de e-mail |
+| `PASSWORD_RESET_TTL_MINUTES` | Validade do link de redefinição de senha |
+| `LOGIN_MAX_ATTEMPTS` | Tentativas de senha antes do bloqueio da conta |
+| `LOGIN_LOCKOUT_SECONDS` | Duração do bloqueio da conta |
+| `AUTH_RATE_LIMIT_MAX_REQUESTS` | Limite das rotas de credencial por IP e janela |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Janela do limite das rotas de credencial |
 | `RATE_LIMIT_ENABLED` | Liga o rate limiting por IP; padrão ligado em produção |
 | `RATE_LIMIT_MAX_REQUESTS` | Requisições permitidas por janela e por IP |
 | `RATE_LIMIT_WINDOW_SECONDS` | Tamanho da janela de rate limiting em segundos |
@@ -181,10 +215,20 @@ Variáveis do arquivo `.env`:
 | `NOSTR_PRIVATE_KEY_HEX` | Chave secp256k1 (hex) para ancorar attestations em relays Nostr; opcional |
 | `NOSTR_RELAYS` | Relays Nostr (`wss://...`, separados por vírgula) para a âncora pública |
 
-Gere um segredo local:
+Gere os segredos:
 
 ```bash
+# PLATFORM_SIGNING_SECRET (obrigatório em produção)
 python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# DOCUMENT_ENCRYPTION_KEY, AES-256-GCM (obrigatória em produção)
+python -m app.core.encryption
+
+# PLATFORM_ED25519_PRIVATE_KEY, assina as Decision Attestations (opcional)
+python -m app.core.attestation
+
+# NOSTR_PRIVATE_KEY_HEX, âncora pública da attestation (opcional)
+python -m app.core.nostr_anchor
 ```
 
 Sem `OPENAI_API_KEY`, o sistema continua executável. Ele organiza o material
@@ -199,9 +243,19 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /auth/register` | Criar conta e sessão |
 | `POST /auth/login` | Entrar e criar sessão expiráveis |
 | `POST /auth/logout` | Encerrar a sessão atual |
+| `POST /auth/verify-email` | Confirmar o e-mail pelo link de uso único |
+| `POST /auth/verify-email/resend` | Reenviar o link de confirmação |
+| `POST /auth/password-reset` | Pedir link de redefinição de senha |
+| `POST /auth/password-reset/confirm` | Definir a nova senha e encerrar as sessões |
+| `GET /auth/me` | Conta da sessão atual, com o estado de verificação do e-mail |
+| `GET /terms` | Texto vigente dos termos, com versão e hash |
+| `GET /terms/{version}` | Texto de uma versão específica dos termos |
+| `GET /cases/{id}/invitations` | Listar convites do caso (gestor) |
 | `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
+| `GET /cases/{id}/deadlines` | Listar a agenda processual |
 | `POST /cases/{id}/deadlines` | Criar prazo e notificações |
+| `POST /cases/{id}/deadlines/{deadline_id}/complete` | Marcar o prazo como cumprido |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte |
@@ -215,7 +269,9 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/lock` | Travar manifesto |
 | `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `GET /cases/{id}/manifest` | Ler o manifesto travado |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
+| `GET /cases/{id}/chunks` | Listar os trechos indexados do caso |
 | `GET /cases/{id}/retrieve` | Consultar evidências |
 | `POST /cases/{id}/organize` | Organizar registro |
 | `POST /cases/{id}/decide` | Proferir decisão da IA |
@@ -223,12 +279,24 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
 | `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
+| `POST /cases/{id}/attestation` | Emitir a Decision Attestation assinada |
+| `GET /cases/{id}/attestation` | Ler a attestation emitida |
+| `GET /cases/{id}/attestation/nostr-anchor` | Ler a âncora pública da attestation |
+| `POST /cases/{id}/contest` | Contestar a decisão dentro da janela |
+| `POST /attestations/verify` | Verificar uma attestation avulsa, sem contexto de caso |
+| `GET /.well-known/valinor-signing-key` | Publicar a chave pública Ed25519 da plataforma |
+| `GET /health` | Saúde da API, do banco e do modo de IA |
 
 ## Testes
 
 ```bash
 source .venv/bin/activate
 python -m pytest
+
+# bateria de avaliação dos agentes (offline, determinística)
+python -m evals.runner
+# contra o modelo real, antes de trocar prompt ou modelo
+python -m evals.runner --live
 
 cd frontend
 npm run build
@@ -237,12 +305,24 @@ npm audit --audit-level=moderate
 
 Os testes cobrem o fluxo integral, contas, convites, isolamento entre os papéis, contraditório,
 persistência, imutabilidade após o lock, idempotência, PDF, transições inválidas,
-agenda, relatório Word, assinatura e auditoria.
+agenda, relatório Word, assinatura e auditoria. Somam-se a eles o ciclo de vida da
+conta (verificação, redefinição e bloqueio), os termos versionados com hash no
+consentimento e a procedência de prompt e modelo em cada etapa por IA.
+
+A bateria de `evals/` mede propriedades da saída dos agentes — evidência citada
+que existe, valores com lastro no registro, resultado parcial com fração
+executável, procedência registrada e contingência nunca aprovada pela auditoria.
+Cada métrica tem um controle negativo: um cenário com saída deliberadamente ruim
+que ela precisa reprovar. Detalhes em `evals/README.md`.
 
 ## Limites antes de produção pública
 
-- contas por e-mail reduzem o risco de compartilhamento indevido, mas ainda não
-  há verificação de e-mail, recuperação de acesso ou autenticação multifator;
+- a conta já exige e-mail verificado para atuar no caso, oferece redefinição de
+  senha e bloqueia tentativa repetida de senha, mas ainda não há autenticação
+  multifator;
+- ainda faltam política de privacidade, base legal declarada, canal do titular e
+  exclusão ou portabilidade de dados (LGPD), incluindo o aviso de transferência
+  internacional pelo processamento dos documentos no provedor de modelo;
 - em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e
   os tokens por papel são desabilitados; o modo local com tokens permanece
   apenas em desenvolvimento;
@@ -252,7 +332,11 @@ agenda, relatório Word, assinatura e auditoria.
   banco, ambos cifrados em repouso com AES-256-GCM (`DOCUMENT_ENCRYPTION_KEY`,
   obrigatória em produção) e acessíveis por link temporário assinado; ainda
   falta rotação de chaves e um cofre dedicado;
-- prompts e avaliações ainda precisam de versionamento formal;
+- prompts têm versão e hash fixados no manifesto, e a bateria de `evals/` roda
+  offline no CI; falta ampliar os cenários para disputas reais anonimizadas e
+  rodar o modo live a cada troca de modelo;
+- o texto dos termos é versionado e endereçado por hash, mas ainda não passou
+  por validação jurídica;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis);
@@ -260,10 +344,12 @@ agenda, relatório Word, assinatura e auditoria.
 - não há validação jurídica dos frameworks;
 - decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
 
-Antes de exposição pública, a próxima etapa é verificar e-mails, configurar o
-provedor SMTP com um domínio autenticado, adicionar rotação de chaves e cofre de
-segredos, migrar o rate limiting para um backend compartilhado e concluir uma
-bateria de avaliações e revisão jurídica.
+Antes de exposição pública, a próxima etapa é configurar o provedor SMTP com um
+domínio autenticado (a verificação de e-mail depende de entrega confiável),
+publicar a política de privacidade com os direitos do titular, obter a revisão
+jurídica do rito e dos termos, montar CI e o ambiente de produção com TLS,
+backup testado e monitoramento, e migrar o rate limiting para um backend
+compartilhado com rotação de chaves e cofre de segredos.
 
 ## Referências OpenAI
 

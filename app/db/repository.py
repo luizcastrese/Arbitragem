@@ -152,10 +152,14 @@ def case_to_dict(
             "claimant": {
                 "accepted": case.claimant_consent,
                 "accepted_at": case.claimant_consent_at,
+                "terms_version": case.claimant_terms_version,
+                "terms_sha256": case.claimant_terms_sha256,
             },
             "respondent": {
                 "accepted": case.respondent_consent,
                 "accepted_at": case.respondent_consent_at,
+                "terms_version": case.respondent_terms_version,
+                "terms_sha256": case.respondent_terms_sha256,
             },
             "complete": case.claimant_consent and case.respondent_consent,
         },
@@ -402,16 +406,26 @@ def record_consent(
     case: Case,
     party: str,
     accepted: bool,
-    terms_version: str = "2026-07-12",
+    terms_version: str,
+    terms_sha256: str,
 ) -> Case:
+    """Registra o aceite com a versão E o hash do texto exibido à parte. Sem o
+    hash não há como provar depois o que foi aceito."""
     now = datetime.now(timezone.utc).isoformat()
     setattr(case, f"{party}_consent", accepted)
     setattr(case, f"{party}_consent_at", now if accepted else None)
+    setattr(case, f"{party}_terms_version", terms_version if accepted else None)
+    setattr(case, f"{party}_terms_sha256", terms_sha256 if accepted else None)
     append_audit(
         db,
         case,
         "consent_accepted" if accepted else "consent_withdrawn",
-        {"party": party, "accepted": accepted, "terms_version": terms_version},
+        {
+            "party": party,
+            "accepted": accepted,
+            "terms_version": terms_version,
+            "terms_sha256": terms_sha256,
+        },
     )
     db.commit()
     return get_case(db, case.id)

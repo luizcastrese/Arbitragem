@@ -12,6 +12,7 @@ def _upgrade_sqlite_schema():
     document_columns = {
         column["name"] for column in inspect(engine).get_columns("documents")
     }
+    user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
     case_additions = {
         "conciliation_json": "TEXT",
         "claimant_consent": "BOOLEAN NOT NULL DEFAULT 1",
@@ -21,6 +22,15 @@ def _upgrade_sqlite_schema():
         "claimant_token_hash": "TEXT",
         "respondent_token_hash": "TEXT",
         "manager_token_hash": "TEXT",
+        "claimant_terms_version": "TEXT",
+        "claimant_terms_sha256": "TEXT",
+        "respondent_terms_version": "TEXT",
+        "respondent_terms_sha256": "TEXT",
+    }
+    user_additions = {
+        "email_verified_at": "TEXT",
+        "failed_login_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "locked_until": "TEXT",
     }
     document_additions = {
         "submitted_by": "TEXT NOT NULL DEFAULT 'claimant'",
@@ -55,6 +65,11 @@ def _upgrade_sqlite_schema():
             if name not in document_columns:
                 connection.exec_driver_sql(
                     f"ALTER TABLE documents ADD COLUMN {name} {definition}"
+                )
+        for name, definition in user_additions.items():
+            if name not in user_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE users ADD COLUMN {name} {definition}"
                 )
         if document_additions.keys() - document_columns:
             connection.exec_driver_sql(

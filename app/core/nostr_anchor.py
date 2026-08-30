@@ -28,6 +28,10 @@ ANCHOR_TAG = "valinor-attestation"
 PUBLISH_TIMEOUT_SECONDS = 10
 
 
+class AnchorNotPublished(RuntimeError):
+    """Nenhum relay aceitou o evento: não há âncora pública a registrar."""
+
+
 def build_anchor_payload(attestation: Dict[str, Any]) -> Dict[str, Any]:
     """Monta o payload mínimo da âncora: hash + assinatura + identificadores.
 
@@ -72,9 +76,18 @@ async def _publish(
         output = await asyncio.wait_for(
             client.send_event_builder(builder), timeout=PUBLISH_TIMEOUT_SECONDS
         )
+        accepted = [str(url) for url in output.success]
+        if not accepted:
+            # O SDK ora levanta erro, ora devolve um envio sem nenhum relay que
+            # tenha aceitado o evento. Os dois casos são a mesma coisa: não há
+            # âncora pública. Registrar o evento assim mesmo colocaria na
+            # cadeia de auditoria uma prova que ninguém consegue buscar.
+            raise AnchorNotPublished(
+                "Nenhum relay aceitou o evento de âncora"
+            )
         return {
             "event_id": output.id.to_hex(),
-            "relays": [str(url) for url in output.success],
+            "relays": accepted,
             "published_at_utc": datetime.now(timezone.utc).isoformat(),
         }
     finally:

@@ -4,11 +4,43 @@ from typing import Dict, List
 from app.core.canonical import canonical_hash
 from app.core.config import get_settings
 from app.core.signing import attach_signature
+from app.core.terms import current_terms
 
 PLATFORM_VERSION = "0.4.0"
 PROCEDURE_VERSION = "mvp-procedure-0.4"
 DEFAULT_FRAMEWORK = "commercial_balanced_v1"
 
+
+
+def _prompt_policy() -> Dict:
+    """Versão e hash do prompt de cada agente no momento da trava.
+
+    A importação é local de propósito: registrar um prompt é efeito de importar
+    o agente, e o manifesto também é gerado fora da API (testes e avaliações).
+    """
+    from app.agents import conciliator, judge, organizer, reviewer  # noqa: F401
+    from app.core.prompt_registry import prompt_policy
+
+    return prompt_policy()
+
+
+def _accepted_terms(case: Dict) -> Dict:
+    """Versão e hash do texto que cada parte efetivamente aceitou, mais a
+    versão vigente no momento da trava. Com isso o manifesto assinado carrega
+    a prova do que foi aceito, e não apenas um número de versão."""
+    consent = case.get("consent") or {}
+    vigente = current_terms()
+    return {
+        "current_version": vigente.version,
+        "current_sha256": vigente.sha256,
+        "accepted": {
+            party: {
+                "version": (consent.get(party) or {}).get("terms_version"),
+                "sha256": (consent.get(party) or {}).get("terms_sha256"),
+            }
+            for party in ("claimant", "respondent")
+        },
+    }
 
 
 def build_process_manifest(
@@ -55,6 +87,7 @@ def build_process_manifest(
         "case_id": case.get("id"),
         "case_title": case.get("title"),
         "consent": case.get("consent"),
+        "terms": _accepted_terms(case),
         "contradictory": case.get("contradictory"),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "framework": framework,
@@ -113,6 +146,10 @@ def lock_case_manifest(case: Dict) -> Dict:
         "embedding": settings.embedding_model,
         "openai_enabled_at_lock": settings.openai_enabled,
         "user_configurable_private_instructions": False,
+        # Prompts ficam fixados aqui: se o texto de um agente mudar entre a
+        # trava e a execução, a divergência aparece no bloco `execution` da
+        # etapa e na cadeia de auditoria.
+        "prompts": _prompt_policy(),
     }
 
     allowed_agents = [

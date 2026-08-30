@@ -1,0 +1,66 @@
+{
+  "id": "judge_inconclusivo_sem_evidencia",
+  "agent": "judge",
+  "description": "Sem evidência admitida sobre o ponto controvertido, o julgador precisa declarar inconclusivo e pedir revisão humana em vez de arbitrar um número.",
+  "input": {
+    "manifest": {
+      "case_id": "case-eval-001",
+      "framework": {
+        "id": "commercial_balanced_v1",
+        "name": "Comercial Equilibrado"
+      }
+    },
+    "conciliation_rounds": [],
+    "organized_case": {
+      "summary": "Disputa sobre entrega parcial de sistema de gestão.",
+      "undisputed_facts": [
+        "Existe contrato de desenvolvimento entre as partes."
+      ],
+      "disputed_facts": [
+        "Extensão do escopo efetivamente entregue."
+      ],
+      "claimant_requests": [
+        "Devolução proporcional ao não entregue."
+      ],
+      "respondent_arguments": [
+        "Houve alteração de escopo pedida pela Contratante."
+      ],
+      "relevant_evidence": []
+    },
+    "retrieved_evidence": {
+      "delivery": [],
+      "payment": []
+    }
+  },
+  "record": {
+    "document_ids": [],
+    "chunk_ids": [],
+    "corpus_text": "A Fornecedora entregará o sistema de gestão até 30 de junho de 2026. O valor total do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apenas 50% das funcionalidades foram entregues até 15 de julho de 2026 e que o módulo fiscal não foi iniciado. A Fornecedora sustenta que houve alteração de escopo pedida pela Contratante e reconhece atraso parcial."
+  },
+  "recorded_output": {
+    "framework": "Comercial Equilibrado",
+    "outcome": "inconclusive",
+    "partial_claimant_bps": null,
+    "decision": "Não há material admitido suficiente para decidir a extensão da entrega. O caso segue inconclusivo.",
+    "reasoning": [
+      "Nenhuma evidência recuperada sustenta a proporção alegada."
+    ],
+    "evidence_cited": [],
+    "principles_applied": [
+      "prioridade contratual"
+    ],
+    "confidence": 0.2,
+    "limitations": [
+      "Registro documental insuficiente."
+    ],
+    "requires_human_review": true
+  },
+  "expectations": {
+    "outcome": "inconclusive",
+    "requires_human_review": true,
+    "citations_grounded": true,
+    "figures_supported": true,
+    "partial_requires_bps": true,
+    "provenance_recorded": true
+  }
+}
