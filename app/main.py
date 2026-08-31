@@ -57,6 +57,8 @@ from app.core.terms import (
 from app.db.access_repository import (
     EMAIL_VERIFICATION,
     PASSWORD_RESET,
+    PRINCIPAL_ROLES,
+    SUBSIDIARY_ROLE,
     AccountLocked,
     accept_invitation,
     add_member,
@@ -72,11 +74,15 @@ from app.db.access_repository import (
     invitation_to_dict,
     issue_auth_token,
     mark_email_verified,
+    principal_of,
     register_user,
+    resolve_member_party,
     revoke_session,
     set_password,
     user_case_ids,
     user_has_role,
+    user_is_principal,
+    user_on_party_side,
     user_to_dict,
 )
 from app.db.init_db import init_db
@@ -328,21 +334,58 @@ def _require_verified_email(user) -> None:
     )
 
 
-def _require_actor(db: Session, case, token: str, expected_party: str):
-    if settings.allow_role_tokens:
-        stored_hash = getattr(case, f"{expected_party}_token_hash", None)
-        if token and stored_hash and secrets.compare_digest(
-            _hash_token(token), stored_hash
-        ):
-            return None
+def _token_matches_party(case, token: str, party: str) -> bool:
+    if not settings.allow_role_tokens or not token:
+        return False
+    stored_hash = getattr(case, f"{party}_token_hash", None)
+    if not stored_hash:
+        return False
+    return secrets.compare_digest(_hash_token(token), stored_hash)
+
+
+def _require_actor(
+    db: Session,
+    case,
+    token: str,
+    expected_party: str,
+    *,
+    allow_subsidiary: bool = False,
+):
+    if expected_party not in PRINCIPAL_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Credencial inválida para o papel {expected_party}",
+        )
+    if _token_matches_party(case, token, expected_party):
+        return None
     user = get_user_by_token(db, token)
     if user and user_has_role(db, case.id, user.id, expected_party):
+        _require_verified_email(user)
+        return user
+    if allow_subsidiary and user and user_on_party_side(db, case.id, user.id, expected_party):
         _require_verified_email(user)
         return user
 
     raise HTTPException(
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
+    )
+
+
+def _require_party_impulse(db: Session, case, token: str):
+    """O rito avança por impulso de qualquer uma das duas partes principais."""
+    for party in PRINCIPAL_ROLES:
+        if _token_matches_party(case, token, party):
+            return None, party
+    user = get_user_by_token(db, token)
+    if user:
+        for party in PRINCIPAL_ROLES:
+            if user_is_principal(db, case.id, user.id, party):
+                _require_verified_email(user)
+                return user, party
+    raise HTTPException(
+        status_code=403,
+        detail="Apenas a parte ou a contraparte podem impulsionar o procedimento",
     )
 
 
@@ -542,7 +585,7 @@ def root():
         "openai_enabled": settings.openai_enabled,
         "auth_required": settings.auth_required,
         "procedure_terms": {
-            "version": "2026-07-12",
+            "version": current_terms().version,
             "principles": [
                 "participação voluntária e regras iguais para as partes",
                 "conhecimento e oportunidade de resposta a todo material",
@@ -829,7 +872,6 @@ def create_case(
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
-        "manager": secrets.token_urlsafe(24),
     }
     case = persist_case(
         db,
@@ -838,10 +880,9 @@ def create_case(
         respondent=payload.respondent,
         claimant_token_hash=_hash_token(credentials["claimant"]),
         respondent_token_hash=_hash_token(credentials["respondent"]),
-        manager_token_hash=_hash_token(credentials["manager"]),
     )
     if user:
-        add_member(db, case.id, user.id, "manager")
+        add_member(db, case.id, user.id, "claimant")
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
@@ -857,7 +898,7 @@ def get_invitations(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     return [invitation_to_dict(item) for item in case.invitations]
 
 
@@ -869,25 +910,49 @@ def invite_participant(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    actor = _require_actor(db, case, x_actor_token, "manager")
+    actor, actor_party = _require_party_impulse(db, case, x_actor_token)
+    if payload.role == SUBSIDIARY_ROLE:
+        party = actor_party
+    else:
+        party = payload.role
+        if party == actor_party:
+            raise HTTPException(
+                status_code=409,
+                detail="A parte principal deste lado já está no caso",
+            )
+        if principal_of(db, case.id, party):
+            raise HTTPException(
+                status_code=409,
+                detail="Este lado já tem uma parte principal no caso",
+            )
+    try:
+        resolve_member_party(payload.role, party)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     token, invitation = create_invitation(
         db,
         case.id,
         payload.email,
         payload.role,
         actor.id if actor else None,
+        party=party,
     )
     append_audit(
         db,
         case,
         "participant_invited",
-        {"email": invitation.email, "role": invitation.role, "invitation_id": invitation.id},
+        {
+            "email": invitation.email,
+            "role": invitation.role,
+            "party": invitation.party,
+            "invitation_id": invitation.id,
+        },
     )
     db.commit()
     create_notification(
         db,
         case.id,
-        payload.role,
+        invitation.party or payload.role,
         "invitation_created",
         "Convite para participar do procedimento",
         f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
@@ -954,7 +1019,7 @@ def add_deadline(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     try:
         due_at = datetime.fromisoformat(payload.due_at.replace("Z", "+00:00"))
         if due_at.tzinfo is None:
@@ -971,7 +1036,7 @@ def add_deadline(
         {"deadline_id": deadline.id, "assigned_to": deadline.assigned_to, "due_at": deadline.due_at.isoformat()},
     )
     db.commit()
-    for party in ({"claimant", "respondent", "manager"} if payload.assigned_to == "all" else {payload.assigned_to}):
+    for party in ({"claimant", "respondent"} if payload.assigned_to == "all" else {payload.assigned_to}):
         create_notification(
             db,
             case.id,
@@ -991,7 +1056,7 @@ def complete_deadline(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     deadline = db.query(Deadline).filter(
         Deadline.case_id == case.id, Deadline.id == deadline_id
     ).one_or_none()
@@ -1071,7 +1136,7 @@ def add_text_document(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, payload.submitted_by)
+    _require_actor(db, case, x_actor_token, payload.submitted_by, allow_subsidiary=True)
     document = _process_document(
         db,
         case,
@@ -1102,7 +1167,7 @@ async def upload_pdf(
         raise HTTPException(status_code=422, detail="Parte apresentadora inválida")
     if material_type not in {"evidence", "argument"}:
         raise HTTPException(status_code=422, detail="Tipo de material inválido")
-    _require_actor(db, case, x_actor_token, submitted_by)
+    _require_actor(db, case, x_actor_token, submitted_by, allow_subsidiary=True)
 
     file_bytes = await file.read(settings.max_upload_bytes + 1)
     if len(file_bytes) > settings.max_upload_bytes:
@@ -1158,7 +1223,7 @@ def acknowledge_evidence(
     _assert_evidence_mutable(case)
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
-    _require_actor(db, case, x_actor_token, expected_party)
+    _require_actor(db, case, x_actor_token, expected_party, allow_subsidiary=True)
     if payload.party != expected_party:
         raise HTTPException(
             status_code=403,
@@ -1186,7 +1251,7 @@ def respond_to_evidence(
     _assert_evidence_mutable(case)
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
-    _require_actor(db, case, x_actor_token, expected_party)
+    _require_actor(db, case, x_actor_token, expected_party, allow_subsidiary=True)
     if payload.party != expected_party:
         raise HTTPException(
             status_code=403,
@@ -1210,11 +1275,24 @@ def respond_to_evidence(
         payload.response_status,
         payload.response_text,
     )
+    document = _document_or_404(db, case_id, document_id)
+    _admit_if_ready(db, case, document)
     return case_to_dict(
         get_case(db, case_id),
         include_content=False,
         include_embeddings=False,
     )
+
+
+def _admit_if_ready(db: Session, case, document) -> None:
+    """Sem gestor: o contraditório completo admite o material automaticamente."""
+    if document.admitted:
+        return
+    if not document.acknowledged_at:
+        return
+    if document.response_status not in {"answered", "waived", "challenged"}:
+        return
+    persist_admission(db, case, document)
 
 
 @app.post("/cases/{case_id}/documents/{document_id}/admit")
@@ -1226,8 +1304,14 @@ def admit_evidence(
 ):
     case = _case_or_404(db, case_id)
     _assert_evidence_mutable(case)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     document = _document_or_404(db, case_id, document_id)
+    if document.admitted:
+        return case_to_dict(
+            get_case(db, case_id),
+            include_content=False,
+            include_embeddings=False,
+        )
     if not document.acknowledged_at:
         raise HTTPException(status_code=409, detail="A contraparte ainda não confirmou ciência")
     if document.response_status not in {"answered", "waived", "challenged"}:
@@ -1323,7 +1407,7 @@ def lock_manifest(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     if case.manifest_locked:
         return {
             "message": "Manifesto já estava travado",
@@ -1452,7 +1536,7 @@ def assess_case_conciliation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     case_data = case_to_dict(case)
     if not case.manifest_locked:
         raise HTTPException(
@@ -1561,7 +1645,7 @@ def organize_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     case_data = case_to_dict(case)
     if not case.manifest_locked:
         raise HTTPException(
@@ -1619,7 +1703,7 @@ def decide_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["organized"]:
         raise HTTPException(
@@ -1719,7 +1803,7 @@ def review_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["decision"]:
         raise HTTPException(
@@ -1842,7 +1926,7 @@ def issue_attestation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_party_impulse(db, case, x_actor_token)
     settings_now = get_settings()
     if not settings_now.attestation_enabled:
         raise HTTPException(

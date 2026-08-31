@@ -115,8 +115,7 @@ def complete_contradictory(client, case_id, document_id):
     )
     admitted = client.post(
         f"/cases/{case_id}/documents/{document_id}/admit",
-        json={"party": "manager"},
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     )
     assert admitted.status_code == 200, admitted.text
 
@@ -203,7 +202,7 @@ def test_locked_manifest_carries_the_accepted_terms(client):
     accept_terms(client, case["id"])
 
     manifest = client.post(
-        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager")
+        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "claimant")
     ).json()["manifest"]
 
     current = terms_module.current_terms()
@@ -235,7 +234,7 @@ def test_lock_is_blocked_when_the_accepted_text_no_longer_reproduces(
     monkeypatch.setattr(main, "get_terms", lambda version=None: adulterated)
 
     response = client.post(
-        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager")
+        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "claimant")
     )
     assert response.status_code == 409
     assert "mudou depois do aceite" in response.json()["detail"]
@@ -266,7 +265,7 @@ def test_locked_manifest_pins_the_prompt_policy(client):
     accept_terms(client, case["id"])
 
     manifest = client.post(
-        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager")
+        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "claimant")
     ).json()["manifest"]
 
     prompts = manifest["model_policy"]["prompts"]
@@ -279,12 +278,12 @@ def test_stage_execution_records_prompt_and_model(client):
     document = add_document(client, case["id"])
     complete_contradictory(client, case["id"], document["id"])
     accept_terms(client, case["id"])
-    client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager"))
+    client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "claimant"))
 
     conciliation = client.post(
         f"/cases/{case['id']}/conciliation",
         json={"claimant_response": "", "respondent_response": "", "new_information": ""},
-        headers=actor_headers(case["id"], "manager"),
+        headers=actor_headers(case["id"], "claimant"),
     ).json()
 
     execution = conciliation["execution"]
@@ -326,7 +325,7 @@ def test_drift_is_annotated_on_the_executed_stage(client, monkeypatch):
     document = add_document(client, case["id"])
     complete_contradictory(client, case["id"], document["id"])
     accept_terms(client, case["id"])
-    client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager"))
+    client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "claimant"))
 
     monkeypatch.setattr(
         main,
@@ -343,7 +342,7 @@ def test_drift_is_annotated_on_the_executed_stage(client, monkeypatch):
     conciliation = client.post(
         f"/cases/{case['id']}/conciliation",
         json={"claimant_response": "", "respondent_response": "", "new_information": ""},
-        headers=actor_headers(case["id"], "manager"),
+        headers=actor_headers(case["id"], "claimant"),
     ).json()
 
     assert conciliation["execution"]["prompt_drift"]["locked_version"] == "0.9.0"

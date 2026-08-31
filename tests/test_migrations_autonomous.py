@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, inspect
 def test_alembic_head_is_the_autonomous_revision():
     cfg = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "e9f2a1c8d3b7"
+    assert script.get_current_head() == "f4b8d2a7c1e9"
 
 
 def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):
@@ -32,6 +32,10 @@ def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):
         assert "automatic_appeals" in tables
         columns = {item["name"] for item in inspect(engine).get_columns("cases")}
         assert "procedure_conclusion" in columns
+        member_columns = {
+            item["name"] for item in inspect(engine).get_columns("case_members")
+        }
+        assert "party" in member_columns
         command.downgrade(cfg, "b7c4e91a5d20")
         engine.dispose()
         engine = create_engine(url)

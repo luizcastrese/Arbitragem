@@ -74,11 +74,39 @@ const steps = [
   }
 ]
 
-function userHasRole(caseData, user, role) {
-  if (!user) return false
-  return (caseData.participants || []).some(
-    (participant) => participant.email === user.email && participant.role === role
-  )
+function participantOf(caseData, user) {
+  if (!user) return null
+  return (caseData.participants || []).find(
+    (participant) => participant.email === user.email
+  ) || null
+}
+
+function userOnSide(caseData, user, party) {
+  const participant = participantOf(caseData, user)
+  if (!participant) return false
+  return participant.party === party || participant.role === party
+}
+
+function userIsPrincipal(caseData, user) {
+  const participant = participantOf(caseData, user)
+  return Boolean(participant && (participant.role === 'claimant' || participant.role === 'respondent'))
+}
+
+function userIsPrincipalOf(caseData, user, party) {
+  const participant = participantOf(caseData, user)
+  return Boolean(participant && participant.role === party)
+}
+
+function roleLabel(participant) {
+  if (!participant) return ''
+  if (participant.role === 'subsidiary') {
+    return participant.party === 'respondent'
+      ? 'subsidiário da reclamada'
+      : 'subsidiário do reclamante'
+  }
+  if (participant.role === 'respondent') return 'parte reclamada'
+  if (participant.role === 'claimant') return 'parte reclamante'
+  return participant.role
 }
 
 const statusLabels = {
@@ -744,11 +772,11 @@ function AudienceValue() {
       <div className="role-strip">
         <div>
           <BriefcaseBusiness size={20} />
-          <span><strong>Gestor do procedimento</strong> organiza acesso, prazos e documentos; não decide o mérito.</span>
+          <span><strong>Parte e contraparte</strong> impulsionam o rito. Não há gestor do procedimento.</span>
         </div>
         <div>
           <MessagesSquare size={20} />
-          <span><strong>Representantes e advogados</strong> podem apoiar qualquer parte na apresentação do caso.</span>
+          <span><strong>Advogados e terceiros</strong> entram como subsidiários do respectivo lado, só com acesso ao caso.</span>
         </div>
         <div>
           <ShieldCheck size={20} />
@@ -765,7 +793,7 @@ function AudienceValue() {
           <Journey
             title="Empresa reclamada"
             steps={[
-              'Convida o cliente com explicação clara do procedimento.',
+              'Aceita o convite da contraparte e as regras do procedimento.',
               'Apresenta defesa, documentos e limites possíveis para acordo.',
               'Responde a cada rodada com aceite, recusa ou contraproposta.',
               'Recebe a decisão e a auditoria para cumprimento e controle interno.'
@@ -774,19 +802,19 @@ function AudienceValue() {
           <Journey
             title="Cliente reclamante"
             steps={[
-              'Conhece as regras e decide se aceita participar.',
+              'Abre o caso, convida a empresa e decide se aceita as regras.',
               'Apresenta fatos, documentos, pedido e resultado esperado.',
               'Avalia cada proposta e informa o que aceita ou deseja alterar.',
               'Recebe decisão explicada, provas citadas e resultado da auditoria.'
             ]}
           />
           <Journey
-            title="Gestor do procedimento"
+            title="Subsidiários do lado"
             steps={[
-              'Confere cadastro, consentimento, acesso e prazos.',
-              'Garante que os dois lados possam incluir seu material.',
-              'Opera as etapas e registra eventos sem escolher o vencedor.',
-              'Disponibiliza acordo, decisão e trilha final às partes.'
+              'A parte principal vincula advogado ou terceiro ao próprio lado.',
+              'O subsidiário acessa o caso e o material daquele lado.',
+              'Pode protocolar documentos em nome da parte, sem conduzir o rito.',
+              'O aceite e o impulso das etapas continuam com a parte principal.'
             ]}
           />
         </div>
@@ -977,9 +1005,11 @@ function CaseWorkspace({
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : currentStage
   const roles = {
-    claimant: userHasRole(caseData, user, 'claimant'),
-    respondent: userHasRole(caseData, user, 'respondent'),
-    manager: userHasRole(caseData, user, 'manager')
+    claimant: userOnSide(caseData, user, 'claimant'),
+    respondent: userOnSide(caseData, user, 'respondent'),
+    principal: userIsPrincipal(caseData, user),
+    claimantPrincipal: userIsPrincipalOf(caseData, user, 'claimant'),
+    respondentPrincipal: userIsPrincipalOf(caseData, user, 'respondent')
   }
 
   return (
@@ -1085,7 +1115,8 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
   const [inviteLink, setInviteLink] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
-  const isManager = userHasRole(caseData, user, 'manager')
+  const isPrincipal = userIsPrincipal(caseData, user)
+  const principalSide = participantOf(caseData, user)?.role
 
   async function invite(event) {
     event.preventDefault()
@@ -1093,7 +1124,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
     await run('Criando convite protegido...', async () => {
       const data = await request(`/cases/${caseData.id}/invitations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, principalSide) },
         body: JSON.stringify({ email: form.get('email'), role: form.get('role') })
       })
       setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
@@ -1107,7 +1138,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
     const form = new FormData(event.currentTarget)
     await run('Registrando prazo e notificações...', () => request(`/cases/${caseData.id}/deadlines`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
+      headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, principalSide) },
       body: JSON.stringify({
         label: form.get('label'),
         assigned_to: form.get('assigned_to'),
@@ -1141,7 +1172,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
       <div className="card-title-row">
         <div>
           <span className="section-label">Acesso, agenda e entrega</span>
-          <h3>Administração do procedimento</h3>
+          <h3>Acesso das partes</h3>
         </div>
         <button className="button secondary" onClick={downloadReport} disabled={busy}>
           <Download size={16} /> Baixar relatório Word
@@ -1151,18 +1182,18 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
       <div className="operations-grid">
         <div className="operation-block">
           <div className="operation-title"><Mail size={18} /><strong>Participantes</strong></div>
-          <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
+          <p>Cada parte principal convida a contraparte e, se quiser, advogados ou terceiros do próprio lado.</p>
           {participants.map((participant) => (
             <span className="participant-row" key={`${participant.email}-${participant.role}`}>
-              <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
+              <strong>{participant.display_name}</strong> {roleLabel(participant)} · {participant.email}
             </span>
           ))}
-          {isManager && <form className="compact-form" onSubmit={invite}>
-            <input name="email" type="email" required placeholder="E-mail da parte" />
-            <select name="role" defaultValue="claimant">
-              <option value="claimant">Cliente reclamante</option>
-              <option value="respondent">Empresa reclamada</option>
-              <option value="manager">Gestor</option>
+          {isPrincipal && <form className="compact-form" onSubmit={invite}>
+            <input name="email" type="email" required placeholder="E-mail da pessoa" />
+            <select name="role" defaultValue="subsidiary">
+              <option value="respondent">Contraparte reclamada</option>
+              <option value="claimant">Contraparte reclamante</option>
+              <option value="subsidiary">Advogado ou terceiro do meu lado</option>
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
           </form>}
@@ -1172,7 +1203,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
               <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
             </label>
           )}
-          {!isManager && <small>Somente gestores podem criar novos convites.</small>}
+          {!isPrincipal && <small>Somente a parte ou a contraparte convidam pessoas do caso.</small>}
         </div>
 
         <div className="operation-block">
@@ -1187,13 +1218,12 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
             ))}
             {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
           </div>
-          {isManager && <form className="compact-form deadline-form" onSubmit={addDeadline}>
+          {isPrincipal && <form className="compact-form deadline-form" onSubmit={addDeadline}>
             <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
             <select name="assigned_to" defaultValue="all">
-              <option value="all">Todas as pessoas</option>
+              <option value="all">As duas partes</option>
               <option value="claimant">Cliente</option>
               <option value="respondent">Empresa</option>
-              <option value="manager">Gestor</option>
             </select>
             <input name="due_at" type="datetime-local" required />
             <button className="button secondary" disabled={busy}>Adicionar prazo</button>
@@ -1500,7 +1530,7 @@ function NextAction({
               className="button primary"
               disabled={
                 busy
-                || !roles.manager
+                || !roles.principal
                 || !caseData.documents.length
                 || !caseData.consent?.complete
                 || !caseData.contradictory?.complete
@@ -1509,7 +1539,7 @@ function NextAction({
                 'Protegendo documentos e regras do processo...',
                 () => request(`/cases/${caseData.id}/lock`, {
                   method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
+                  headers: actorHeaders(caseData.id, 'claimant')
                 })
               )}
             >
@@ -1524,7 +1554,7 @@ function NextAction({
                   ? 'A adesão das duas partes ainda está pendente. '
                   : ''}
                 {!caseData.contradictory?.complete
-                  ? 'Todos os materiais precisam de ciência, resposta ou renúncia e admissão antes da trava.'
+                  ? 'Todos os materiais precisam de ciência e de resposta ou renúncia antes da trava.'
                   : ''}
               </span>
             </div>
@@ -1533,14 +1563,14 @@ function NextAction({
       ) : (
         <button
           className="button primary action-cta"
-          disabled={busy || !roles.manager}
+          disabled={busy || !roles.principal}
           onClick={() => {
             if (caseData.status === 'locked') {
               return run(
                 'Buscando interesses convergentes e possibilidades de composição...',
                 () => request(`/cases/${caseData.id}/conciliation`, {
                   method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
+                  headers: actorHeaders(caseData.id, 'claimant')
                 })
               )
             }
@@ -1549,7 +1579,7 @@ function NextAction({
                 'A IA está julgando o caso e fundamentando a decisão...',
                 () => request(`/cases/${caseData.id}/decide`, {
                   method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
+                  headers: actorHeaders(caseData.id, 'claimant')
                 })
               )
             }
@@ -1557,7 +1587,7 @@ function NextAction({
               'A segunda IA está auditando a decisão...',
               () => request(`/cases/${caseData.id}/review`, {
                 method: 'POST',
-                headers: actorHeaders(caseData.id, 'manager')
+                headers: actorHeaders(caseData.id, 'claimant')
               })
             )
           }}
@@ -1607,7 +1637,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
             </div>
             {entry.consent?.accepted ? (
               <em><Check size={14} /> Aceitou</em>
-            ) : roles[entry.party] ? (
+            ) : (entry.party === 'claimant' ? roles.claimantPrincipal : roles.respondentPrincipal) ? (
               <button
                 className="button secondary compact"
                 // Sem o texto carregado não há o que aceitar: o aceite grava o
@@ -1688,7 +1718,7 @@ function ConciliationActions({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...actorHeaders(caseData.id, 'manager')
+          ...actorHeaders(caseData.id, 'claimant')
         },
         body: JSON.stringify({
           advance: true,
@@ -1743,7 +1773,7 @@ function ConciliationActions({
         <label className="mini-field full">
           <span>Fatos novos ou orientação para a próxima rodada</span>
           <textarea
-            disabled={!roles.manager}
+            disabled={!roles.principal}
             value={conciliationUpdate}
             onChange={(event) => setConciliationUpdate(event.target.value)}
             placeholder="Ex.: novo prazo possível, pagamento já realizado ou interesse em manter a relação."
@@ -1754,19 +1784,19 @@ function ConciliationActions({
       <div className="conciliation-buttons">
         <button
           className="button secondary"
-          disabled={busy || !roles.manager || !canAdvance}
+          disabled={busy || !roles.principal || !canAdvance}
           onClick={generateNextRound}
         >
           <Handshake size={17} /> Gerar rodada {rounds.length + 1}
         </button>
         <button
           className="button primary"
-          disabled={busy || !roles.manager}
+          disabled={busy || !roles.principal}
           onClick={() => run(
             'Encerrando a fase consensual e organizando o caso...',
             () => request(`/cases/${caseData.id}/organize`, {
               method: 'POST',
-              headers: actorHeaders(caseData.id, 'manager')
+              headers: actorHeaders(caseData.id, 'claimant')
             })
           )}
         >
@@ -1891,29 +1921,6 @@ function DocumentsCard({
                 </div>
               </div>
             )}
-
-            {!locked
-              && roles.manager
-              && document.response_status !== 'pending'
-              && !document.admitted
-              && (
-                <button
-                  className="button primary compact"
-                  disabled={busy}
-                  onClick={() => run(
-                    'Admitindo o material após o contraditório...',
-                    () => request(
-                      `/cases/${caseData.id}/documents/${document.id}/admit`,
-                      {
-                        method: 'POST',
-                        headers: actorHeaders(caseData.id, 'manager')
-                      }
-                    )
-                  )}
-                >
-                  Admitir para a decisão
-                </button>
-              )}
 
             {document.response_text && (
               <div className="recorded-response">

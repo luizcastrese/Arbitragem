@@ -13,6 +13,17 @@ def _upgrade_sqlite_schema():
         column["name"] for column in inspect(engine).get_columns("documents")
     }
     user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    table_names = set(inspect(engine).get_table_names())
+    member_columns = (
+        {column["name"] for column in inspect(engine).get_columns("case_members")}
+        if "case_members" in table_names
+        else set()
+    )
+    invitation_columns = (
+        {column["name"] for column in inspect(engine).get_columns("invitations")}
+        if "invitations" in table_names
+        else set()
+    )
     case_additions = {
         "conciliation_json": "TEXT",
         "claimant_consent": "BOOLEAN NOT NULL DEFAULT 1",
@@ -78,6 +89,29 @@ def _upgrade_sqlite_schema():
                 connection.exec_driver_sql(
                     f"ALTER TABLE users ADD COLUMN {name} {definition}"
                 )
+        if "party" not in member_columns and "case_members" in table_names:
+            connection.exec_driver_sql(
+                "ALTER TABLE case_members ADD COLUMN party TEXT"
+            )
+            connection.exec_driver_sql(
+                "UPDATE case_members SET party = role "
+                "WHERE role IN ('claimant', 'respondent')"
+            )
+            connection.exec_driver_sql(
+                "UPDATE case_members SET party = 'claimant' WHERE role = 'manager'"
+            )
+        if "party" not in invitation_columns and "invitations" in table_names:
+            connection.exec_driver_sql(
+                "ALTER TABLE invitations ADD COLUMN party TEXT"
+            )
+            connection.exec_driver_sql(
+                "UPDATE invitations SET party = role "
+                "WHERE role IN ('claimant', 'respondent')"
+            )
+            connection.exec_driver_sql(
+                "UPDATE invitations SET party = 'claimant' WHERE role = 'manager'"
+            )
+
         if document_additions.keys() - document_columns:
             connection.exec_driver_sql(
                 "UPDATE documents SET "

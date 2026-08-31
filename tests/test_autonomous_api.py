@@ -63,20 +63,20 @@ def _through_review(client):
     case_id, document, _ = prepare_locked_case(client)
     assert client.post(
         f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     ).status_code == 200
     assert client.post(
         f"/cases/{case_id}/organize",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     ).status_code == 200
     decision = client.post(
         f"/cases/{case_id}/decide",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     )
     assert decision.status_code == 200
     review = client.post(
         f"/cases/{case_id}/review",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     )
     assert review.status_code == 200
     return case_id, decision.json(), review.json()
@@ -104,17 +104,17 @@ def test_decide_is_idempotent_and_does_not_loop(client):
     case_id, first, _ = _through_review(client)
     second = client.post(
         f"/cases/{case_id}/decide",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     ).json()
     third = client.post(
         f"/cases/{case_id}/review",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     ).json()
     assert first["decision"] == second["decision"]
     assert canonical_hash(first) == canonical_hash(second)
     review_again = client.post(
         f"/cases/{case_id}/review",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
     ).json()
     assert third == review_again
 
@@ -211,4 +211,8 @@ def test_new_schema_tables_exist_on_create_all():
     columns = {item["name"] for item in inspect(engine).get_columns("cases")}
     assert "procedure_conclusion" in columns
     assert "row_version" in columns
+    member_columns = {item["name"] for item in inspect(engine).get_columns("case_members")}
+    assert "party" in member_columns
+    invitation_columns = {item["name"] for item in inspect(engine).get_columns("invitations")}
+    assert "party" in invitation_columns
     Base.metadata.drop_all(bind=engine)

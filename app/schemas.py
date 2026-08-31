@@ -34,12 +34,23 @@ class InvitationRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     role: str
+    # Lado do subsidiário. Ignorado quando o papel é parte principal.
+    party: Optional[str] = None
 
     @field_validator("role")
     @classmethod
     def role_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent", "manager"}:
+        if value not in {"claimant", "respondent", "subsidiary"}:
             raise ValueError("unsupported role")
+        return value
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_a_side(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
         return value
 
 
@@ -57,7 +68,7 @@ class DeadlineRequest(BaseModel):
     @field_validator("assigned_to")
     @classmethod
     def assigned_to_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent", "manager", "all"}:
+        if value not in {"claimant", "respondent", "all"}:
             raise ValueError("unsupported assignee")
         return value
 

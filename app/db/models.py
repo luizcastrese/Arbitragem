@@ -230,6 +230,9 @@ class CaseMember(Base):
     case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     role = Column(String, nullable=False)
+    # Lado ao qual o membro está vinculado. Parte principal: role == party.
+    # Subsidiário (advogado ou terceiro): role == "subsidiary" e party é o lado.
+    party = Column(String, nullable=True)
     joined_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     case = relationship("Case", back_populates="members")
@@ -243,6 +246,7 @@ class Invitation(Base):
     case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
     email = Column(String, nullable=False, index=True)
     role = Column(String, nullable=False)
+    party = Column(String, nullable=True)
     token_hash = Column(String, nullable=False, unique=True, index=True)
     status = Column(String, nullable=False, default="pending")
     expires_at = Column(DateTime(timezone=True), nullable=False)

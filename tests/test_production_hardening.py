@@ -151,25 +151,25 @@ def test_invitation_endpoint_reports_email_delivery(client):
     registration = client.post(
         "/auth/register",
         json={
-            "display_name": "Gestora Ana",
-            "email": "gestora@example.com",
+            "display_name": "Cliente Ana",
+            "email": "ana@example.com",
             "password": "senha-segura-123",
         },
     )
-    manager_token = registration.cookies.get("valinor_session")
+    claimant_token = registration.cookies.get("valinor_session")
     created = client.post(
         "/cases",
-        headers={"X-Session-Token": manager_token},
+        headers={"X-Session-Token": claimant_token},
         json={
             "title": "Cobrança contestada",
-            "claimant": "Cliente Carlos",
+            "claimant": "Cliente Ana",
             "respondent": "Empresa Delta",
         },
     ).json()
     invite = client.post(
         f"/cases/{created['id']}/invitations",
-        headers={"X-Actor-Token": manager_token},
-        json={"email": "cliente@example.com", "role": "claimant"},
+        headers={"X-Actor-Token": claimant_token},
+        json={"email": "empresa@example.com", "role": "respondent"},
     )
     assert invite.status_code == 201
     body = invite.json()

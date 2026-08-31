@@ -232,6 +232,9 @@ def case_to_dict(
         "participants": [
             {
                 "role": member.role,
+                "party": member.party or (
+                    member.role if member.role in {"claimant", "respondent"} else None
+                ),
                 "display_name": member.user.display_name,
                 "email": member.user.email,
                 "joined_at": member.joined_at.isoformat(),
@@ -340,7 +343,7 @@ def create_case(
     respondent: str,
     claimant_token_hash: str,
     respondent_token_hash: str,
-    manager_token_hash: str,
+    manager_token_hash: Optional[str] = None,
 ) -> Case:
     case = Case(
         id=str(uuid.uuid4()),

@@ -122,37 +122,37 @@ def _reviewed_safe_case(client):
     assert (
         client.post(
             f"/cases/{case_id}/documents/{document['id']}/admit",
-            headers=_headers(case_id, "manager"),
+            headers=_headers(case_id, "claimant"),
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/lock", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/lock", headers=_headers(case_id, "claimant")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/conciliation", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/conciliation", headers=_headers(case_id, "claimant")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/organize", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/organize", headers=_headers(case_id, "claimant")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/decide", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/decide", headers=_headers(case_id, "claimant")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/review", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/review", headers=_headers(case_id, "claimant")
         ).status_code
         == 200
     )
@@ -171,7 +171,7 @@ def test_signing_key_is_published(client):
 def test_safe_mode_case_never_yields_attestation(client):
     case_id = _reviewed_safe_case(client)
     response = client.post(
-        f"/cases/{case_id}/attestation", headers=_headers(case_id, "manager")
+        f"/cases/{case_id}/attestation", headers=_headers(case_id, "claimant")
     )
     assert response.status_code == 409
     assert (
@@ -193,11 +193,11 @@ def test_contest_requires_attestation_and_party_credential(client):
     )
     assert response.status_code == 409
 
-    # Gestor não pode contestar
+    # Credencial que não é de parte é recusada
     response = client.post(
         f"/cases/{case_id}/contest",
         json={"reason": "Tentativa indevida de contestação."},
-        headers=_headers(case_id, "manager"),
+        headers={"X-Actor-Token": "token-inexistente"},
     )
     assert response.status_code == 403
 
