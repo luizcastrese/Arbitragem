@@ -656,6 +656,7 @@ export default function App() {
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
                 user={user}
+                terms={terms}
               />
             ) : (
               <LoadingState />
@@ -1000,7 +1001,8 @@ function CaseWorkspace({
   setConciliationUpdate,
   showTechnical,
   setShowTechnical,
-  user
+  user,
+  terms
 }) {
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : currentStage
@@ -1064,6 +1066,7 @@ function CaseWorkspace({
           setRespondentResponse={setRespondentResponse}
           setConciliationUpdate={setConciliationUpdate}
           roles={roles}
+          terms={terms}
         />
       )}
 
@@ -1370,7 +1373,8 @@ function NextAction({
   setClaimantResponse,
   setRespondentResponse,
   setConciliationUpdate,
-  roles
+  roles,
+  terms
 }) {
   const actionContent = {
     draft: {

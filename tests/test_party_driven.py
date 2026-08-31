@@ -245,3 +245,4 @@ def test_frontend_no_longer_exposes_manager_role():
     assert "Gestor do procedimento" not in source
     assert "option value=\"manager\"" not in source
     assert "roles.manager" not in source
+    assert "terms={terms}" in source
