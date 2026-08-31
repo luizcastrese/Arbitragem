@@ -85,13 +85,17 @@ from app.db.repository import (
     acknowledge_document as persist_acknowledgement,
     admit_document as persist_admission,
     case_to_dict,
+    count_appeals,
     create_case as persist_case,
     document_to_dict,
+    find_appeal_by_idempotency,
     get_document,
     get_case,
     list_cases,
     load_document_original,
     lock_manifest as persist_manifest,
+    persist_appeal,
+    persist_attestation_record,
     record_consent,
     register_contest,
     respond_to_document as persist_response,
@@ -101,6 +105,19 @@ from app.db.repository import (
 )
 from app.db.models import Deadline, Invitation
 from app.db.session import get_db
+from app.domain.concurrency import StageBusy, claim_case_stage
+from app.domain.frameworks import list_frameworks
+from app.domain.legacy import public_decision_view
+from app.domain.procedure import (
+    generate_and_verify_decision,
+    maybe_run_stability,
+    reconstruct_once,
+    reviewer_payload,
+    run_appeal,
+    run_automatic_review,
+    finalize_review_outcome,
+    alternate_judge_available,
+)
 from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
 from app.documents.pdf_parser import extract_text_from_pdf_bytes
@@ -170,8 +187,14 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Valinor",
-    version="0.5.0",
-    description="Fluxo auditável de decisão de disputas documentais por IA.",
+    version="0.6.0",
+    description=(
+        "Procedimento autônomo, auditável e multi-modelo de resolução privada "
+        "de disputas documentais B2B. O sistema não depende de revisão humana "
+        "interna para concluir um procedimento e nunca é obrigado a declarar um "
+        "vencedor. O resultado não constitui automaticamente sentença judicial "
+        "ou arbitral."
+    ),
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -390,13 +413,21 @@ def _assert_evidence_mutable(case) -> None:
 def _public_case(case) -> Dict:
     data = case_to_dict(case, include_content=False, include_embeddings=False)
     decision = data.get("decision") or {}
-    data["ai_result_status"] = (
-        "unavailable"
-        if decision.get("execution", {}).get("mode") == "safe_fallback"
-        else "completed"
-        if decision
-        else "pending"
-    )
+    conclusion = data.get("procedure_conclusion") or decision.get("procedure_conclusion")
+    execution_mode = decision.get("execution", {}).get("mode")
+    if data.get("status", "").startswith("processing"):
+        ai_status = "processing"
+    elif conclusion in {"invalidated", "inadmissible", "system_failure"}:
+        ai_status = conclusion
+    elif execution_mode == "safe_fallback":
+        ai_status = "unavailable"
+    elif decision:
+        ai_status = "completed"
+    else:
+        ai_status = "pending"
+    data["ai_result_status"] = ai_status
+    data["procedure_conclusion"] = conclusion
+    data["model_independence_satisfied"] = settings.model_independence_satisfied
     data["documents_count"] = len(data.pop("documents"))
     data.pop("chunks", None)
     data.pop("audit_log", None)
@@ -405,6 +436,7 @@ def _public_case(case) -> Dict:
     data.pop("conciliation_rounds", None)
     data.pop("organized", None)
     data.pop("decision", None)
+    data.pop("original_decision", None)
     data.pop("review", None)
     data.pop("attestation", None)
     return data
@@ -516,7 +548,8 @@ def root():
                 "conhecimento e oportunidade de resposta a todo material",
                 "tentativas de composição dependem de aceitação das partes",
                 "decisão por IA fundamentada apenas no registro admitido",
-                "auditoria independente e indicação de revisão humana quando necessária",
+                "auditoria automática independente, verificador determinístico e recurso automático",
+                "o sistema pode se abster; não há julgador humano interno",
             ],
         },
         "warnings": [
@@ -1315,7 +1348,23 @@ def lock_manifest(
         )
     _assert_consent_terms_reproducible(case_data)
 
-    manifest = lock_case_manifest(case_data)
+    try:
+        claimed = claim_case_stage(db, case, "lock")
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case_id)
+        if case.manifest_locked:
+            return {
+                "message": "Manifesto já estava travado",
+                "manifest": case_to_dict(case)["locked_manifest"],
+            }
+        raise HTTPException(status_code=409, detail="Trava do manifesto já em andamento")
+
+    try:
+        manifest = lock_case_manifest(case_to_dict(case))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     persist_manifest(db, case, manifest)
     return {"message": "Manifesto travado", "manifest": manifest}
 
@@ -1526,6 +1575,21 @@ def organize_case(
         )
     if case_data["organized"]:
         return case_data["organized"]
+    try:
+        claimed = claim_case_stage(
+            db,
+            case,
+            "organize",
+            extra_from_statuses=("conciliation", "locked"),
+        )
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case_id)
+        organized = case_to_dict(case).get("organized")
+        if organized:
+            return organized
+        raise HTTPException(status_code=409, detail="Organização já em andamento")
 
     organized = _record_prompt_provenance(
         case_data,
@@ -1551,6 +1615,7 @@ def organize_case(
 def decide_case(
     case_id: str,
     x_actor_token: str = Header(default=""),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
@@ -1563,6 +1628,21 @@ def decide_case(
         )
     if case_data["decision"]:
         return case_data["decision"]
+    try:
+        claimed = claim_case_stage(
+            db,
+            case,
+            "decide",
+            extra_from_statuses=("organized",),
+        )
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case_id)
+        existing = case_to_dict(case).get("decision")
+        if existing:
+            return existing
+        raise HTTPException(status_code=409, detail="Decisão já em processamento")
 
     decision_context = {
         "manifest": case_data["locked_manifest"],
@@ -1583,32 +1663,59 @@ def decide_case(
             ),
         },
     }
-    decision = _record_prompt_provenance(
+    decision, verification, conclusion = generate_and_verify_decision(
+        db,
+        case,
         case_data,
-        "judge",
-        judge_decide_case(decision_context),
+        decision_context,
+        role="judge",
+        idempotency_key=idempotency_key or None,
     )
+    decision = _record_prompt_provenance(case_data, "judge", decision)
+    stability = maybe_run_stability(db, case, case_data, decision_context, decision)
+    if stability and not stability.get("stable"):
+        decision["outcome"] = "inconclusive"
+        decision["procedure_conclusion"] = "inconclusive"
+        decision.setdefault("abstention_reasons", [])
+        if "unstable_decision" not in decision["abstention_reasons"]:
+            decision["abstention_reasons"].append("unstable_decision")
+        if "material_model_disagreement" not in decision["abstention_reasons"]:
+            decision["abstention_reasons"].append("material_model_disagreement")
+        conclusion = "inconclusive"
+        append_audit(
+            db,
+            case,
+            "decision_unstable",
+            {"disagreements": stability.get("material_disagreements") or []},
+        )
+    case.procedure_conclusion = conclusion
+    case.stability_json = (
+        __import__("json").dumps(stability, ensure_ascii=False) if stability else case.stability_json
+    )
+    status = "invalidated" if conclusion == "invalidated" else "decided"
     save_stage(
         db,
         case,
         field="decision_json",
         value=decision,
-        status="decided",
+        status=status,
         event_type="decision_generated",
         event_payload={
             "outcome": decision.get("outcome"),
             "confidence": decision.get("confidence"),
-            "requires_human_review": decision.get("requires_human_review"),
+            "procedure_conclusion": conclusion,
+            "verification_valid": verification.get("valid"),
             "execution": decision.get("execution", {}),
         },
     )
-    return decision
+    return public_decision_view(decision)
 
 
 @app.post("/cases/{case_id}/review")
 def review_case(
     case_id: str,
     x_actor_token: str = Header(default=""),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
@@ -1621,17 +1728,83 @@ def review_case(
         )
     if case_data["review"]:
         return case_data["review"]
+    try:
+        claimed = claim_case_stage(
+            db,
+            case,
+            "review",
+            extra_from_statuses=("decided", "invalidated", "inconclusive"),
+        )
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case_id)
+        existing = case_to_dict(case).get("review")
+        if existing:
+            return existing
+        raise HTTPException(status_code=409, detail="Auditoria já em processamento")
 
-    review_payload = {
-        "manifest": case_data["locked_manifest"],
-        "conciliation_rounds": case_data["conciliation_rounds"],
-        "organized_case": case_data["organized"],
-        "decision": case_data["decision"],
-    }
+    verification = case_data.get("verification") or {}
     review = _record_prompt_provenance(
         case_data,
         "reviewer",
-        review_decision(review_payload),
+        run_automatic_review(db, case, case_data, case_data["decision"], verification),
+    )
+
+    reconstruction_used = False
+    decision = case_data["decision"]
+    conclusion, decision = finalize_review_outcome(
+        decision, verification, review, reconstruction_used
+    )
+    if conclusion == "pending_reconstruction":
+        if not alternate_judge_available():
+            conclusion, decision = finalize_review_outcome(
+                decision, verification, review, reconstruction_used=True
+            )
+        else:
+            reconstruction_used = True
+            new_input = {
+                "manifest": case_data["locked_manifest"],
+                "conciliation_rounds": case_data["conciliation_rounds"],
+                "organized_case": case_data["organized"],
+                "retrieved_evidence": {
+                    "delivery": _retrieve(
+                        case_data, "obrigações de entrega e cumprimento parcial"
+                    ),
+                    "payment": _retrieve(
+                        case_data, "condições de pagamento e proporcionalidade"
+                    ),
+                    "deadline": _retrieve(case_data, "cumprimento de prazo e atraso"),
+                },
+                "reconstruction": True,
+            }
+            decision, verification, _conclusion, review = reconstruct_once(
+                db,
+                case,
+                case_data,
+                new_input,
+                case.current_decision_run_id,
+            )
+            review = _record_prompt_provenance(case_data, "reviewer", review)
+            conclusion, decision = finalize_review_outcome(
+                decision, verification, review, reconstruction_used=True
+            )
+            save_stage(
+                db,
+                case,
+                field="decision_json",
+                value=decision,
+                status="invalidated" if conclusion == "invalidated" else "decided",
+                event_type="decision_reconstructed",
+                event_payload={
+                    "outcome": decision.get("outcome"),
+                    "procedure_conclusion": conclusion,
+                    "supersedes_id": case.current_decision_run_id,
+                },
+            )
+
+    case.procedure_conclusion = (
+        conclusion if conclusion != "pending_reconstruction" else decision.get("procedure_conclusion")
     )
     save_stage(
         db,
@@ -1642,7 +1815,9 @@ def review_case(
         event_type="review_generated",
         event_payload={
             "approved": review.get("approved"),
-            "requires_human_review": review.get("requires_human_review"),
+            "outcome": review.get("outcome"),
+            "procedure_conclusion": case.procedure_conclusion,
+            "reconstruction_used": reconstruction_used,
             "execution": review.get("execution", {}),
         },
     )
@@ -1686,6 +1861,30 @@ def issue_attestation(
             status_code=409,
             detail="Caso contestado: nenhuma attestation pode ser emitida",
         )
+    if settings_now.demo_non_decisional:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Julgador e revisor não têm políticas independentes nesta "
+                "instância; o modo de demonstração não emite attestation de mérito."
+            ),
+        )
+    verification = case_data.get("verification")
+    if verification is not None and not verification.get("valid"):
+        raise HTTPException(
+            status_code=409,
+            detail="A verificação determinística não validou a decisão",
+        )
+    if (case_data.get("procedure_conclusion") or "") in {
+        "invalidated",
+        "inadmissible",
+        "inconclusive",
+        "system_failure",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="A conclusão do procedimento não admite attestation executável",
+        )
 
     # A cadeia de auditoria íntegra é pré-condição criptográfica da emissão.
     audit_events = case_data["audit_log"]
@@ -1702,6 +1901,22 @@ def issue_attestation(
             },
         )
     audit_chain_head = audit_events[-1]["event_hash"] if audit_events else ""
+
+    try:
+        claimed = claim_case_stage(
+            db,
+            case,
+            "attestation",
+            extra_from_statuses=("reviewed",),
+        )
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case_id)
+        existing = case_to_dict(case).get("attestation")
+        if existing:
+            return existing
+        raise HTTPException(status_code=409, detail="Attestation já em emissão")
 
     try:
         attestation = build_decision_attestation(
@@ -1726,8 +1941,11 @@ def issue_attestation(
             "split": attestation["decision"]["split"],
             "contest_window_ends_utc": attestation["contest_window_ends_utc"],
             "key_id": attestation["platform"]["key_id"],
+            "supersedes_attestation_hash": attestation.get("supersedes_attestation_hash"),
         },
     )
+    persist_attestation_record(db, case, attestation)
+    db.commit()
 
     # Âncora pública em Nostr (hash + assinatura, nunca o teor da decisão).
     # Melhor esforço: falha de rede/relay não afeta a attestation já emitida.
@@ -1784,6 +2002,7 @@ def contest_case(
     case_id: str,
     payload: ContestRequest,
     x_actor_token: str = Header(default=""),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
@@ -1808,8 +2027,35 @@ def contest_case(
             status_code=409,
             detail="Não há attestation emitida para contestar",
         )
-    if case_data["contest"]["contested"]:
-        return case_data["contest"]
+    if case_data["contest"]["contested"] or case.contested_at:
+        existing = find_appeal_by_idempotency(db, case.id, idempotency_key)
+        if existing:
+            return {
+                **case_data["contest"],
+                "appeal": existing.result_json and __import__("json").loads(existing.result_json),
+                "appeal_id": existing.id,
+            }
+        return {
+            **case_data["contest"],
+            "appeal": (case_data.get("appeals") or [None])[-1],
+        }
+
+    try:
+        claimed = claim_case_stage(
+            db,
+            case,
+            "appeal",
+            extra_from_statuses=("reviewed",),
+        )
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case_id)
+        refreshed = case_to_dict(case)
+        return {
+            **refreshed["contest"],
+            "appeal": (refreshed.get("appeals") or [None])[-1],
+        }
 
     window_ends = datetime.fromisoformat(attestation["contest_window_ends_utc"])
     if datetime.now(window_ends.tzinfo) > window_ends:
@@ -1818,8 +2064,98 @@ def contest_case(
             detail="A janela de contestação já se encerrou",
         )
 
-    updated = register_contest(db, case, actor_role, payload.reason)
-    return case_to_dict(updated)["contest"]
+    explanation = payload.resolved_explanation()
+    grounds = payload.resolved_grounds()
+    if settings.max_appeals_per_attestation <= count_appeals(db, case.id):
+        raise HTTPException(
+            status_code=409,
+            detail="O limite de recursos automáticos deste caso já foi atingido",
+        )
+
+    findings = {
+        item.get("finding_id")
+        for item in (case_data.get("decision") or {}).get("material_findings") or []
+        if isinstance(item, dict)
+    }
+    unknown_findings = [
+        item for item in payload.challenged_finding_ids if item not in findings
+    ]
+    if unknown_findings and findings:
+        raise HTTPException(
+            status_code=422,
+            detail="Finding impugnado não existe na decisão",
+        )
+    manifest_doc_ids = {
+        item.get("id")
+        for item in (case_data.get("locked_manifest") or {}).get("documents") or []
+    }
+    for ref in payload.evidence_refs:
+        document_id = ref.get("document_id") if isinstance(ref, dict) else None
+        if document_id and manifest_doc_ids and document_id not in manifest_doc_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="Evidência do recurso não pertence ao manifesto",
+            )
+
+    original_hash = ((case_data.get("decision") or {}).get("provenance") or {}).get(
+        "decision_payload_hash"
+    ) or canonical_hash(case_data.get("decision") or {})
+    appeal = persist_appeal(
+        db,
+        case,
+        filed_by=actor_role,
+        grounds=grounds,
+        original_decision_hash=original_hash,
+        idempotency_key=idempotency_key or None,
+        status="processing",
+    )
+    updated = register_contest(db, case, actor_role, explanation)
+    contest_payload = {
+        "grounds": grounds,
+        "explanation": explanation,
+        "challenged_finding_ids": payload.challenged_finding_ids,
+        "evidence_refs": payload.evidence_refs,
+        "requested_correction": payload.requested_correction,
+        "filed_by": actor_role,
+    }
+    result = run_appeal(db, updated, case_to_dict(updated), appeal, contest_payload)
+    db.commit()
+    refreshed = case_to_dict(get_case(db, case_id))
+    return {
+        **refreshed["contest"],
+        "appeal": result,
+        "grounds": grounds,
+    }
+
+
+@app.get("/cases/{case_id}/verification")
+def get_verification(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    verification = case_to_dict(case, include_content=False).get("verification")
+    if not verification:
+        raise HTTPException(status_code=404, detail="Verificação ainda não executada")
+    return verification
+
+
+@app.get("/cases/{case_id}/appeals")
+def get_appeals(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    return case_to_dict(case, include_content=False).get("appeals") or []
+
+
+@app.get("/frameworks")
+def get_frameworks():
+    return [item.lock_summary() for item in list_frameworks()]
 
 
 @app.get("/cases/{case_id}/report")

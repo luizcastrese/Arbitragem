@@ -246,7 +246,7 @@ def test_lock_is_blocked_when_the_accepted_text_no_longer_reproduces(
 
 def test_every_agent_registers_a_versioned_prompt():
     policy = prompt_policy()
-    assert set(policy) == {"conciliator", "judge", "organizer", "reviewer"}
+    assert set(policy) == {"appeal", "conciliator", "judge", "organizer", "reviewer"}
     for agent, reference in policy.items():
         assert reference["version"]
         assert len(reference["sha256"]) == 64

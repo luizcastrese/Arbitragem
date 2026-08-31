@@ -9,7 +9,20 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.audit import build_audit_event
 from app.core.encryption import decrypt_chunk_text, encrypt_chunk_text
 from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
-from app.db.models import AuditEvent, Case, CaseMember, Chunk, Document
+from app.db.models import (
+    AttestationRecord,
+    AuditEvent,
+    AutomaticAppeal,
+    AutomaticReviewRun,
+    Case,
+    CaseMember,
+    Chunk,
+    DecisionRun,
+    DecisionVerification,
+    Document,
+    LLMExecution,
+)
+from app.domain.legacy import public_decision_view, public_review_view
 from app.documents.storage import (
     StorageError,
     build_content_key,
@@ -142,6 +155,11 @@ def case_to_dict(
         for document in documents
         if not document["contradictory_complete"]
     ]
+    decision_runs = [_run_to_dict(item) for item in case.decision_runs]
+    original_decision = None
+    if case.decision_runs:
+        first = min(case.decision_runs, key=lambda item: item.version or 0)
+        original_decision = _public_decision(_json_load(first.payload_json))
     return {
         "id": case.id,
         "title": case.title,
@@ -175,10 +193,28 @@ def case_to_dict(
         "conciliation": conciliation_rounds[-1] if conciliation_rounds else None,
         "conciliation_rounds": conciliation_rounds,
         "organized": _json_load(case.organized_json),
-        "decision": _json_load(case.decision_json),
-        "review": _json_load(case.review_json),
+        "decision": _public_decision(_json_load(case.decision_json)),
+        "original_decision": original_decision,
+        "review": _public_review(_json_load(case.review_json)),
         "attestation": _json_load(case.attestation_json),
         "nostr_anchor": _json_load(case.nostr_anchor_json),
+        "verification": _json_load(case.verification_json),
+        "stability": _json_load(case.stability_json),
+        "procedure_conclusion": case.procedure_conclusion,
+        "decision_runs": decision_runs,
+        "review_runs": [_run_to_dict(item) for item in case.review_runs],
+        "appeals": [_appeal_to_dict(item) for item in case.appeals],
+        "attestation_records": [
+            {
+                "id": item.id,
+                "version": item.version,
+                "supersedes_id": item.supersedes_id,
+                "attestation_hash": item.attestation_hash,
+                "status": item.status,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            }
+            for item in case.attestation_records
+        ],
         "escrow_id": case.escrow_id,
         "contest": {
             "contested": bool(case.contested_at),
@@ -218,6 +254,67 @@ def audit_to_dict(event: AuditEvent) -> Dict[str, Any]:
     }
 
 
+def _public_decision(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not value:
+        return value
+    return public_decision_view(value)
+
+
+def _public_review(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not value:
+        return value
+    return public_review_view(value)
+
+
+def _run_to_dict(item) -> Dict[str, Any]:
+    payload = _json_load(getattr(item, "payload_json", None), {}) or {}
+    if "material_findings" in payload or "framework_id" in payload:
+        public_payload = _public_decision(payload)
+    elif payload:
+        public_payload = _public_review(payload)
+    else:
+        public_payload = None
+    return {
+        "id": item.id,
+        "version": item.version,
+        "supersedes_id": item.supersedes_id,
+        "status": item.status,
+        "role": getattr(item, "role", None),
+        "execution_id": getattr(item, "execution_id", None),
+        "input_hash": item.input_hash,
+        "output_hash": item.output_hash,
+        "outcome": getattr(item, "outcome", None) or (payload or {}).get("outcome"),
+        "payload": public_payload,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "completed_at": item.completed_at.isoformat() if item.completed_at else None,
+    }
+
+
+def _appeal_to_dict(item: AutomaticAppeal) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "filed_by": item.filed_by,
+        "grounds": _json_load(item.grounds_json, []),
+        "original_decision_hash": item.original_decision_hash,
+        "status": item.status,
+        "appeal_provider": item.appeal_provider,
+        "appeal_model": item.appeal_model,
+        "result": _json_load(item.result_json),
+        "result_hash": item.result_hash,
+        "version": item.version,
+        "supersedes_id": item.supersedes_id,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "completed_at": item.completed_at.isoformat() if item.completed_at else None,
+    }
+    return {
+        "event_type": event.event_type,
+        "timestamp_utc": event.timestamp_utc,
+        "payload": _json_load(event.payload_json, {}),
+        "previous_hash": event.previous_hash,
+        "event_hash": event.event_hash,
+    }
+
+
 def _case_query(db: Session):
     return db.query(Case).options(
         selectinload(Case.documents),
@@ -227,6 +324,12 @@ def _case_query(db: Session):
         selectinload(Case.invitations),
         selectinload(Case.deadlines),
         selectinload(Case.notifications),
+        selectinload(Case.decision_runs),
+        selectinload(Case.review_runs),
+        selectinload(Case.verifications),
+        selectinload(Case.appeals),
+        selectinload(Case.attestation_records),
+        selectinload(Case.llm_executions),
     )
 
 
@@ -569,3 +672,254 @@ def register_contest(
     )
     db.commit()
     return get_case(db, case.id)
+
+
+def next_decision_version(db: Session, case_id: str) -> int:
+    current = (
+        db.query(DecisionRun)
+        .filter(DecisionRun.case_id == case_id)
+        .order_by(DecisionRun.version.desc())
+        .first()
+    )
+    return (current.version + 1) if current else 1
+
+
+def persist_llm_execution(
+    db: Session,
+    case: Case,
+    execution: Dict[str, Any],
+    *,
+    agent: str,
+    task: str = "",
+    input_hash: Optional[str] = None,
+    output_hash: Optional[str] = None,
+    status: str = "completed",
+) -> LLMExecution:
+    record = LLMExecution(
+        id=str(uuid.uuid4()),
+        case_id=case.id,
+        agent=agent,
+        task=task or agent,
+        requested_provider=execution.get("provider_requested") or "",
+        requested_model=execution.get("model_requested") or "",
+        effective_provider=execution.get("provider") or execution.get("mode") or "",
+        effective_model=execution.get("model"),
+        provider_response_id=execution.get("response_id"),
+        prompt_tokens=(execution.get("usage") or {}).get("input_tokens"),
+        completion_tokens=(execution.get("usage") or {}).get("output_tokens"),
+        total_tokens=(execution.get("usage") or {}).get("total_tokens"),
+        latency_ms=execution.get("latency_ms"),
+        attempts=int(execution.get("attempts") or 1),
+        fallback_used=bool(execution.get("fallback_used")),
+        fallback_reason=execution.get("fallback_reason"),
+        status=status,
+        input_hash=input_hash,
+        output_hash=output_hash,
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(record)
+    db.flush()
+    return record
+
+
+def persist_decision_run(
+    db: Session,
+    case: Case,
+    payload: Dict[str, Any],
+    *,
+    status: str,
+    role: str = "judge",
+    supersedes_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    provenance: Optional[Dict[str, Any]] = None,
+    input_hash: Optional[str] = None,
+    output_hash: Optional[str] = None,
+) -> DecisionRun:
+    version = next_decision_version(db, case.id)
+    record = DecisionRun(
+        id=str(uuid.uuid4()),
+        case_id=case.id,
+        version=version,
+        supersedes_id=supersedes_id,
+        status=status,
+        role=role,
+        execution_id=(payload.get("execution") or {}).get("execution_id"),
+        idempotency_key=idempotency_key,
+        input_hash=input_hash,
+        output_hash=output_hash or (provenance or {}).get("decision_payload_hash"),
+        payload_json=_json_dump(payload),
+        provenance_json=_json_dump(provenance),
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(record)
+    db.flush()
+    case.current_decision_run_id = record.id
+    return record
+
+
+def persist_review_run(
+    db: Session,
+    case: Case,
+    payload: Dict[str, Any],
+    *,
+    status: str,
+    decision_run_id: Optional[str] = None,
+    input_hash: Optional[str] = None,
+    output_hash: Optional[str] = None,
+) -> AutomaticReviewRun:
+    current = (
+        db.query(AutomaticReviewRun)
+        .filter(AutomaticReviewRun.case_id == case.id)
+        .order_by(AutomaticReviewRun.version.desc())
+        .first()
+    )
+    record = AutomaticReviewRun(
+        id=str(uuid.uuid4()),
+        case_id=case.id,
+        decision_run_id=decision_run_id or case.current_decision_run_id,
+        version=(current.version + 1) if current else 1,
+        supersedes_id=current.id if current else None,
+        status=status,
+        outcome=payload.get("outcome"),
+        execution_id=(payload.get("execution") or {}).get("execution_id"),
+        input_hash=input_hash,
+        output_hash=output_hash,
+        payload_json=_json_dump(payload),
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(record)
+    db.flush()
+    case.current_review_run_id = record.id
+    return record
+
+
+def persist_verification(
+    db: Session,
+    case: Case,
+    result: Dict[str, Any],
+    *,
+    result_hash: str,
+    decision_run_id: Optional[str] = None,
+) -> DecisionVerification:
+    record = DecisionVerification(
+        id=str(uuid.uuid4()),
+        case_id=case.id,
+        decision_run_id=decision_run_id or case.current_decision_run_id,
+        valid=bool(result.get("valid")),
+        result_json=_json_dump(result) or "{}",
+        result_hash=result_hash,
+        execution_id=result.get("execution_id"),
+    )
+    db.add(record)
+    case.verification_json = _json_dump(result)
+    db.flush()
+    return record
+
+
+def persist_appeal(
+    db: Session,
+    case: Case,
+    *,
+    filed_by: str,
+    grounds: List[Any],
+    original_decision_hash: str,
+    idempotency_key: Optional[str] = None,
+    status: str = "filed",
+) -> AutomaticAppeal:
+    current = (
+        db.query(AutomaticAppeal)
+        .filter(AutomaticAppeal.case_id == case.id)
+        .order_by(AutomaticAppeal.version.desc())
+        .first()
+    )
+    record = AutomaticAppeal(
+        id=str(uuid.uuid4()),
+        case_id=case.id,
+        filed_by=filed_by,
+        grounds_json=_json_dump(grounds) or "[]",
+        original_decision_hash=original_decision_hash,
+        status=status,
+        idempotency_key=idempotency_key,
+        version=(current.version + 1) if current else 1,
+        supersedes_id=current.id if current else None,
+    )
+    db.add(record)
+    db.flush()
+    return record
+
+
+def complete_appeal(
+    db: Session,
+    appeal: AutomaticAppeal,
+    result: Dict[str, Any],
+    *,
+    result_hash: str,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    status: str = "completed",
+) -> AutomaticAppeal:
+    appeal.result_json = _json_dump(result)
+    appeal.result_hash = result_hash
+    appeal.status = status
+    appeal.appeal_provider = provider
+    appeal.appeal_model = model
+    appeal.execution_id = (result.get("execution") or {}).get("execution_id")
+    appeal.completed_at = datetime.now(timezone.utc)
+    db.add(appeal)
+    db.flush()
+    return appeal
+
+
+def persist_attestation_record(
+    db: Session,
+    case: Case,
+    attestation: Dict[str, Any],
+    *,
+    decision_run_id: Optional[str] = None,
+    review_run_id: Optional[str] = None,
+    verification_id: Optional[str] = None,
+    appeal_id: Optional[str] = None,
+) -> AttestationRecord:
+    current = (
+        db.query(AttestationRecord)
+        .filter(AttestationRecord.case_id == case.id)
+        .order_by(AttestationRecord.version.desc())
+        .first()
+    )
+    record = AttestationRecord(
+        id=str(uuid.uuid4()),
+        case_id=case.id,
+        version=(current.version + 1) if current else 1,
+        supersedes_id=current.id if current else None,
+        status="issued",
+        payload_json=_json_dump(attestation) or "{}",
+        attestation_hash=attestation.get("attestation_hash") or "",
+        decision_run_id=decision_run_id or case.current_decision_run_id,
+        review_run_id=review_run_id or case.current_review_run_id,
+        verification_id=verification_id,
+        appeal_id=appeal_id,
+    )
+    db.add(record)
+    db.flush()
+    return record
+
+
+def find_appeal_by_idempotency(
+    db: Session,
+    case_id: str,
+    idempotency_key: str,
+) -> Optional[AutomaticAppeal]:
+    if not idempotency_key:
+        return None
+    return (
+        db.query(AutomaticAppeal)
+        .filter(
+            AutomaticAppeal.case_id == case_id,
+            AutomaticAppeal.idempotency_key == idempotency_key,
+        )
+        .one_or_none()
+    )
+
+
+def count_appeals(db: Session, case_id: str) -> int:
+    return db.query(AutomaticAppeal).filter(AutomaticAppeal.case_id == case_id).count()

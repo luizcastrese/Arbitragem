@@ -7,11 +7,18 @@ contraditório, transparência ou integridade.
 MVP operacional de uma infraestrutura de auditoria decisória de disputas
 documentais por IA.
 
-O sistema cria um procedimento persistente, fixa documentos com SHA-256,
-recupera evidências, conduz quantas rodadas consensuais forem úteis, organiza o
-registro, profere uma decisão computacional e executa uma auditoria independente
-por uma segunda IA. Cada etapa é persistida no SQLite e registrada em uma
-cadeia de auditoria encadeada por hashes.
+O sistema cria um procedimento persistente e autônomo, fixa documentos com
+SHA-256, recupera evidências, conduz rodadas consensuais, organiza o registro,
+profere uma decisão computacional, verifica invariantes formais de forma
+determinística e executa uma auditoria automática por um segundo modelo. Não há
+julgador humano interno: quando o mérito não for seguro, o procedimento encerra
+como inconclusivo, inadmissível ou invalidado. Cada etapa é persistida e
+registrada em uma cadeia de auditoria encadeada por hashes.
+
+Hashes comprovam identidade e integridade; referências estruturadas comprovam
+correspondência com o manifesto; o verificador comprova invariantes formais; a
+auditoria avalia sustentação semântica. Nenhuma dessas camadas transforma a
+saída em sentença arbitral ou estatal.
 
 > Este projeto é experimental. Ele profere uma decisão dentro do procedimento
 > computacional configurado, mas essa saída não constitui, por si só, sentença
@@ -59,7 +66,7 @@ cadeia de auditoria encadeada por hashes.
   relay aceita o evento, para a auditoria nunca apontar uma prova pública
   inexistente;
 - etapas idempotentes e documentos imutáveis após o lock;
-- modo seguro sem OpenAI, sempre inconclusivo e sujeito a revisão humana;
+- modo seguro sem chave de modelo, sempre inconclusivo e encerrado de forma autônoma;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
 - convites por e-mail transacional (SMTP) com fallback para log quando não configurado;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
@@ -82,10 +89,12 @@ caso
   -> rodadas de conciliação ou mediação
   -> organização
   -> decisão da IA
-  -> auditoria independente
+  -> verificação determinística
+  -> auditoria automática
+  -> (opcional) teste de estabilidade
   -> relatório
   -> attestation assinada (opcional)
-  -> janela de contestação
+  -> recurso automático
   -> execução externa do escrow
 ```
 
@@ -97,7 +106,7 @@ percurso, e o lock é bloqueado enquanto houver pendência.
 O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
 participação voluntária, acesso a todo material, oportunidade de resposta,
 composição consensual, decisão fundamentada por IA, auditoria independente e
-revisão humana quando indicada. O texto vive em `app/terms/<versão>.md` e é
+auditoria automática, verificador determinístico e recurso automático. O texto vive em `app/terms/<versão>.md` e é
 servido por `GET /terms`; versões publicadas nunca são editadas, e o caso não
 pode ser travado se o aceite de alguma parte não puder mais ser reproduzido.
 
@@ -177,9 +186,24 @@ Variáveis do arquivo `.env`:
 
 | Variável | Uso |
 |---|---|
-| `OPENAI_API_KEY` | Ativa embeddings e os quatro agentes |
-| `OPENAI_MODEL` | Modelo dos agentes; padrão `gpt-5-mini` |
-| `OPENAI_EMBEDDING_MODEL` | Modelo de embedding |
+| `OPENAI_API_KEY` | Ativa o provedor OpenAI (deprecated como único caminho) |
+| `OPENAI_MODEL` | **Deprecated.** Default dos agentes se `*_MODEL` não for definido |
+| `OPENAI_EMBEDDING_MODEL` | **Deprecated.** Use `EMBEDDING_MODEL` |
+| `LLM_DEFAULT_PROVIDER` | `openai` ou `openrouter` |
+| `CONCILIATOR_PROVIDER` / `CONCILIATOR_MODEL` | Política do conciliador |
+| `ORGANIZER_PROVIDER` / `ORGANIZER_MODEL` | Política do organizador |
+| `JUDGE_PROVIDER` / `JUDGE_MODEL` | Política do julgador |
+| `REVIEWER_PROVIDER` / `REVIEWER_MODEL` | Política do revisor (deve diferir do julgador em produção) |
+| `APPEAL_PROVIDER` / `APPEAL_MODEL` | Política do recurso automático |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | Embeddings |
+| `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | Provedor OpenRouter |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | Timeout explícito |
+| `LLM_MAX_RETRIES` | Retries só para erros transitórios |
+| `LLM_ALLOWED_PROVIDERS` / `LLM_ALLOWED_MODELS` | Allowlists |
+| `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL` | Fallback explícito (nunca silencioso) |
+| `FRAMEWORK_ID` | Framework fixado no manifesto (`digital_services_b2b_v1` ou `commercial_balanced_v1`) |
+| `DECISION_STABILITY_ENABLED` | Segunda execução controlada |
+| `DECISION_STABILITY_RUNS` / `DECISION_STABILITY_THRESHOLD` | Política de estabilidade |
 | `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |
 | `DATABASE_URL` | Banco SQLAlchemy |
 | `POSTGRES_DB` | Banco criado pelo Docker Compose |
@@ -282,7 +306,10 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/attestation` | Emitir a Decision Attestation assinada |
 | `GET /cases/{id}/attestation` | Ler a attestation emitida |
 | `GET /cases/{id}/attestation/nostr-anchor` | Ler a âncora pública da attestation |
-| `POST /cases/{id}/contest` | Contestar a decisão dentro da janela |
+| `POST /cases/{id}/contest` | Recurso automático estruturado |
+| `GET /cases/{id}/verification` | Resultado do verificador determinístico |
+| `GET /cases/{id}/appeals` | Recursos automáticos do caso |
+| `GET /frameworks` | Frameworks versionados disponíveis |
 | `POST /attestations/verify` | Verificar uma attestation avulsa, sem contexto de caso |
 | `GET /.well-known/valinor-signing-key` | Publicar a chave pública Ed25519 da plataforma |
 | `GET /health` | Saúde da API, do banco e do modo de IA |
@@ -342,7 +369,8 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   exigem um backend compartilhado (por exemplo Redis);
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
-- decisões inconclusivas ou reprovadas pela auditoria exigem intervenção humana.
+- decisões inconclusivas, inadmissíveis ou invalidadas encerram o procedimento
+  de forma autônoma; não há julgador humano interno.
 
 Antes de exposição pública, a próxima etapa é configurar o provedor SMTP com um
 domínio autenticado (a verificação de e-mail depende de entrega confiável),

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -42,6 +42,13 @@ class Case(Base):
     escrow_id = Column(String, nullable=True)
     contested_at = Column(String, nullable=True)
     contested_by = Column(String, nullable=True)
+    procedure_conclusion = Column(String, nullable=True)
+    row_version = Column(Integer, nullable=False, default=1)
+    processing_started_at = Column(DateTime(timezone=True), nullable=True)
+    current_decision_run_id = Column(String, nullable=True)
+    current_review_run_id = Column(String, nullable=True)
+    verification_json = Column(Text, nullable=True)
+    stability_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(
         DateTime(timezone=True),
@@ -72,6 +79,24 @@ class Case(Base):
     invitations = relationship("Invitation", back_populates="case", cascade="all, delete-orphan")
     deadlines = relationship("Deadline", back_populates="case", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="case", cascade="all, delete-orphan")
+    llm_executions = relationship(
+        "LLMExecution", back_populates="case", cascade="all, delete-orphan"
+    )
+    decision_runs = relationship(
+        "DecisionRun", back_populates="case", cascade="all, delete-orphan"
+    )
+    review_runs = relationship(
+        "AutomaticReviewRun", back_populates="case", cascade="all, delete-orphan"
+    )
+    verifications = relationship(
+        "DecisionVerification", back_populates="case", cascade="all, delete-orphan"
+    )
+    appeals = relationship(
+        "AutomaticAppeal", back_populates="case", cascade="all, delete-orphan"
+    )
+    attestation_records = relationship(
+        "AttestationRecord", back_populates="case", cascade="all, delete-orphan"
+    )
 
 
 class Document(Base):
@@ -258,3 +283,143 @@ class Notification(Base):
 
     case = relationship("Case", back_populates="notifications")
     user = relationship("User", back_populates="notifications")
+
+
+class LLMExecution(Base):
+    __tablename__ = "llm_executions"
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    agent = Column(String, nullable=False, index=True)
+    task = Column(String, nullable=False, default="")
+    requested_provider = Column(String, nullable=False, default="")
+    requested_model = Column(String, nullable=False, default="")
+    effective_provider = Column(String, nullable=False, default="")
+    effective_model = Column(String, nullable=True)
+    provider_response_id = Column(String, nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    latency_ms = Column(Float, nullable=True)
+    attempts = Column(Integer, nullable=False, default=1)
+    fallback_used = Column(Boolean, nullable=False, default=False)
+    fallback_reason = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="completed")
+    input_hash = Column(String, nullable=True)
+    output_hash = Column(String, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="llm_executions")
+
+
+class DecisionRun(Base):
+    __tablename__ = "decision_runs"
+    __table_args__ = (
+        UniqueConstraint("case_id", "version", name="uq_decision_runs_case_version"),
+        UniqueConstraint("case_id", "idempotency_key", name="uq_decision_runs_idempotency"),
+    )
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    supersedes_id = Column(String, ForeignKey("decision_runs.id"), nullable=True)
+    status = Column(String, nullable=False, default="processing", index=True)
+    role = Column(String, nullable=False, default="judge")
+    execution_id = Column(String, nullable=True, index=True)
+    idempotency_key = Column(String, nullable=True)
+    input_hash = Column(String, nullable=True)
+    output_hash = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    provenance_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    case = relationship("Case", back_populates="decision_runs")
+
+
+class AutomaticReviewRun(Base):
+    __tablename__ = "automatic_review_runs"
+    __table_args__ = (
+        UniqueConstraint("case_id", "version", name="uq_review_runs_case_version"),
+    )
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    decision_run_id = Column(String, ForeignKey("decision_runs.id"), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    supersedes_id = Column(String, ForeignKey("automatic_review_runs.id"), nullable=True)
+    status = Column(String, nullable=False, default="processing", index=True)
+    outcome = Column(String, nullable=True)
+    execution_id = Column(String, nullable=True)
+    input_hash = Column(String, nullable=True)
+    output_hash = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    case = relationship("Case", back_populates="review_runs")
+
+
+class DecisionVerification(Base):
+    __tablename__ = "decision_verifications"
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    decision_run_id = Column(String, ForeignKey("decision_runs.id"), nullable=True)
+    valid = Column(Boolean, nullable=False, default=False)
+    result_json = Column(Text, nullable=False, default="{}")
+    result_hash = Column(String, nullable=False, default="")
+    execution_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="verifications")
+
+
+class AutomaticAppeal(Base):
+    __tablename__ = "automatic_appeals"
+    __table_args__ = (
+        UniqueConstraint("case_id", "idempotency_key", name="uq_appeals_idempotency"),
+    )
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    filed_by = Column(String, nullable=False)
+    grounds_json = Column(Text, nullable=False, default="[]")
+    original_decision_hash = Column(String, nullable=False, default="")
+    status = Column(String, nullable=False, default="filed", index=True)
+    appeal_provider = Column(String, nullable=True)
+    appeal_model = Column(String, nullable=True)
+    result_json = Column(Text, nullable=True)
+    result_hash = Column(String, nullable=True)
+    idempotency_key = Column(String, nullable=True)
+    execution_id = Column(String, nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    supersedes_id = Column(String, ForeignKey("automatic_appeals.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    case = relationship("Case", back_populates="appeals")
+
+
+class AttestationRecord(Base):
+    __tablename__ = "attestation_records"
+    __table_args__ = (
+        UniqueConstraint("case_id", "version", name="uq_attestation_records_version"),
+    )
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    supersedes_id = Column(String, ForeignKey("attestation_records.id"), nullable=True)
+    status = Column(String, nullable=False, default="issued")
+    payload_json = Column(Text, nullable=False)
+    attestation_hash = Column(String, nullable=False, index=True)
+    decision_run_id = Column(String, ForeignKey("decision_runs.id"), nullable=True)
+    review_run_id = Column(String, ForeignKey("automatic_review_runs.id"), nullable=True)
+    verification_id = Column(String, ForeignKey("decision_verifications.id"), nullable=True)
+    appeal_id = Column(String, ForeignKey("automatic_appeals.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    case = relationship("Case", back_populates="attestation_records")

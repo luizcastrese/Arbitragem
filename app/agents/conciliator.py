@@ -43,7 +43,8 @@ Regras:
   para sugerir termos concretos.
 - Recomende "mediation" quando a preservação da relação e a construção
   conjunta da solução forem mais relevantes.
-- Recomende "adjudication" quando não houver convergência material suficiente.
+- Recomende "adjudication" quando não houver convergência material suficiente
+  ou quando a análise automática estiver indisponível.
 - Os termos possíveis são propostas neutras para diálogo, nunca uma decisão.
 - Sugira novas rodadas enquanto houver mudança plausível de posição, questões
   negociáveis ou uma estratégia diferente que possa aproximar as partes.
@@ -62,7 +63,7 @@ def _safe_fallback(reason: str, round_number: int) -> Dict:
     return {
         "round_number": round_number,
         "convergence": "undetermined",
-        "recommended_path": "human_screening",
+        "recommended_path": "adjudication",
         "neutral_summary": (
             "A triagem automática de convergência não pôde ser concluída."
         ),
@@ -89,6 +90,7 @@ def assess_conciliation(context: Dict, round_number: int) -> Dict:
             system_prompt=PROMPT.text,
             user_payload=context,
             response_model=ConciliationOutput,
+            agent="conciliator",
         )
     except Exception as exc:
         return _safe_fallback(type(exc).__name__, round_number)

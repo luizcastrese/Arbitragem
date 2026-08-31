@@ -84,10 +84,22 @@ function userHasRole(caseData, user, role) {
 const statusLabels = {
   draft: 'Recebendo documentos',
   locked: 'Documentos protegidos',
+  locking: 'Travando o manifesto',
   conciliation: 'Composição avaliada',
   organized: 'Fatos organizados',
+  processing_organize: 'Organizando o registro',
+  processing_decision: 'Decisão em processamento',
   decided: 'Decisão proferida',
-  reviewed: 'Decisão auditada'
+  processing_review: 'Auditoria automática',
+  reviewed: 'Auditoria automática concluída',
+  processing_attestation: 'Emitindo attestation',
+  attested: 'Attestation emitida',
+  processing_appeal: 'Recurso automático',
+  contested: 'Recurso automático apresentado',
+  inconclusive: 'Decisão inconclusiva',
+  inadmissible: 'Caso inadmissível',
+  invalidated: 'Decisão invalidada',
+  system_failure: 'Falha do sistema'
 }
 
 export default function App() {
@@ -431,8 +443,10 @@ export default function App() {
             <p>
               O Valinor é uma alternativa ao litígio para conflitos documentais entre empresa e cliente.
               As duas partes apresentam suas provas, a IA busca um acordo e, se não houver,
-              profere uma decisão fundamentada — auditada por uma segunda IA e verificável
-              pelas duas partes, do primeiro documento ao resultado.
+              profere uma decisão fundamentada — verificada de forma determinística,
+              auditada por um segundo modelo e, se contestada, reexaminada por recurso
+              automático. O sistema pode se abster. O resultado não é sentença judicial
+              nem arbitral.
             </p>
           </div>
           <div className="trust-note">
@@ -641,7 +655,7 @@ function HowItWorks() {
     },
     {
       title: 'Sem acordo, decisão fundamentada',
-      text: 'A IA decide citando as provas; uma segunda IA audita a decisão. Tudo verificável por hash.'
+      text: 'A IA decide citando provas verificáveis; um segundo modelo audita. O sistema pode se abster. Hashes comprovam integridade, não a verdade material.'
     }
   ]
   return (
@@ -975,7 +989,7 @@ function CaseWorkspace({
           <div className="case-meta">
             <span>Caso {caseData.id.slice(0, 8).toUpperCase()}</span>
             <span className={`case-status ${unavailable ? 'unavailable' : caseData.status}`}>
-              {unavailable ? 'Análise automática indisponível' : statusLabels[caseData.status]}
+              {unavailable ? 'Análise automática indisponível' : procedureLabel(caseData)}
             </span>
           </div>
           <h2>{caseData.title}</h2>
@@ -991,7 +1005,10 @@ function CaseWorkspace({
 
       <ProcessSteps currentStage={displayedStage} blockedByAI={unavailable} />
 
-      {caseData.status !== 'reviewed' && (
+      {caseData.status !== 'reviewed'
+        && caseData.status !== 'attested'
+        && caseData.status !== 'contested'
+        && !String(caseData.status || '').startsWith('processing') && (
         <NextAction
           caseData={caseData}
           busy={busy}
@@ -1047,7 +1064,7 @@ function CaseWorkspace({
         user={user}
       />
 
-      {caseData.status === 'reviewed' && (
+      {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
 
@@ -1625,7 +1642,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão fundamentada por IA; auditoria independente e possível revisão humana.</span>
+        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão autônoma por IA; auditoria automática; recurso automático; o sistema pode se abster e o resultado não é sentença judicial ou arbitral.</span>
         <button className="link-button" onClick={() => setShowTerms(!showTerms)}>
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>
@@ -1948,23 +1965,39 @@ function EvidenceState({ done, label }) {
 function Conclusion({ caseData }) {
   const decision = caseData.decision || {}
   const review = caseData.review || {}
-  const inconclusive = decision.outcome === 'inconclusive'
+  const verification = caseData.verification || {}
+  const stability = caseData.stability
+  const inconclusive = decision.outcome === 'inconclusive' || ['inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.procedure_conclusion)
   const unavailable = decision.execution?.mode === 'safe_fallback'
   const decisionText = decisionDisplayText(decision)
+  const approvedFinal = Boolean(
+    verification.valid
+    && review.approved
+    && (!stability || stability.stable !== false)
+    && caseData.attestation
+    && caseData.attestation.signature
+    && !inconclusive
+  )
 
   return (
-    <section className={`conclusion ${inconclusive ? 'attention' : 'approved'}`}>
+    <section className={`conclusion ${inconclusive || !approvedFinal ? 'attention' : 'approved'}`}>
       <div className="conclusion-icon">
-        {inconclusive ? <AlertTriangle size={28} /> : <CheckCircle2 size={28} />}
+        {inconclusive || !approvedFinal ? <AlertTriangle size={28} /> : <CheckCircle2 size={28} />}
       </div>
       <div className="conclusion-copy">
-        <span className="section-label">Decisão do agente julgador</span>
+        <span className="section-label">Decisão do procedimento autônomo</span>
         <h2>
           {unavailable
             ? 'A análise automática não foi concluída'
-            : inconclusive
-              ? 'A IA não pôde decidir o mérito'
-              : 'A decisão foi proferida'}
+            : caseData.procedure_conclusion === 'inadmissible'
+              ? 'O caso é inadmissível neste procedimento'
+              : caseData.procedure_conclusion === 'invalidated'
+                ? 'A decisão foi invalidada'
+                : inconclusive
+                  ? 'A IA se absteve de decidir o mérito'
+                  : approvedFinal
+                    ? 'Decisão aprovada'
+                    : 'A decisão ainda não está aprovada'}
         </h2>
         <p>{decisionText}</p>
       </div>
@@ -1972,28 +2005,64 @@ function Conclusion({ caseData }) {
         <Fact
           label="Confiança"
           value={`${Math.round((decision.confidence || 0) * 100)}%`}
-          note={unavailable ? 'O modelo não chegou a analisar o caso' : inconclusive ? 'Evidência insuficiente para concluir' : 'Nível informado pelo modelo'}
+          note={unavailable ? 'O modelo não chegou a analisar o caso' : inconclusive ? 'Evidência insuficiente ou abstenção' : 'Nível informado pelo modelo'}
+        />
+        <Fact
+          label="Verificação"
+          value={verification.valid ? 'Válida' : verification.valid === false ? 'Reprovada' : 'Pendente'}
+          note="Verificador determinístico do manifesto"
         />
         <Fact
           label="Auditoria"
-          value={unavailable ? 'Não executada' : review.approved ? 'Aprovada' : 'Com ressalvas'}
-          note={unavailable ? 'Não havia decisão para auditar' : review.requires_human_review ? 'Intervenção excepcional indicada' : 'Sem bloqueios materiais'}
+          value={unavailable ? 'Não executada' : review.approved ? 'Aprovada' : (review.outcome || 'Com ressalvas')}
+          note={unavailable ? 'Não havia decisão para auditar' : 'Auditoria automática independente'}
         />
         <Fact
           label="Resultado"
           value={outcomeLabel(decision.outcome)}
-          note="Decisão computacional do procedimento"
+          note={`Framework ${decision.framework_id || decision.framework || ''} ${(decision.execution || {}).model || ''}`}
         />
       </div>
+      {decision.material_findings?.length > 0 && (
+        <div className="findings-block">
+          <strong>Findings</strong>
+          {decision.material_findings.map((finding) => (
+            <article key={finding.finding_id} className="finding-item">
+              <span>{finding.status}</span>
+              <p>{finding.proposition}</p>
+              {(finding.evidence || []).map((ref, index) => (
+                <small key={`${finding.finding_id}-${index}`}>
+                  {ref.document_id} · {ref.page_number ? `p. ${ref.page_number} · ` : ''}
+                  “{truncateText(ref.quoted_text, 140)}” · {(ref.quoted_text_sha256 || '').slice(0, 12)}…
+                </small>
+              ))}
+            </article>
+          ))}
+        </div>
+      )}
+      {decision.rule_applications?.length > 0 && (
+        <ListBlock title="Regras aplicadas" items={decision.rule_applications.map((item) => `${item.rule_id}: ${item.conclusion}`)} />
+      )}
+      {decision.remedy_calculation && (
+        <p>
+          Cálculo {decision.remedy_calculation.formula}: {decision.remedy_calculation.result_minor_units} {decision.remedy_calculation.currency}
+        </p>
+      )}
       {inconclusive && (
         <div className="human-review-note">
           <Info size={18} />
           <span>
-            <strong>{unavailable ? 'Pendência técnica:' : 'Exceção do processo:'}</strong>
+            <strong>{unavailable ? 'Pendência técnica:' : 'Abstenção autônoma:'}</strong>
             {' '}{unavailable
-              ? 'disponibilize cota para a API e processe um novo caso para obter uma decisão real da IA.'
-              : 'resolva as lacunas apontadas ou encaminhe o caso para intervenção humana antes de uma nova decisão.'}
+              ? 'configure um provedor de modelo e processe um novo caso. Não há encaminhamento para julgador humano interno.'
+              : 'o procedimento encerrou-se sem declarar vencedor. Direitos externos permanecem conforme a legislação e o contrato aplicáveis.'}
           </span>
+        </div>
+      )}
+      {caseData.model_independence_satisfied === false && (
+        <div className="human-review-note">
+          <AlertTriangle size={18} />
+          <span>Julgador e revisor não estão com políticas independentes nesta instância. O modo de demonstração não emite attestation de mérito.</span>
         </div>
       )}
     </section>
@@ -2032,6 +2101,9 @@ function AnalysisDetails({ caseData }) {
             <p>{decisionDisplayText(decision)}</p>
             <ListBlock title="Fundamentos" items={decisionDisplayReasoning(decision)} />
             <ListBlock title="Limitações" items={decisionDisplayLimitations(decision)} tone="warning" />
+            {decision.execution?.model && (
+              <p>Modelo efetivo: {decision.execution.provider || ''} {decision.execution.model}</p>
+            )}
           </SummaryCard>
         )}
 
@@ -2169,6 +2241,39 @@ function LoadingState() {
   )
 }
 
+function procedureLabel(caseData) {
+  const conclusion = caseData.procedure_conclusion
+  const verification = caseData.verification || {}
+  const review = caseData.review || {}
+  const stability = caseData.stability
+  const attestation = caseData.attestation
+  if (caseData.status?.startsWith('processing')) {
+    return statusLabels[caseData.status] || 'Em processamento'
+  }
+  if (conclusion === 'inadmissible') return 'Caso inadmissível'
+  if (conclusion === 'invalidated') return 'Decisão invalidada'
+  if (conclusion === 'system_failure') return 'Falha do sistema'
+  if (conclusion === 'inconclusive') return 'Decisão inconclusiva'
+  if (caseData.appeals?.length) {
+    const latest = caseData.appeals[caseData.appeals.length - 1]
+    const map = {
+      upheld: 'Decisão mantida',
+      corrected: 'Decisão corrigida',
+      annulled: 'Decisão anulada',
+      inconclusive: 'Recurso inconclusivo',
+      inadmissible: 'Recurso inadmissível'
+    }
+    if (latest?.status && map[latest.status]) return map[latest.status]
+    return 'Recurso automático'
+  }
+  if (attestation && attestation.signature && verification.valid && review.approved && (!stability || stability.stable !== false)) {
+    return 'Decisão aprovada'
+  }
+  if (review && !review.approved) return 'Auditoria automática'
+  if (verification && verification.valid === false) return 'Verificação determinística'
+  return statusLabels[caseData.status] || caseData.status
+}
+
 function outcomeLabel(outcome) {
   return {
     claimant: 'Favorável ao requerente',
@@ -2217,6 +2322,9 @@ function decisionDisplayReasoning(decision = {}) {
   if (decision.execution?.mode === 'safe_fallback') {
     return ['Não houve análise do mérito; o resultado exibido é apenas um bloqueio seguro do sistema.']
   }
+  if (decision.material_findings?.length) {
+    return decision.material_findings.map((item) => `${item.status}: ${item.proposition}`)
+  }
   return decision.reasoning
 }
 
@@ -2255,5 +2363,7 @@ function auditDisplayIssues(review = {}) {
   if (review.execution?.mode === 'safe_fallback') {
     return ['A auditoria independente por IA não foi executada.']
   }
-  return review.issues
+  return (review.issues || []).map((item) => (
+    typeof item === 'string' ? item : (item?.message || item?.code || '')
+  )).filter(Boolean)
 }

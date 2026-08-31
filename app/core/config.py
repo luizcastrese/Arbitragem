@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import List
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -17,9 +17,16 @@ def _split_csv(value: str) -> List[str]:
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
-    if raw is None or not raw.strip():
+    if raw is None or raw.strip() == "":
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_or(name: str, fallback: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return fallback
+    return raw.strip()
 
 
 @dataclass(frozen=True)
@@ -55,6 +62,32 @@ class Settings:
     download_url_ttl_seconds: int
     nostr_private_key_hex: str
     nostr_relays: List[str]
+    llm_default_provider: str
+    openrouter_api_key: str
+    openrouter_base_url: str
+    llm_request_timeout_seconds: float
+    llm_max_retries: int
+    llm_allowed_providers: List[str]
+    llm_allowed_models: List[str]
+    conciliator_provider: str
+    conciliator_model: str
+    organizer_provider: str
+    organizer_model: str
+    judge_provider: str
+    judge_model: str
+    reviewer_provider: str
+    reviewer_model: str
+    appeal_provider: str
+    appeal_model: str
+    embedding_provider: str
+    decision_stability_enabled: bool
+    decision_stability_runs: int
+    decision_stability_threshold: float
+    framework_id: str
+    max_appeals_per_attestation: int
+    case_value_limit_minor_units: int
+    llm_fallback_provider: str
+    llm_fallback_model: str
 
     @property
     def openai_enabled(self) -> bool:
@@ -62,6 +95,14 @@ class Settings:
             self.openai_api_key
             and self.openai_api_key != "your_key_here"
         )
+
+    @property
+    def openrouter_enabled(self) -> bool:
+        return bool(self.openrouter_api_key)
+
+    @property
+    def llm_enabled(self) -> bool:
+        return self.openai_enabled or self.openrouter_enabled
 
     @property
     def allow_role_tokens(self) -> bool:
@@ -88,6 +129,88 @@ class Settings:
     @property
     def nostr_anchor_enabled(self) -> bool:
         return bool(self.nostr_private_key_hex and self.nostr_relays)
+
+    @property
+    def model_independence_satisfied(self) -> bool:
+        return (self.judge_provider, self.judge_model) != (
+            self.reviewer_provider,
+            self.reviewer_model,
+        )
+
+    @property
+    def demo_non_decisional(self) -> bool:
+        """Sem independência julgador/revisor a instância não emite attestation
+        de mérito. Em produção com LLM ligado isso nem chega a subir."""
+        return not self.model_independence_satisfied
+
+    @property
+    def llm_explicit_fallback(self) -> Optional[Dict[str, str]]:
+        if not self.llm_fallback_provider or not self.llm_fallback_model:
+            return None
+        return {
+            "provider": self.llm_fallback_provider,
+            "model": self.llm_fallback_model,
+            "reason": "configured_fallback",
+        }
+
+    def agent_model_policy(self) -> Dict[str, object]:
+        return {
+            "default_provider": self.llm_default_provider,
+            "conciliator": {
+                "provider": self.conciliator_provider,
+                "model": self.conciliator_model,
+            },
+            "organizer": {
+                "provider": self.organizer_provider,
+                "model": self.organizer_model,
+            },
+            "judge": {
+                "provider": self.judge_provider,
+                "model": self.judge_model,
+            },
+            "reviewer": {
+                "provider": self.reviewer_provider,
+                "model": self.reviewer_model,
+            },
+            "appeal": {
+                "provider": self.appeal_provider,
+                "model": self.appeal_model,
+            },
+            "embedding": {
+                "provider": self.embedding_provider,
+                "model": self.embedding_model,
+            },
+            "fallback": self.llm_explicit_fallback,
+            "openai_enabled_at_lock": self.llm_enabled,
+            "model_independence_satisfied": self.model_independence_satisfied,
+            "demo_non_decisional": self.demo_non_decisional,
+            "user_configurable_private_instructions": False,
+            "stability": {
+                "enabled": self.decision_stability_enabled,
+                "runs": self.decision_stability_runs,
+                "threshold": self.decision_stability_threshold,
+            },
+            "appeal_policy": {
+                "max_appeals_per_attestation": self.max_appeals_per_attestation,
+                "automatic": True,
+            },
+        }
+
+
+def validate_runtime_policy(settings: Settings) -> None:
+    """Em produção, julgador e revisor iguais com LLM ligado derrubam o boot."""
+    if (
+        settings.is_production
+        and settings.llm_enabled
+        and not settings.model_independence_satisfied
+    ):
+        raise RuntimeError(
+            "Em produção o julgador e o revisor devem usar modelos distintos "
+            "(preferencialmente provedores ou famílias diferentes). "
+            "Configure JUDGE_MODEL e REVIEWER_MODEL (e/ou os providers) com "
+            "valores diferentes, ou a instância entra em modo de demonstração "
+            "não decisório apenas fora de produção."
+        )
 
 
 @lru_cache
@@ -118,28 +241,26 @@ def get_settings() -> Settings:
                 "`python -m app.core.encryption` antes de subir o serviço."
             )
 
-    # Autenticação é segura por padrão e forçada mesmo se uma variável legada
-    # tentar desabilitá-la em produção.
     auth_required = True if is_production else _env_flag("AUTH_REQUIRED", True)
-
-    # Rate limiting fica ligado por padrão em produção.
     rate_limit_enabled = _env_flag("RATE_LIMIT_ENABLED", is_production)
-
-    # Em produção, nenhuma conta pratica atos no caso antes de comprovar o
-    # controle do endereço de e-mail: todo o contraditório depende de saber
-    # quem é a parte. Em desenvolvimento a exigência é opcional para não
-    # travar o fluxo local sem SMTP configurado.
     email_verification_required = (
         True if is_production else _env_flag("EMAIL_VERIFICATION_REQUIRED", False)
     )
 
-    return Settings(
+    default_model = _env_or("OPENAI_MODEL", "gpt-5-mini")
+    default_provider = _env_or("LLM_DEFAULT_PROVIDER", "openai")
+    allowed_providers = _split_csv(
+        os.getenv("LLM_ALLOWED_PROVIDERS", "openai,openrouter,fake")
+    )
+    allowed_models = _split_csv(os.getenv("LLM_ALLOWED_MODELS", ""))
+
+    settings = Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite:///./data/arbitragem.db"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-        embedding_model=os.getenv(
-            "OPENAI_EMBEDDING_MODEL",
-            "text-embedding-3-small",
+        openai_model=default_model,
+        embedding_model=_env_or(
+            "EMBEDDING_MODEL",
+            _env_or("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
         ),
         platform_signing_secret=signing_secret,
         platform_ed25519_private_key=os.getenv(
@@ -183,4 +304,40 @@ def get_settings() -> Settings:
         download_url_ttl_seconds=int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "300")),
         nostr_private_key_hex=os.getenv("NOSTR_PRIVATE_KEY_HEX", "").strip(),
         nostr_relays=_split_csv(os.getenv("NOSTR_RELAYS", "")),
+        llm_default_provider=default_provider,
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
+        openrouter_base_url=_env_or(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        ),
+        llm_request_timeout_seconds=float(
+            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "60")
+        ),
+        llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+        llm_allowed_providers=allowed_providers,
+        llm_allowed_models=allowed_models,
+        conciliator_provider=_env_or("CONCILIATOR_PROVIDER", default_provider),
+        conciliator_model=_env_or("CONCILIATOR_MODEL", default_model),
+        organizer_provider=_env_or("ORGANIZER_PROVIDER", default_provider),
+        organizer_model=_env_or("ORGANIZER_MODEL", default_model),
+        judge_provider=_env_or("JUDGE_PROVIDER", default_provider),
+        judge_model=_env_or("JUDGE_MODEL", default_model),
+        reviewer_provider=_env_or("REVIEWER_PROVIDER", default_provider),
+        reviewer_model=_env_or("REVIEWER_MODEL", default_model),
+        appeal_provider=_env_or("APPEAL_PROVIDER", default_provider),
+        appeal_model=_env_or("APPEAL_MODEL", default_model),
+        embedding_provider=_env_or("EMBEDDING_PROVIDER", default_provider),
+        decision_stability_enabled=_env_flag("DECISION_STABILITY_ENABLED", False),
+        decision_stability_runs=max(2, int(os.getenv("DECISION_STABILITY_RUNS", "2"))),
+        decision_stability_threshold=float(
+            os.getenv("DECISION_STABILITY_THRESHOLD", "1.0")
+        ),
+        framework_id=_env_or("FRAMEWORK_ID", "digital_services_b2b_v1"),
+        max_appeals_per_attestation=int(os.getenv("MAX_APPEALS_PER_ATTESTATION", "1")),
+        case_value_limit_minor_units=int(
+            os.getenv("CASE_VALUE_LIMIT_MINOR_UNITS", "500000000")
+        ),
+        llm_fallback_provider=os.getenv("LLM_FALLBACK_PROVIDER", "").strip(),
+        llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", "").strip(),
     )
+    validate_runtime_policy(settings)
+    return settings

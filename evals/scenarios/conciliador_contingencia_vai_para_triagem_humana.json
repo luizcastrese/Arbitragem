@@ -1,7 +1,7 @@
 {
   "id": "conciliador_contingencia_vai_para_triagem_humana",
   "agent": "conciliator",
-  "description": "Sem análise por IA, a composição não pode sugerir termos: o caminho recomendado é triagem humana, sem propostas inventadas.",
+  "description": "Sem análise por IA, a composição não pode sugerir termos: o caminho recomendado é seguir para julgamento, sem propostas inventadas nem encaminhamento a julgador humano interno.",
   "offline_only": true,
   "simulate_failure": "LLMUnavailable",
   "input": {
@@ -38,7 +38,7 @@
   },
   "expectations": {
     "execution_mode": "safe_fallback",
-    "recommended_path": "human_screening",
+    "recommended_path": "adjudication",
     "figures_supported": true,
     "provenance_recorded": true
   }

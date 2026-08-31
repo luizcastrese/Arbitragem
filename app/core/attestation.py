@@ -138,7 +138,13 @@ def _outcome_split(decision: Dict[str, Any]) -> Dict[str, int]:
     )
 
 
-def assert_executable(decision: Dict[str, Any], review: Dict[str, Any]) -> None:
+def assert_executable(
+    decision: Dict[str, Any],
+    review: Dict[str, Any],
+    verification: Optional[Dict[str, Any]] = None,
+    stability: Optional[Dict[str, Any]] = None,
+    procedure_conclusion: Optional[str] = None,
+) -> None:
     """Pré-condições de mérito para uma attestation executável."""
     if not decision:
         raise AttestationError("O caso ainda não tem decisão")
@@ -154,13 +160,30 @@ def assert_executable(decision: Dict[str, Any], review: Dict[str, Any]) -> None:
         )
     if decision.get("outcome") == "inconclusive":
         raise AttestationError("Decisão inconclusiva não gera attestation executável")
-    if not review.get("approved"):
+    approved = review.get("approved")
+    if approved is None:
+        approved = review.get("outcome") == "approved"
+    if not approved:
         raise AttestationError(
             "A auditoria independente não aprovou a decisão; execução bloqueada"
         )
+    # Compatibilidade de leitura: registros antigos com este campo continuam
+    # bloqueados. Novas decisões não o produzem.
     if decision.get("requires_human_review") or review.get("requires_human_review"):
         raise AttestationError(
             "O caso requer revisão humana antes de qualquer execução automática"
+        )
+    if procedure_conclusion and procedure_conclusion != "decided":
+        raise AttestationError(
+            f"Conclusão '{procedure_conclusion}' não gera attestation executável"
+        )
+    if verification is not None and not verification.get("valid"):
+        raise AttestationError(
+            "A verificação determinística não validou a decisão; attestation bloqueada"
+        )
+    if stability is not None and stability.get("stable") is False:
+        raise AttestationError(
+            "A decisão não passou no teste de estabilidade; attestation bloqueada"
         )
 
 
@@ -181,7 +204,18 @@ def build_decision_attestation(
 
     if not manifest:
         raise AttestationError("O manifesto ainda não foi travado")
-    assert_executable(decision, review)
+    verification = case_data.get("verification")
+    stability = case_data.get("stability")
+    procedure_conclusion = case_data.get("procedure_conclusion") or decision.get(
+        "procedure_conclusion"
+    )
+    assert_executable(
+        decision,
+        review,
+        verification=verification,
+        stability=stability,
+        procedure_conclusion=procedure_conclusion,
+    )
     split = _outcome_split(decision)
 
     key = private_key or load_private_key()
@@ -189,9 +223,14 @@ def build_decision_attestation(
 
     issued_at = datetime.now(timezone.utc)
     contest_window_ends = issued_at + timedelta(days=settings.contest_window_days)
+    provenance = decision.get("provenance") or {}
+    previous = case_data.get("previous_attestation") or {}
 
     payload = {
         "attestation_version": ATTESTATION_VERSION,
+        "attestation_schema_version": "2.0",
+        "hash_algorithm": "sha256",
+        "canonicalization_version": "1.0",
         "attestation_type": "decision_execution",
         "case_id": case_data.get("id"),
         "escrow_id": case_data.get("escrow_id"),
@@ -202,13 +241,33 @@ def build_decision_attestation(
             "outcome": decision.get("outcome"),
             "split": split,
             "decision_hash": canonical_hash(decision),
+            "decision_payload_hash": provenance.get("decision_payload_hash"),
+            "decision_input_hash": provenance.get("decision_input_hash"),
             "confidence": decision.get("confidence"),
+            "execution_id": (decision.get("execution") or {}).get("execution_id"),
         },
         "review": {
-            "approved": review.get("approved"),
-            "requires_human_review": review.get("requires_human_review"),
+            "approved": bool(review.get("approved") or review.get("outcome") == "approved"),
+            "outcome": review.get("outcome") or (
+                "approved" if review.get("approved") else "rejected"
+            ),
             "review_hash": canonical_hash(review),
         },
+        "verification": {
+            "valid": None if verification is None else bool(verification.get("valid")),
+            "verification_result_hash": provenance.get("verification_result_hash")
+            or (verification or {}).get("result_hash"),
+        },
+        "stability": {
+            "required": bool((manifest.get("model_policy") or {}).get("stability", {}).get("enabled")),
+            "stable": None if stability is None else bool(stability.get("stable")),
+        },
+        "appeal": {
+            "id": (case_data.get("current_appeal") or {}).get("id"),
+            "outcome": (case_data.get("current_appeal") or {}).get("outcome"),
+            "result_hash": (case_data.get("current_appeal") or {}).get("result_hash"),
+        },
+        "supersedes_attestation_hash": previous.get("attestation_hash"),
         "issued_at_utc": issued_at.isoformat(),
         "contest_window_ends_utc": contest_window_ends.isoformat(),
         "platform": {

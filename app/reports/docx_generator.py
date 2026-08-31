@@ -358,7 +358,7 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
             document,
             "Resultado computacional",
             str(decision.get("decision") or decision.get("outcome") or "Sem resultado registrado."),
-            warning=bool(decision.get("requires_human_review")),
+            warning=bool(decision.get("abstention_reasons") or decision.get("outcome") == "inconclusive"),
         )
         if decision.get("reasoning"):
             document.add_paragraph(_join_items(decision["reasoning"]))
@@ -370,7 +370,7 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
             document,
             (
                 ("Aprovada", "Sim" if review.get("approved") else "Não"),
-                ("Revisão humana", "Necessária" if review.get("requires_human_review") else "Não indicada"),
+                ("Resultado da auditoria", str(review.get("outcome") or ("aprovada" if review.get("approved") else "não aprovada"))),
                 ("Conclusão", str(review.get("summary") or review.get("review") or "")),
             ),
         )

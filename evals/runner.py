@@ -71,7 +71,7 @@ def _recorded_model(scenario: Dict) -> Iterator[None]:
     failure = scenario.get("simulate_failure")
     recorded = scenario.get("recorded_output")
 
-    def fake_call(system_prompt: str, user_payload, response_model, model=None):
+    def fake_call(system_prompt: str, user_payload, response_model, model=None, agent="generic"):
         if failure:
             raise llm.LLMCallError(failure)
         if recorded is None:

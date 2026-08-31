@@ -955,6 +955,26 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #71
 }
 .human-review-note svg { flex: 0 0 auto; }
 
+.findings-block {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+}
+.finding-item {
+  padding: 10px 12px;
+  background: rgba(255, 253, 247, .7);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.finding-item span {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.finding-item p { margin: 6px 0; font-size: 14px; }
+.finding-item small { display: block; color: var(--muted); }
+
 .analysis-section { padding: 8px 0 0; }
 .analysis-heading { margin-bottom: 14px; }
 .analysis-heading h2 { margin: 5px 0; font-size: 25px; }

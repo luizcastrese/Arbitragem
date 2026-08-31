@@ -1,7 +1,7 @@
 {
   "id": "judge_inconclusivo_sem_evidencia",
   "agent": "judge",
-  "description": "Sem evidência admitida sobre o ponto controvertido, o julgador precisa declarar inconclusivo e pedir revisão humana em vez de arbitrar um número.",
+  "description": "Sem evidência admitida sobre o ponto controvertido, o julgador precisa declarar inconclusivo e abster-se em vez de arbitrar um número. Não há encaminhamento a julgador humano interno.",
   "input": {
     "manifest": {
       "case_id": "case-eval-001",
@@ -53,11 +53,12 @@
     "limitations": [
       "Registro documental insuficiente."
     ],
-    "requires_human_review": true
+    "abstention_reasons": [
+      "insufficient_evidence"
+    ]
   },
   "expectations": {
     "outcome": "inconclusive",
-    "requires_human_review": true,
     "citations_grounded": true,
     "figures_supported": true,
     "partial_requires_bps": true,
