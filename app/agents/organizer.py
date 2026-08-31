@@ -82,7 +82,7 @@ def _fallback_organization(
         "timeline": [],
         "missing_information": [
             "A organização por IA não foi executada.",
-            "É necessária revisão humana dos documentos.",
+            "O registro documental permanece disponível para as etapas seguintes.",
         ],
         "retrieved_context_used": retrieved_context,
         "execution": fallback_execution(PROMPT, reason),
@@ -118,6 +118,7 @@ def organize_case(documents: List[Dict], chunks: List[Dict]) -> Dict:
             system_prompt=PROMPT.text,
             user_payload=payload,
             response_model=OrganizerOutput,
+            agent="organizer",
         )
     except Exception as exc:
         return _fallback_organization(

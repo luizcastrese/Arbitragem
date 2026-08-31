@@ -1,7 +1,7 @@
 {
   "id": "judge_contingencia_quando_modelo_indisponivel",
   "agent": "judge",
-  "description": "Modelo indisponível não pode virar decisão de mérito: a etapa cai em contingência, fica inconclusiva e exige revisão humana.",
+  "description": "Modelo indisponível não pode virar decisão de mérito: a etapa cai em contingência, fica inconclusiva e encerra-se de forma autônoma.",
   "offline_only": true,
   "simulate_failure": "LLMUnavailable",
   "input": {
@@ -64,7 +64,6 @@
   "expectations": {
     "execution_mode": "safe_fallback",
     "outcome": "inconclusive",
-    "requires_human_review": true,
     "figures_supported": true,
     "citations_grounded": true,
     "provenance_recorded": true

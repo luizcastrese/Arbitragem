@@ -1,23 +1,28 @@
-import json
+"""Compatibilidade temporária com a API anterior de `app.core.llm`.
+
+Os agentes e as evals históricas importam `call_openai_structured`. A
+implementação agora delega à camada multi-provider. Não use esta API em
+código novo: prefira `app.llm.generate_structured`.
+"""
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Type
 
-from openai import OpenAI
 from pydantic import BaseModel
 
-from app.core.config import get_settings
+from app.llm.errors import LLMCallError, LLMQuotaExceeded, LLMUnavailable
+from app.llm.registry import (
+    execution_policy_for,
+    generate_embedding as _generate_embedding,
+    generate_structured,
+)
+from app.llm.schemas import ExecutionPolicy, StructuredGenerationResult
 
 
-class LLMUnavailable(RuntimeError):
-    pass
+def openai_configured() -> bool:
+    from app.core.config import get_settings
 
-
-class LLMCallError(RuntimeError):
-    pass
-
-
-class LLMQuotaExceeded(LLMCallError):
-    pass
+    return get_settings().openai_enabled or get_settings().openrouter_enabled
 
 
 @dataclass(frozen=True)
@@ -33,31 +38,38 @@ class LLMResult:
     model: str
     response_id: Optional[str] = None
     usage: Dict[str, int] = field(default_factory=dict)
+    provider: str = ""
+    fallback_used: bool = False
+    fallback_reason: Optional[str] = None
+    attempts: int = 1
+    latency_ms: Optional[float] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
 
 
-def openai_configured() -> bool:
-    return get_settings().openai_enabled
-
-
-def _client() -> OpenAI:
-    settings = get_settings()
-    if not settings.openai_enabled:
-        raise LLMUnavailable("OPENAI_API_KEY is not configured")
-    return OpenAI(api_key=settings.openai_api_key)
-
-
-def _usage_to_dict(usage: Any) -> Dict[str, int]:
-    if usage is None:
-        return {}
-    return {
-        key: value
-        for key, value in (
-            ("input_tokens", getattr(usage, "input_tokens", None)),
-            ("output_tokens", getattr(usage, "output_tokens", None)),
-            ("total_tokens", getattr(usage, "total_tokens", None)),
-        )
-        if isinstance(value, int)
-    }
+def _result_from_structured(result: StructuredGenerationResult) -> LLMResult:
+    parsed = result.parsed_output
+    data = parsed.model_dump() if hasattr(parsed, "model_dump") else dict(parsed)
+    usage = {}
+    if isinstance(result.prompt_tokens, int):
+        usage["input_tokens"] = result.prompt_tokens
+    if isinstance(result.completion_tokens, int):
+        usage["output_tokens"] = result.completion_tokens
+    if isinstance(result.total_tokens, int):
+        usage["total_tokens"] = result.total_tokens
+    return LLMResult(
+        data=data,
+        model=result.effective_model,
+        response_id=result.provider_response_id,
+        usage=usage,
+        provider=result.effective_provider,
+        fallback_used=result.fallback_used,
+        fallback_reason=result.fallback_reason,
+        attempts=result.attempts,
+        latency_ms=result.latency_ms,
+        started_at=result.started_at.isoformat() if result.started_at else None,
+        completed_at=result.completed_at.isoformat() if result.completed_at else None,
+    )
 
 
 def call_openai_structured(
@@ -65,52 +77,27 @@ def call_openai_structured(
     user_payload: Dict[str, Any],
     response_model: Type[BaseModel],
     model: Optional[str] = None,
+    agent: str = "generic",
 ) -> LLMResult:
-    settings = get_settings()
-    try:
-        response = _client().responses.parse(
-            model=model or settings.openai_model,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(user_payload, ensure_ascii=False),
-                },
-            ],
-            text_format=response_model,
+    policy = execution_policy_for(agent)
+    if model:
+        policy = ExecutionPolicy(
+            provider=policy.provider,
+            model=model,
+            timeout_seconds=policy.timeout_seconds,
+            max_retries=policy.max_retries,
+            fallback=policy.fallback,
+            agent=agent,
         )
-    except LLMUnavailable:
-        raise
-    except Exception as exc:
-        if getattr(exc, "code", None) == "insufficient_quota":
-            raise LLMQuotaExceeded("OpenAI project has no available quota") from exc
-        raise LLMCallError(f"OpenAI request failed: {type(exc).__name__}") from exc
-
-    if response.output_parsed is None:
-        raise LLMCallError("OpenAI returned no structured output")
-
-    parsed = response.output_parsed
-    data = parsed.model_dump() if hasattr(parsed, "model_dump") else parsed.dict()
-    return LLMResult(
-        data=data,
-        model=getattr(response, "model", None) or model or settings.openai_model,
-        response_id=getattr(response, "id", None),
-        usage=_usage_to_dict(getattr(response, "usage", None)),
+    result = generate_structured(
+        task=agent,
+        system_prompt=system_prompt,
+        user_payload=user_payload,
+        response_model=response_model,
+        execution_policy=policy,
     )
+    return _result_from_structured(result)
 
 
 def generate_embedding(text: str, model: Optional[str] = None) -> List[float]:
-    settings = get_settings()
-    try:
-        response = _client().embeddings.create(
-            model=model or settings.embedding_model,
-            input=text,
-            encoding_format="float",
-        )
-    except LLMUnavailable:
-        raise
-    except Exception as exc:
-        if getattr(exc, "code", None) == "insufficient_quota":
-            raise LLMQuotaExceeded("OpenAI project has no available quota") from exc
-        raise LLMCallError(f"Embedding request failed: {type(exc).__name__}") from exc
-    return response.data[0].embedding
+    return _generate_embedding(text, model=model)

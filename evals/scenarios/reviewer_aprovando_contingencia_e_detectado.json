@@ -65,14 +65,21 @@
     "corpus_text": "A Fornecedora entregará o sistema de gestão até 30 de junho de 2026. O valor total do contrato é R$ 80.000,00, pago em duas parcelas de R$ 40.000,00. A Contratante afirma que apenas 50% das funcionalidades foram entregues até 15 de julho de 2026 e que o módulo fiscal não foi iniciado. A Fornecedora sustenta que houve alteração de escopo pedida pela Contratante e reconhece atraso parcial."
   },
   "recorded_output": {
+    "outcome": "approved",
     "approved": true,
     "issues": [],
+    "challenged_findings": [],
+    "ignored_evidence": [],
+    "unsupported_findings": [],
+    "calculation_issues": [],
+    "framework_issues": [],
+    "recommended_conclusion": "decided",
+    "confidence": 0.8,
     "risks": [],
     "contradictions": [],
     "missing_evidence": [],
     "framework_alignment": "alinhado",
-    "confidence_assessment": 0.8,
-    "requires_human_review": false
+    "confidence_assessment": 0.8
   },
   "expectations": {
     "approved": true,

@@ -12,7 +12,9 @@ que uma decisão automática precisa ter para ser defensável:
 | `fallback_never_approved` | auditoria aprovar decisão produzida em contingência |
 
 Além delas, um cenário pode exigir valores diretos da saída: `outcome`,
-`approved`, `recommended_path`, `requires_human_review` e `execution_mode`.
+`approved`, `recommended_path` e `execution_mode`. `requires_human_review`
+permanece apenas como métrica de leitura de registros antigos; saídas novas
+não devem produzi-lo.
 
 ## Como rodar
 

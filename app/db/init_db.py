@@ -26,6 +26,13 @@ def _upgrade_sqlite_schema():
         "claimant_terms_sha256": "TEXT",
         "respondent_terms_version": "TEXT",
         "respondent_terms_sha256": "TEXT",
+        "procedure_conclusion": "TEXT",
+        "row_version": "INTEGER NOT NULL DEFAULT 1",
+        "processing_started_at": "TEXT",
+        "current_decision_run_id": "TEXT",
+        "current_review_run_id": "TEXT",
+        "verification_json": "TEXT",
+        "stability_json": "TEXT",
     }
     user_additions = {
         "email_verified_at": "TEXT",

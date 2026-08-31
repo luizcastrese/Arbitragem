@@ -73,6 +73,18 @@ def citations_grounded(output: Dict, record: Dict) -> CheckResult:
     """
     known = set(record.get("document_ids", [])) | set(record.get("chunk_ids", []))
     cited = [str(item) for item in output.get("evidence_cited", []) or []]
+    for finding in output.get("material_findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        for key in ("evidence", "counterevidence"):
+            for ref in finding.get(key) or []:
+                if isinstance(ref, dict):
+                    document_id = ref.get("document_id") or ""
+                    chunk_id = ref.get("chunk_id") or ""
+                    if document_id and chunk_id:
+                        cited.append(f"{document_id}/{chunk_id}")
+                    elif document_id:
+                        cited.append(str(document_id))
     unknown = [
         reference
         for reference in cited

@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RegisterRequest(BaseModel):
@@ -148,7 +148,45 @@ class ConciliationRoundRequest(BaseModel):
 class ContestRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    reason: str = Field(min_length=10, max_length=10_000)
+    reason: str = Field(default="", max_length=10_000)
+    explanation: str = Field(default="", max_length=10_000)
+    grounds: List[str] = Field(default_factory=list)
+    challenged_finding_ids: List[str] = Field(default_factory=list)
+    evidence_refs: List[dict] = Field(default_factory=list)
+    requested_correction: str = Field(default="", max_length=10_000)
+
+    @field_validator("grounds")
+    @classmethod
+    def grounds_must_be_supported(cls, value: List[str]) -> List[str]:
+        allowed = {
+            "ignored_evidence",
+            "invented_fact",
+            "wrong_document_attribution",
+            "incorrect_calculation",
+            "incorrect_rule_application",
+            "contradictory_reasoning",
+            "procedure_violation",
+            "integrity_failure",
+            "model_policy_violation",
+            "decision_beyond_claim",
+            "other_structured",
+        }
+        invalid = [item for item in value if item not in allowed]
+        if invalid:
+            raise ValueError("unsupported appeal ground")
+        return value
+
+    def resolved_explanation(self) -> str:
+        return (self.explanation or self.reason or "").strip()
+
+    def resolved_grounds(self) -> List[str]:
+        return list(self.grounds) or (["other_structured"] if self.resolved_explanation() else [])
+
+    @model_validator(mode="after")
+    def explanation_or_reason_required(self) -> "ContestRequest":
+        if len(self.resolved_explanation()) < 10:
+            raise ValueError("explanation must be at least 10 characters")
+        return self
 
 
 class AttestationVerifyRequest(BaseModel):

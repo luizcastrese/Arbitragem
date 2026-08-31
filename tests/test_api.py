@@ -190,7 +190,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     )
     assert conciliation.status_code == 200
     assert conciliation.json()["convergence"] == "undetermined"
-    assert conciliation.json()["recommended_path"] == "human_screening"
+    assert conciliation.json()["recommended_path"] == "adjudication"
     assert conciliation.json()["requires_party_consent"] is True
     assert conciliation.json()["round_number"] == 1
     assert conciliation.json()["continue_recommended"] is False
@@ -221,7 +221,8 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     )
     assert decision.status_code == 200
     assert decision.json()["outcome"] == "inconclusive"
-    assert decision.json()["requires_human_review"] is True
+    assert decision.json().get("requires_human_review") is None
+    assert "provider_unavailable" in decision.json().get("abstention_reasons", [])
     assert decision.json()["confidence"] == 0.0
     assert "decisão de mérito" in decision.json()["decision"]
 
@@ -231,7 +232,8 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     )
     assert review.status_code == 200
     assert review.json()["approved"] is False
-    assert review.json()["requires_human_review"] is True
+    assert review.json().get("requires_human_review") is None
+    assert review.json().get("outcome") in {"inconclusive", "rejected"}
 
     persisted = client.get(f"/cases/{case_id}").json()
     assert persisted["status"] == "reviewed"
