@@ -47,10 +47,7 @@ def _framework_from_manifest(manifest: Dict[str, Any]) -> Framework:
     framework_id = (manifest.get("framework") or {}).get("id") or manifest.get(
         "framework_id"
     )
-    try:
-        return resolve_framework(framework_id)
-    except LookupError:
-        return resolve_framework("commercial_balanced_v1")
+    return resolve_framework(framework_id)
 
 
 def _admitted(case_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -141,18 +138,19 @@ def generate_and_verify_decision(
     decision_input: Dict[str, Any],
     *,
     role: str = "judge",
+    agent: str = "judge",
     supersedes_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
     """Gera uma decisão, verifica e persiste o run. Não marca attestation."""
     manifest = case_data.get("locked_manifest") or {}
     framework = _framework_from_manifest(manifest)
-    decision = judge_decide_case(decision_input)
+    decision = judge_decide_case(decision_input, agent=agent)
     persist_llm_execution(
         db,
         case,
         decision.get("execution") or {},
-        agent="judge",
+        agent=agent,
         task=role,
         input_hash=canonical_hash(
             {k: v for k, v in decision_input.items() if k != "organized_case"}
@@ -292,7 +290,7 @@ def reviewer_payload(
     }
 
 
-def _alternate_judge_available() -> bool:
+def alternate_judge_available() -> bool:
     settings = get_settings()
     appeal = (settings.appeal_provider, settings.appeal_model)
     judge = (settings.judge_provider, settings.judge_model)
@@ -334,12 +332,22 @@ def reconstruct_once(
     decision_input: Dict[str, Any],
     original_run_id: Optional[str],
 ) -> Tuple[Dict[str, Any], Dict[str, Any], str, Dict[str, Any]]:
-    """Uma única reconstrução com política de julgador distinta, se existir."""
+    """Uma única reconstrução com política de julgador distinta.
+
+    Usa a política do recurso (`appeal`) quando ela difere da do julgador.
+    Sem política independente, não regenera com o mesmo modelo.
+    """
+    if not alternate_judge_available():
+        raise RuntimeError("reconstruction requires an independent judge policy")
     append_audit(
         db,
         case,
         "decision_reconstruction_started",
-        {"supersedes_id": original_run_id, "reason": "automatic_review_rejected"},
+        {
+            "supersedes_id": original_run_id,
+            "reason": "automatic_review_rejected",
+            "reconstruction_agent": "appeal",
+        },
     )
     decision, verification, conclusion = generate_and_verify_decision(
         db,
@@ -347,8 +355,19 @@ def reconstruct_once(
         case_data,
         decision_input,
         role="reconstruction",
+        agent="appeal",
         supersedes_id=original_run_id,
     )
+    stability = maybe_run_stability(db, case, case_data, decision_input, decision)
+    if stability and not stability.get("stable"):
+        decision["outcome"] = "inconclusive"
+        decision["procedure_conclusion"] = "inconclusive"
+        decision.setdefault("abstention_reasons", [])
+        if "unstable_decision" not in decision["abstention_reasons"]:
+            decision["abstention_reasons"].append("unstable_decision")
+        if "material_model_disagreement" not in decision["abstention_reasons"]:
+            decision["abstention_reasons"].append("material_model_disagreement")
+        conclusion = "inconclusive"
     review = run_automatic_review(db, case, case_data, decision, verification)
     append_audit(
         db,
@@ -357,6 +376,7 @@ def reconstruct_once(
         {
             "review_outcome": review.get("outcome"),
             "procedure_conclusion": conclusion,
+            "stable": None if not stability else stability.get("stable"),
         },
     )
     return decision, verification, conclusion, review
@@ -369,6 +389,11 @@ def finalize_review_outcome(
     reconstruction_used: bool,
 ) -> Tuple[str, Dict[str, Any]]:
     """Decide a conclusão autônoma após a auditoria (e eventual reconstrução)."""
+    reasons = list(decision.get("abstention_reasons") or [])
+    if "unstable_decision" in reasons or "material_model_disagreement" in reasons:
+        decision["outcome"] = "inconclusive"
+        decision["procedure_conclusion"] = "inconclusive"
+        return "inconclusive", decision
     outcome = review.get("outcome")
     if outcome == "approved" and verification.get("valid") and decision.get("outcome") in {
         "claimant",
@@ -468,19 +493,6 @@ def run_appeal(
     )
 
     outcome = appeal_result.get("outcome") or "inconclusive"
-    result_hash = canonical_hash(
-        {k: v for k, v in appeal_result.items() if k != "execution"}
-    )
-    complete_appeal(
-        db,
-        appeal,
-        appeal_result,
-        result_hash=result_hash,
-        provider=(appeal_result.get("execution") or {}).get("provider"),
-        model=(appeal_result.get("execution") or {}).get("model"),
-        status=outcome,
-    )
-
     if outcome == "corrected" and appeal_result.get("corrected_decision"):
         corrected = appeal_result["corrected_decision"]
         if isinstance(corrected, dict):
@@ -503,49 +515,84 @@ def run_appeal(
                     {"codes": [item.code for item in verification_obj.errors]},
                 )
             else:
-                original_run_id = case.current_decision_run_id
-                persist_decision_run(
-                    db,
-                    case,
-                    corrected,
-                    status="corrected",
-                    role="appeal",
-                    supersedes_id=original_run_id,
-                    provenance=corrected.get("provenance"),
+                review = run_automatic_review(
+                    db, case, case_data, corrected, verification_dump
                 )
-                persist_verification(
-                    db,
-                    case,
-                    verification_dump,
-                    result_hash=verification_result_hash(verification_dump),
-                )
-                case.decision_json = __import__("json").dumps(corrected, ensure_ascii=False)
-                case.procedure_conclusion = "decided"
-                previous_attestation = {}
-                if case.attestation_json:
-                    previous_attestation = __import__("json").loads(case.attestation_json)
-                persist_attestation_record(
-                    db,
-                    case,
-                    {
-                        "attestation_hash": canonical_hash(
-                            {
-                                "supersedes_attestation_hash": previous_attestation.get(
-                                    "attestation_hash"
-                                ),
-                                "appeal_id": appeal.id,
-                                "outcome": "corrected",
-                                "decision": corrected,
-                            }
-                        ),
-                        "supersedes_attestation_hash": previous_attestation.get(
-                            "attestation_hash"
-                        ),
-                        "appeal_id": appeal.id,
-                        "outcome": "corrected",
-                    },
-                    appeal_id=appeal.id,
-                )
+                if review.get("outcome") != "approved":
+                    appeal_result["outcome"] = "inconclusive"
+                    outcome = "inconclusive"
+                    append_audit(
+                        db,
+                        case,
+                        "appeal_correction_review_rejected",
+                        {"review_outcome": review.get("outcome")},
+                    )
+                else:
+                    original_run_id = case.current_decision_run_id
+                    persist_decision_run(
+                        db,
+                        case,
+                        corrected,
+                        status="corrected",
+                        role="appeal",
+                        supersedes_id=original_run_id,
+                        provenance=corrected.get("provenance"),
+                    )
+                    persist_verification(
+                        db,
+                        case,
+                        verification_dump,
+                        result_hash=verification_result_hash(verification_dump),
+                    )
+                    # A decisão corrente aponta para a correção; a original
+                    # permanece no DecisionRun v1 e em original_decision.
+                    case.decision_json = __import__("json").dumps(
+                        corrected, ensure_ascii=False
+                    )
+                    case.review_json = __import__("json").dumps(
+                        review, ensure_ascii=False
+                    )
+                    case.procedure_conclusion = "decided"
+                    previous_attestation = {}
+                    if case.attestation_json:
+                        previous_attestation = __import__("json").loads(
+                            case.attestation_json
+                        )
+                    persist_attestation_record(
+                        db,
+                        case,
+                        {
+                            "attestation_hash": canonical_hash(
+                                {
+                                    "supersedes_attestation_hash": previous_attestation.get(
+                                        "attestation_hash"
+                                    ),
+                                    "appeal_id": appeal.id,
+                                    "outcome": "corrected",
+                                    "decision": corrected,
+                                }
+                            ),
+                            "supersedes_attestation_hash": previous_attestation.get(
+                                "attestation_hash"
+                            ),
+                            "appeal_id": appeal.id,
+                            "outcome": "corrected",
+                        },
+                        appeal_id=appeal.id,
+                    )
+
+    result_hash = canonical_hash(
+        {k: v for k, v in appeal_result.items() if k != "execution"}
+    )
+    complete_appeal(
+        db,
+        appeal,
+        appeal_result,
+        result_hash=result_hash,
+        provider=(appeal_result.get("execution") or {}).get("provider"),
+        model=(appeal_result.get("execution") or {}).get("model"),
+        status=outcome,
+    )
 
     append_audit(
         db,

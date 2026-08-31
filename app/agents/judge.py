@@ -71,7 +71,7 @@ def _safe_fallback(reason: str, framework_id: str = "digital_services_b2b_v1") -
     return decision
 
 
-def decide_case(decision_context: Dict) -> Dict:
+def decide_case(decision_context: Dict, agent: str = "judge") -> Dict:
     manifest = decision_context.get("manifest") or {}
     framework = manifest.get("framework") or {}
     framework_id = framework.get("id") or "digital_services_b2b_v1"
@@ -80,7 +80,7 @@ def decide_case(decision_context: Dict) -> Dict:
             system_prompt=PROMPT.text,
             user_payload=decision_context,
             response_model=DecisionOutput,
-            agent="judge",
+            agent=agent,
         )
     except Exception as exc:
         return _safe_fallback(type(exc).__name__, framework_id=framework_id)

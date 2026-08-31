@@ -167,6 +167,13 @@ def test_contest_without_attestation_is_still_409(client):
     assert response.status_code == 409
 
 
+def test_unknown_framework_fails_closed_at_lock():
+    from app.core.manifest import lock_case_manifest
+
+    with pytest.raises(ValueError, match="Framework desconhecido"):
+        lock_case_manifest({"framework_id": "not-a-real-framework"})
+
+
 def test_frontend_exposes_autonomous_states():
     from pathlib import Path
 

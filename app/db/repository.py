@@ -155,6 +155,11 @@ def case_to_dict(
         for document in documents
         if not document["contradictory_complete"]
     ]
+    decision_runs = [_run_to_dict(item) for item in case.decision_runs]
+    original_decision = None
+    if case.decision_runs:
+        first = min(case.decision_runs, key=lambda item: item.version or 0)
+        original_decision = _public_decision(_json_load(first.payload_json))
     return {
         "id": case.id,
         "title": case.title,
@@ -189,13 +194,14 @@ def case_to_dict(
         "conciliation_rounds": conciliation_rounds,
         "organized": _json_load(case.organized_json),
         "decision": _public_decision(_json_load(case.decision_json)),
+        "original_decision": original_decision,
         "review": _public_review(_json_load(case.review_json)),
         "attestation": _json_load(case.attestation_json),
         "nostr_anchor": _json_load(case.nostr_anchor_json),
         "verification": _json_load(case.verification_json),
         "stability": _json_load(case.stability_json),
         "procedure_conclusion": case.procedure_conclusion,
-        "decision_runs": [_run_to_dict(item) for item in case.decision_runs],
+        "decision_runs": decision_runs,
         "review_runs": [_run_to_dict(item) for item in case.review_runs],
         "appeals": [_appeal_to_dict(item) for item in case.appeals],
         "attestation_records": [
@@ -261,16 +267,24 @@ def _public_review(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def _run_to_dict(item) -> Dict[str, Any]:
-    payload = _json_load(getattr(item, "payload_json", None), {})
+    payload = _json_load(getattr(item, "payload_json", None), {}) or {}
+    if "material_findings" in payload or "framework_id" in payload:
+        public_payload = _public_decision(payload)
+    elif payload:
+        public_payload = _public_review(payload)
+    else:
+        public_payload = None
     return {
         "id": item.id,
         "version": item.version,
         "supersedes_id": item.supersedes_id,
         "status": item.status,
+        "role": getattr(item, "role", None),
         "execution_id": getattr(item, "execution_id", None),
         "input_hash": item.input_hash,
         "output_hash": item.output_hash,
         "outcome": getattr(item, "outcome", None) or (payload or {}).get("outcome"),
+        "payload": public_payload,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "completed_at": item.completed_at.isoformat() if item.completed_at else None,
     }

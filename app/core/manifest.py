@@ -227,8 +227,8 @@ def lock_case_manifest(case: Dict) -> Dict:
     )
     try:
         framework_obj = resolve_framework(framework_id)
-    except LookupError:
-        framework_obj = resolve_framework("commercial_balanced_v1")
+    except LookupError as exc:
+        raise ValueError(f"Framework desconhecido: {framework_id}") from exc
     framework = framework_obj.lock_summary()
 
     model_policy = {

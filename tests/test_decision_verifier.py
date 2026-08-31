@@ -199,6 +199,22 @@ def test_document_not_admitted():
     assert any(item.code == "document_not_admitted" for item in result.errors)
 
 
+def test_empty_admission_does_not_backfill_from_manifest():
+    manifest = _manifest()
+    manifest["contradictory"] = {"admitted_document_ids": [DOC_ID]}
+    result = _verify(_valid_decision(), manifest=manifest, admitted=[])
+    assert result.valid is False
+    assert any(item.code == "document_not_admitted" for item in result.errors)
+
+
+def test_runtime_text_must_match_locked_chunk_hash():
+    chunks = _chunks()
+    chunks[0] = {**chunks[0], "text": DOC_TEXT + " adulterado"}
+    result = _verify(_valid_decision(), chunks=chunks)
+    assert result.valid is False
+    assert any(item.code == "chunk_hash_mismatch" for item in result.errors)
+
+
 def test_quoted_text_missing():
     decision = _valid_decision()
     decision["material_findings"][0]["evidence"][0]["quoted_text"] = "texto que não existe"

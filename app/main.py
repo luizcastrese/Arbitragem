@@ -116,6 +116,7 @@ from app.domain.procedure import (
     run_appeal,
     run_automatic_review,
     finalize_review_outcome,
+    alternate_judge_available,
 )
 from app.documents.chunker import chunk_text
 from app.documents.embeddings import build_embedding, retrieve_by_embedding
@@ -435,6 +436,7 @@ def _public_case(case) -> Dict:
     data.pop("conciliation_rounds", None)
     data.pop("organized", None)
     data.pop("decision", None)
+    data.pop("original_decision", None)
     data.pop("review", None)
     data.pop("attestation", None)
     return data
@@ -1359,7 +1361,10 @@ def lock_manifest(
             }
         raise HTTPException(status_code=409, detail="Trava do manifesto já em andamento")
 
-    manifest = lock_case_manifest(case_to_dict(case))
+    try:
+        manifest = lock_case_manifest(case_to_dict(case))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     persist_manifest(db, case, manifest)
     return {"message": "Manifesto travado", "manifest": manifest}
 
@@ -1669,6 +1674,7 @@ def decide_case(
     decision = _record_prompt_provenance(case_data, "judge", decision)
     stability = maybe_run_stability(db, case, case_data, decision_context, decision)
     if stability and not stability.get("stable"):
+        decision["outcome"] = "inconclusive"
         decision["procedure_conclusion"] = "inconclusive"
         decision.setdefault("abstention_reasons", [])
         if "unstable_decision" not in decision["abstention_reasons"]:
@@ -1751,48 +1757,51 @@ def review_case(
         decision, verification, review, reconstruction_used
     )
     if conclusion == "pending_reconstruction":
-        reconstruction_used = True
-        new_input = {
-            "manifest": case_data["locked_manifest"],
-            "conciliation_rounds": case_data["conciliation_rounds"],
-            "organized_case": case_data["organized"],
-            "retrieved_evidence": {
-                "delivery": _retrieve(
-                    case_data, "obrigações de entrega e cumprimento parcial"
-                ),
-                "payment": _retrieve(
-                    case_data, "condições de pagamento e proporcionalidade"
-                ),
-                "deadline": _retrieve(case_data, "cumprimento de prazo e atraso"),
-            },
-            "reconstruction": True,
-        }
-        decision, verification, _conclusion, review = reconstruct_once(
-            db,
-            case,
-            case_data,
-            new_input,
-            case.current_decision_run_id,
-        )
-        review = _record_prompt_provenance(case_data, "reviewer", review)
-        conclusion, decision = finalize_review_outcome(
-            decision, verification, review, reconstruction_used=True
-        )
-        # A decisão original permanece no DecisionRun version=1. A corrente
-        # aponta para a reconstrução, sem apagar o registro anterior.
-        save_stage(
-            db,
-            case,
-            field="decision_json",
-            value=decision,
-            status="decided",
-            event_type="decision_reconstructed",
-            event_payload={
-                "outcome": decision.get("outcome"),
-                "procedure_conclusion": conclusion,
-                "supersedes_id": case.current_decision_run_id,
-            },
-        )
+        if not alternate_judge_available():
+            conclusion, decision = finalize_review_outcome(
+                decision, verification, review, reconstruction_used=True
+            )
+        else:
+            reconstruction_used = True
+            new_input = {
+                "manifest": case_data["locked_manifest"],
+                "conciliation_rounds": case_data["conciliation_rounds"],
+                "organized_case": case_data["organized"],
+                "retrieved_evidence": {
+                    "delivery": _retrieve(
+                        case_data, "obrigações de entrega e cumprimento parcial"
+                    ),
+                    "payment": _retrieve(
+                        case_data, "condições de pagamento e proporcionalidade"
+                    ),
+                    "deadline": _retrieve(case_data, "cumprimento de prazo e atraso"),
+                },
+                "reconstruction": True,
+            }
+            decision, verification, _conclusion, review = reconstruct_once(
+                db,
+                case,
+                case_data,
+                new_input,
+                case.current_decision_run_id,
+            )
+            review = _record_prompt_provenance(case_data, "reviewer", review)
+            conclusion, decision = finalize_review_outcome(
+                decision, verification, review, reconstruction_used=True
+            )
+            save_stage(
+                db,
+                case,
+                field="decision_json",
+                value=decision,
+                status="invalidated" if conclusion == "invalidated" else "decided",
+                event_type="decision_reconstructed",
+                event_payload={
+                    "outcome": decision.get("outcome"),
+                    "procedure_conclusion": conclusion,
+                    "supersedes_id": case.current_decision_run_id,
+                },
+            )
 
     case.procedure_conclusion = (
         conclusion if conclusion != "pending_reconstruction" else decision.get("procedure_conclusion")

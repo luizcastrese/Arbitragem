@@ -166,6 +166,16 @@ def verify_evidence_reference(
             )
         )
         return errors
+    if chunk.get("text_integrity_failed"):
+        errors.append(
+            _issue(
+                "chunk_hash_mismatch",
+                "O texto em runtime não confere com o hash do chunk travado.",
+                finding_id=finding_id,
+                chunk_id=ref.chunk_id,
+            )
+        )
+        return errors
     if chunk.get("sha256") != ref.chunk_sha256:
         errors.append(
             _issue(
@@ -257,22 +267,25 @@ def verify_decision(
     for chunk_id, item in manifest_chunks.items():
         merged = dict(item)
         runtime = runtime_chunks.get(chunk_id) or {}
-        if runtime.get("text") and not merged.get("text"):
-            merged["text"] = runtime["text"]
+        runtime_text = runtime.get("text")
+        if runtime_text and not merged.get("text"):
+            actual = sha256_text(str(runtime_text))
+            locked_hash = merged.get("sha256") or runtime.get("sha256")
+            if locked_hash and actual != locked_hash:
+                merged["text_integrity_failed"] = True
+            else:
+                merged["text"] = runtime_text
         merged_chunks[chunk_id] = merged
     for chunk_id, item in runtime_chunks.items():
         merged_chunks.setdefault(chunk_id, dict(item))
 
-    # Lista explícita (mesmo vazia) é a fonte da admissão do procedimento.
-    # O manifesto só completa o conjunto quando o chamador não informou lista
-    # nenhuma — um `[]` significa "nada foi admitido", não "use o manifesto".
     explicit_admission = admitted_documents is not None
-    admitted_ids = _admitted_ids(admitted_documents or [])
-    if not admitted_ids:
+    if explicit_admission:
+        admitted_ids = _admitted_ids(admitted_documents)
+    else:
         admitted_ids = set(
             (manifest.get("contradictory") or {}).get("admitted_document_ids") or []
         )
-    if not explicit_admission:
         for document in manifest_documents.values():
             if document.get("admitted"):
                 admitted_ids.add(str(document["id"]))

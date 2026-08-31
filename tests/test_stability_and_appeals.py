@@ -178,7 +178,23 @@ def _run_scripted_appeal(outcome, extra=None):
         payload = {"outcome": outcome, "explanation": f"recurso {outcome}", "confidence": 0.6}
         if extra:
             payload.update(extra)
-        set_provider_override(FakeProvider({"appeal": payload}))
+        set_provider_override(
+            FakeProvider(
+                {
+                    "appeal": payload,
+                    "reviewer": {
+                        "outcome": "approved",
+                        "issues": [],
+                        "challenged_findings": [],
+                        "ignored_evidence": [],
+                        "unsupported_findings": [],
+                        "calculation_issues": [],
+                        "framework_issues": [],
+                        "confidence": 0.8,
+                    },
+                }
+            )
+        )
         appeal = persist_appeal(
             db,
             case,
@@ -203,6 +219,7 @@ def _run_scripted_appeal(outcome, extra=None):
             "runs": runs,
             "records": records,
             "case": case,
+            "appeal": appeal,
         }
     finally:
         set_provider_override(None)
@@ -229,6 +246,12 @@ def test_appeal_corrected_creates_new_version_and_chained_attestation():
     latest = max(bundle["runs"], key=lambda item: item.version)
     assert latest.supersedes_id == bundle["original_run"].id
     assert json.loads(latest.payload_json)["decision"] == "decisão corrigida"
+    assert json.loads(bundle["case"].decision_json)["decision"] == "decisão corrigida"
+    assert json.loads(bundle["original_run"].payload_json)["decision"] == "decisão original preservada"
+    from app.db.repository import _run_to_dict
+
+    dumped = _run_to_dict(bundle["original_run"])
+    assert dumped["payload"]["decision"] == "decisão original preservada"
     assert len(bundle["records"]) == 2
     assert bundle["records"][1].supersedes_id == bundle["records"][0].id
     assert bundle["records"][0].attestation_hash == "att-original"
@@ -251,6 +274,45 @@ def test_appeal_inadmissible_does_not_overwrite_original():
     bundle = _run_scripted_appeal("inadmissible")
     assert bundle["result"]["outcome"] == "inadmissible"
     assert json.loads(bundle["original_run"].payload_json)["decision"] == "decisão original preservada"
+
+
+def test_invalid_correction_is_not_stored_as_corrected():
+    from tests.test_decision_verifier import _valid_decision
+
+    bad = _valid_decision()
+    bad["material_findings"][0]["evidence"][0]["document_id"] = "ghost-doc"
+    bundle = _run_scripted_appeal("corrected", extra={"corrected_decision": bad})
+    assert bundle["result"]["outcome"] == "inconclusive"
+    assert bundle["appeal"].status == "inconclusive"
+    assert json.loads(bundle["case"].decision_json)["decision"] == "decisão original preservada"
+    assert len(bundle["runs"]) == 1
+
+
+def test_approved_review_does_not_decide_unstable_case():
+    from app.domain.procedure import finalize_review_outcome
+
+    conclusion, decision = finalize_review_outcome(
+        {"outcome": "claimant", "abstention_reasons": ["unstable_decision"]},
+        {"valid": True},
+        {"outcome": "approved", "approved": True},
+        reconstruction_used=False,
+    )
+    assert conclusion == "inconclusive"
+    assert decision["outcome"] == "inconclusive"
+
+
+def test_reconstruct_once_requires_independent_judge_policy():
+    import pytest
+    from app.domain.procedure import reconstruct_once
+
+    engine, db = _sqlite_session()
+    try:
+        case, case_data = _appeal_case(db, {"outcome": "claimant", "decision": "x"})
+        with pytest.raises(RuntimeError, match="independent"):
+            reconstruct_once(db, case, case_data, {"manifest": {}}, None)
+    finally:
+        db.close()
+        engine.dispose()
 
 
 def test_claim_case_stage_rejects_concurrent_worker():

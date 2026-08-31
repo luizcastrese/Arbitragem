@@ -1975,6 +1975,7 @@ function Conclusion({ caseData }) {
     && review.approved
     && (!stability || stability.stable !== false)
     && caseData.attestation
+    && caseData.attestation.signature
     && !inconclusive
   )
 
@@ -2265,7 +2266,7 @@ function procedureLabel(caseData) {
     if (latest?.status && map[latest.status]) return map[latest.status]
     return 'Recurso automático'
   }
-  if (attestation && verification.valid && review.approved && (!stability || stability.stable !== false)) {
+  if (attestation && attestation.signature && verification.valid && review.approved && (!stability || stability.stable !== false)) {
     return 'Decisão aprovada'
   }
   if (review && !review.approved) return 'Auditoria automática'
