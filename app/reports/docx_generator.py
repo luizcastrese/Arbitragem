@@ -113,7 +113,7 @@ def _configure_page(document: Document) -> None:
     header.alignment = WD_ALIGN_PARAGRAPH.LEFT
     if _MARK_PATH.exists():
         picture = header.add_run()
-        picture.add_picture(str(_MARK_PATH), width=Inches(0.36))
+        picture.add_picture(str(_MARK_PATH), width=Inches(0.42))
         header.add_run("   ")
     label = header.add_run("VALINOR  |  REGISTRO AUDITÁVEL")
     label.font.name = "Aptos"

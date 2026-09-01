@@ -96,13 +96,14 @@ h1, h2, h3, p { margin-top: 0; }
 
 .brand { gap: 11px; }
 .brand-mark {
-  width: 42px;
-  height: 42px;
-  object-fit: cover;
-  background: #e8eee4;
-  border: 1px solid #d4ddce;
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(23, 42, 29, .08);
+  width: 44px;
+  height: 44px;
+  padding: 1px;
+  object-fit: contain;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 .brand div { display: grid; gap: 1px; }
 .brand strong { font-size: 16px; letter-spacing: -.01em; }
@@ -437,12 +438,13 @@ h1, h2, h3, p { margin-top: 0; }
 .auth-panel { margin: 18px 0; padding: 24px; display: grid; grid-template-columns: .9fr 1.1fr; gap: 24px; position: relative; }
 .auth-logo {
   display: block;
-  width: 56px;
-  height: 56px;
-  object-fit: cover;
-  margin-bottom: 12px;
-  border-radius: 14px;
-  border: 1px solid #d4ddce;
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  margin-bottom: 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .auth-panel h2 { margin: 5px 0 7px; font-family: var(--font-display); font-size: 26px; font-weight: 560; letter-spacing: -.01em; }
 .auth-panel p { color: var(--muted); font-size: 12px; line-height: 1.55; }

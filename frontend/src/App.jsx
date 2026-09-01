@@ -412,8 +412,8 @@ export default function App() {
               className="brand-mark"
               src={uiAsset('valinor-mark.png')}
               alt=""
-              width="42"
-              height="42"
+              width="44"
+              height="44"
             />
             <div>
               <strong>Valinor</strong>
@@ -844,7 +844,7 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
   return (
     <section className="auth-panel">
       <div>
-        <img className="auth-logo" src={uiAsset('valinor-mark.png')} alt="Valinor" width="56" height="56" />
+        <img className="auth-logo" src={uiAsset('valinor-mark.png')} alt="Valinor" width="72" height="72" />
         <span className="section-label">Acesso protegido</span>
         <h2>{copy.title}</h2>
         <p>{copy.description}</p>
