@@ -24,7 +24,6 @@ import {
   Mail,
   Plus,
   RefreshCw,
-  Scale,
   Search,
   ShieldCheck,
   Sparkles,
@@ -34,6 +33,8 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE
   || (window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin)
+const UI_BASE = import.meta.env.BASE_URL || '/ui/'
+const uiAsset = (name) => `${UI_BASE}${name}`
 
 const steps = [
   {
@@ -407,7 +408,13 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <span className="brand-mark"><Scale size={20} /></span>
+            <img
+              className="brand-mark"
+              src={uiAsset('valinor-mark.png')}
+              alt=""
+              width="42"
+              height="42"
+            />
             <div>
               <strong>Valinor</strong>
               <small>Auditoria decisória por IA</small>
@@ -448,14 +455,17 @@ export default function App() {
               automático. O sistema pode se abster. O resultado não é sentença judicial
               nem arbitral.
             </p>
-          </div>
-          <div className="trust-note">
-            <ShieldCheck size={22} />
-            <div>
-              <strong>Fração do custo, com garantias de processo</strong>
-              <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+            <div className="trust-note">
+              <ShieldCheck size={22} />
+              <div>
+                <strong>Fração do custo, com garantias de processo</strong>
+                <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+              </div>
             </div>
           </div>
+          <figure className="intro-art">
+            <img src={uiAsset('valinor-hero.webp')} alt="Valinor" />
+          </figure>
         </section>
 
         <HowItWorks />
@@ -834,6 +844,7 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
   return (
     <section className="auth-panel">
       <div>
+        <img className="auth-logo" src={uiAsset('valinor-mark.png')} alt="Valinor" width="56" height="56" />
         <span className="section-label">Acesso protegido</span>
         <h2>{copy.title}</h2>
         <p>{copy.description}</p>

@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Dict, Iterable
 
 from docx import Document
@@ -15,6 +16,7 @@ INK = "1F2923"
 MUTED = "5E6A62"
 LINE = "D8E1D7"
 WARNING = "FFF4D6"
+_MARK_PATH = Path(__file__).resolve().parents[1] / "assets" / "valinor-mark.png"
 
 
 def _shade(cell, fill: str) -> None:
@@ -108,13 +110,16 @@ def _configure_page(document: Document) -> None:
     section.footer_distance = Inches(0.3)
 
     header = section.header.paragraphs[0]
-    header.text = "VALINOR  |  REGISTRO AUDITÁVEL"
-    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run = header.runs[0]
-    run.font.name = "Aptos"
-    run.font.size = Pt(8)
-    run.font.bold = True
-    run.font.color.rgb = RGBColor.from_string(GREEN)
+    header.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    if _MARK_PATH.exists():
+        picture = header.add_run()
+        picture.add_picture(str(_MARK_PATH), width=Inches(0.36))
+        header.add_run("   ")
+    label = header.add_run("VALINOR  |  REGISTRO AUDITÁVEL")
+    label.font.name = "Aptos"
+    label.font.size = Pt(8)
+    label.font.bold = True
+    label.font.color.rgb = RGBColor.from_string(GREEN)
 
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER

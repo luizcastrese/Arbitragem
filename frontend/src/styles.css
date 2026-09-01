@@ -96,13 +96,13 @@ h1, h2, h3, p { margin-top: 0; }
 
 .brand { gap: 11px; }
 .brand-mark {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  color: white;
-  background: var(--green-900);
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  background: #e8eee4;
+  border: 1px solid #d4ddce;
   border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(23, 42, 29, .08);
 }
 .brand div { display: grid; gap: 1px; }
 .brand strong { font-size: 16px; letter-spacing: -.01em; }
@@ -167,13 +167,13 @@ h1, h2, h3, p { margin-top: 0; }
 .intro {
   position: relative;
   isolation: isolate;
-  min-height: 500px;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 1fr 330px;
-  gap: 48px;
+  grid-template-columns: 1.1fr .9fr;
+  gap: 36px;
   align-items: center;
   margin-bottom: 32px;
-  padding: 52px 44px;
+  padding: 44px;
   overflow: hidden;
   background: #eef2e9;
   border: 1px solid #d9e0d5;
@@ -186,15 +186,34 @@ h1, h2, h3, p { margin-top: 0; }
   z-index: -2;
   content: '';
   background-image: url('/valinor-hero.webp');
-  background-position: center;
+  background-position: 72% center;
   background-size: cover;
+  opacity: .22;
 }
 .intro::after {
   position: absolute;
   inset: 0;
   z-index: -1;
   content: '';
-  background: linear-gradient(90deg, rgba(247, 248, 242, .97) 0%, rgba(247, 248, 242, .91) 43%, rgba(247, 248, 242, .35) 68%, rgba(16, 39, 26, .04) 100%);
+  background: linear-gradient(90deg, rgba(247, 248, 242, .96) 0%, rgba(247, 248, 242, .9) 48%, rgba(247, 248, 242, .55) 100%);
+}
+.intro-art {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 18px;
+  box-shadow: 0 16px 40px rgba(16, 39, 26, .18);
+  border: 1px solid rgba(255, 255, 255, .45);
+}
+.intro-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 280px;
+  max-height: 360px;
+  object-fit: cover;
+  object-position: 68% 45%;
 }
 .eyebrow, .section-label {
   color: var(--green-700);
@@ -217,8 +236,8 @@ h1, h2, h3, p { margin-top: 0; }
 .intro > div:first-child > *:nth-child(2) { animation-delay: .08s; }
 .intro > div:first-child > *:nth-child(3) { animation-delay: .16s; }
 .intro > div:first-child > *:nth-child(n+4) { animation-delay: .24s; }
-.intro > .trust-note { animation: rise .7s var(--ease) .3s backwards; }
 .intro p { max-width: 670px; margin: 0; color: #526159; font-size: 17px; line-height: 1.65; }
+.intro .trust-note { margin-top: 22px; max-width: 520px; }
 .trust-note {
   display: flex;
   gap: 13px;
@@ -416,6 +435,15 @@ h1, h2, h3, p { margin-top: 0; }
   box-shadow: var(--shadow-card);
 }
 .auth-panel { margin: 18px 0; padding: 24px; display: grid; grid-template-columns: .9fr 1.1fr; gap: 24px; position: relative; }
+.auth-logo {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  border: 1px solid #d4ddce;
+}
 .auth-panel h2 { margin: 5px 0 7px; font-family: var(--font-display); font-size: 26px; font-weight: 560; letter-spacing: -.01em; }
 .auth-panel p { color: var(--muted); font-size: 12px; line-height: 1.55; }
 .auth-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -1060,8 +1088,9 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 260px; color: var(--muted); }
 
 @media (max-width: 1050px) {
-  .intro { min-height: 560px; grid-template-columns: 1fr; gap: 24px; align-content: center; }
+  .intro { min-height: 0; grid-template-columns: 1fr; gap: 24px; align-content: center; }
   .intro::after { background: linear-gradient(90deg, rgba(247, 248, 242, .97) 0%, rgba(247, 248, 242, .88) 62%, rgba(247, 248, 242, .25) 100%); }
+  .intro-art img { min-height: 220px; max-height: 260px; }
   .trust-note { max-width: 550px; }
   .economy-strip, .role-strip, .journey-columns { grid-template-columns: 1fr; }
   .how-steps { grid-template-columns: 1fr 1fr; }
