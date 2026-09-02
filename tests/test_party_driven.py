@@ -238,11 +238,29 @@ def test_party_invites_only_own_subsidiaries_and_the_other_principal(client):
     assert own_side.json()["party"] == "respondent"
 
 
-def test_frontend_no_longer_exposes_manager_role():
+def test_frontend_explains_unique_process():
     from pathlib import Path
 
     source = Path("frontend/src/App.jsx").read_text(encoding="utf-8")
+    for phrase in (
+        "Não há gestor",
+        "julgador humano interno",
+        "segundo modelo",
+        "verificador determinístico",
+        "contraditório",
+        "se abstém",
+        "O que só a Valinor faz",
+        "Seis etapas, as mesmas regras",
+        "admissão é automática",
+        "Attestation e contestação",
+    ):
+        assert phrase in source
     assert "Gestor do procedimento" not in source
     assert "option value=\"manager\"" not in source
     assert "roles.manager" not in source
     assert "terms={terms}" in source
+    styles = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+    assert ".unique-guarantees" in styles
+    assert ".intro-guarantees" in styles
+    assert ".process-guarantee" in styles
+    assert ".stage-guarantee" in styles
