@@ -283,7 +283,13 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
     if participants:
         for participant in participants:
             document.add_paragraph(
-                f"{participant.get('display_name')} ({participant.get('email')}) - papel: {participant.get('role')}",
+                f"{participant.get('display_name')} ({participant.get('email')}) - "
+                f"{participant.get('role')}"
+                + (
+                    f" / lado {participant.get('party')}"
+                    if participant.get("party") and participant.get("party") != participant.get("role")
+                    else ""
+                ),
                 style="List Bullet",
             )
     else:

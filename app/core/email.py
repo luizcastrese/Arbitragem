@@ -20,7 +20,7 @@ logger = logging.getLogger("valinor.email")
 ROLE_LABELS = {
     "claimant": "parte reclamante",
     "respondent": "empresa reclamada",
-    "manager": "gestor do procedimento",
+    "subsidiary": "advogado ou terceiro vinculado a uma das partes",
 }
 
 

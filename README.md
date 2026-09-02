@@ -30,7 +30,7 @@ saída em sentença arbitral ou estatal.
 - API FastAPI com validação e documentação OpenAPI;
 - painel React responsivo;
 - casos persistidos em SQLite;
-- autorização separada para cliente, empresa e gestor em cada caso;
+- autorização separada para cliente, empresa e subsidiários de cada lado;
 - contas com senha derivada por PBKDF2 e sessões expiráveis em cookie HttpOnly;
 - verificação de e-mail, redefinição de senha por link de uso único e bloqueio
   da conta após tentativas de senha malsucedidas;
@@ -100,8 +100,9 @@ caso
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
 uma parte, disponibilizado à contraparte, reconhecido como recebido e respondido
-ou expressamente dispensado. O gestor só pode admitir o material depois desse
-percurso, e o lock é bloqueado enquanto houver pendência.
+ou expressamente dispensado. Completo o contraditório, o sistema admite o
+material sem um administrador humano, e o lock é bloqueado enquanto houver
+pendência.
 
 O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
 participação voluntária, acesso a todo material, oportunidade de resposta,
@@ -116,14 +117,18 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 
 ## Usuários do produto
 
-- **cliente reclamante:** apresenta sua versão, documentos, pedidos e respostas
-  às propostas; deve compreender e aceitar o procedimento;
-- **empresa reclamada:** apresenta defesa e documentos, formula contrapropostas
-  e acompanha exposição, acordos e decisões de forma consistente;
-- **gestor do procedimento:** administra convites, acesso, prazos e integridade
-  do rito, sem decidir o mérito;
-- **representantes e advogados:** podem apoiar qualquer parte na preparação e
-  manifestação dentro do caso.
+- **cliente reclamante:** parte principal de um lado; apresenta sua versão,
+  documentos, pedidos e respostas; aceita o procedimento e pode impulsionar as
+  etapas quando as condições do rito estiverem preenchidas;
+- **empresa reclamada:** parte principal do outro lado; apresenta defesa e
+  documentos, formula contrapropostas e também impulsiona o rito nas mesmas
+  condições;
+- **subsidiários:** advogados ou terceiros vinculados a um dos lados, com
+  acesso ao caso e capacidade de protocolar material em nome daquele lado, sem
+  substituir o aceite da parte nem administrar o procedimento.
+
+Não há gestor do procedimento. A participação é enxuta: só as duas partes
+principais são necessárias. Cada lado convida os próprios subsidiários.
 
 O nicho inicial é a resolução privada de reclamações entre empresas e clientes,
 especialmente situações que já geraram ou poderiam gerar processos. A empresa
@@ -274,8 +279,8 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /auth/me` | Conta da sessão atual, com o estado de verificação do e-mail |
 | `GET /terms` | Texto vigente dos termos, com versão e hash |
 | `GET /terms/{version}` | Texto de uma versão específica dos termos |
-| `GET /cases/{id}/invitations` | Listar convites do caso (gestor) |
-| `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
+| `GET /cases/{id}/invitations` | Listar convites do caso (parte principal) |
+| `POST /cases/{id}/invitations` | Convidar a contraparte ou um subsidiário do próprio lado |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
 | `GET /cases/{id}/deadlines` | Listar a agenda processual |
 | `POST /cases/{id}/deadlines` | Criar prazo e notificações |
@@ -287,7 +292,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/documents/pdf` | Adicionar PDF |
 | `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |
 | `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
-| `POST /cases/{id}/documents/{document_id}/admit` | Admitir material após contraditório |
+| `POST /cases/{id}/documents/{document_id}/admit` | Reafirmar admissão (o sistema já admite ao fechar o contraditório) |
 | `GET /cases/{id}/documents/{document_id}/original` | Baixar o arquivo original armazenado |
 | `POST /cases/{id}/documents/{document_id}/original-url` | Emitir link temporário e assinado do original |
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
