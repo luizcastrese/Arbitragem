@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
+  Ban,
   BriefcaseBusiness,
   Building2,
   Check,
@@ -11,10 +12,13 @@ import {
   CircleDollarSign,
   Clock3,
   Download,
+  Eye,
   FileCheck2,
   FileText,
+  Fingerprint,
   FolderOpen,
   Gavel,
+  GitCompare,
   Handshake,
   Info,
   LockKeyhole,
@@ -29,7 +33,8 @@ import {
   ShieldCheck,
   Sparkles,
   Upload,
-  UserRound
+  UserRound,
+  Users
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE
@@ -38,39 +43,45 @@ const API_BASE = import.meta.env.VITE_API_BASE
 const steps = [
   {
     key: 'draft',
-    title: 'Documentos',
-    short: 'Reúna o material',
-    description: 'Adicione contratos, mensagens, comprovantes e alegações.'
+    title: 'Adesão e provas',
+    short: 'Regras e material',
+    description: 'As duas partes aceitam o mesmo texto de regras. Cada documento é visto e respondido pela outra parte; o sistema admite sozinho.',
+    guarantee: 'Nada entra na decisão sem contraditório. Não há gestor filtrando o mérito.'
   },
   {
     key: 'locked',
-    title: 'Regras fixadas',
-    short: 'Proteja o processo',
-    description: 'O sistema registra os documentos e impede alterações posteriores.'
+    title: 'Registro travado',
+    short: 'Nada mais entra',
+    description: 'Qualquer uma das duas partes trava o manifesto. Daí em diante o conjunto documental não muda.',
+    guarantee: 'O que foi travado fica lacrado por hash. Ninguém reabre o envelope depois.'
   },
   {
     key: 'conciliation',
-    title: 'Composição',
+    title: 'Acordo primeiro',
     short: 'Negocie em rodadas',
-    description: 'A IA conduz novas tentativas enquanto houver espaço útil para acordo.'
+    description: 'A IA propõe composição. Só há decisão se as duas partes recusarem ou o espaço de acordo se esgotar.',
+    guarantee: 'Nenhum acordo se forma sem aceite expresso dos dois lados. Recusar não prejudica quem recusou.'
   },
   {
     key: 'organized',
     title: 'Fatos organizados',
-    short: 'Separe fatos e alegações',
-    description: 'O conteúdo é estruturado para facilitar a análise.'
+    short: 'Separe o que importa',
+    description: 'O sistema separa fatos, pedidos e provas admitidas, para a decisão não misturar alegação com evidência.',
+    guarantee: 'A organização usa só o material já admitido. O que ficou de fora não conta.'
   },
   {
     key: 'decided',
     title: 'Decisão da IA',
-    short: 'Julgue o conflito',
-    description: 'A IA aplica as regras fixadas e profere uma decisão fundamentada.'
+    short: 'Mérito ou abstenção',
+    description: 'Um modelo julgador aplica as regras fixadas. Se o mérito não for seguro, o procedimento se abstém — não inventa um vencedor.',
+    guarantee: 'Não há julgador humano interno. Hashes comprovam integridade, não a verdade material.'
   },
   {
     key: 'reviewed',
     title: 'Auditoria',
-    short: 'Valide a decisão',
-    description: 'Uma segunda IA procura falhas, contradições e desvios das regras.'
+    short: 'Segundo modelo',
+    description: 'Um segundo modelo, com política independente, procura falhas. Um verificador determinístico checa schema, hashes, admissão e cálculos.',
+    guarantee: 'Julgador e revisor não são o mesmo critério. Se a auditoria não aprovar, a decisão não segue.'
   }
 ]
 
@@ -466,27 +477,37 @@ export default function App() {
       <main className="page">
         <section className="intro">
           <div>
-            <span className="eyebrow">Resolução de disputas conduzida por IA</span>
+            <span className="eyebrow">Procedimento autônomo, sem gestor e sem julgador interno</span>
             <h1>Resolva a disputa em dias — não em anos de processo.</h1>
             <p>
-              O Valinor é uma alternativa ao litígio para conflitos documentais entre empresa e cliente.
-              As duas partes apresentam suas provas, a IA busca um acordo e, se não houver,
-              profere uma decisão fundamentada — verificada de forma determinística,
-              auditada por um segundo modelo e, se contestada, reexaminada por recurso
-              automático. O sistema pode se abster. O resultado não é sentença judicial
-              nem arbitral.
+              Empresa e cliente conduzem o rito juntos. Cada prova passa pela outra parte
+              antes de contar. A IA busca acordo; se não houver, decide só sobre o que foi
+              admitido — ou se abstém. Um segundo modelo audita. Um verificador
+              determinístico checa hashes, regras e cálculos. O resultado não é sentença
+              judicial nem arbitral.
             </p>
+            <ul className="intro-guarantees">
+              <li>As duas partes conduzem o procedimento. Não há gestor.</li>
+              <li>Não há julgador humano interno. O sistema pode se abster.</li>
+              <li>Nenhuma prova entra sem contraditório. O sistema admite sozinho.</li>
+              <li>Julgador e revisor são independentes. O histórico fica lacrado por hash.</li>
+            </ul>
           </div>
           <div className="trust-note">
             <ShieldCheck size={22} />
             <div>
-              <strong>Fração do custo, com garantias de processo</strong>
-              <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+              <strong>Você vê o rito. Nada acontece nos bastidores.</strong>
+              <span>
+                A plataforma mostra a etapa, o que já está protegido e o próximo ato.
+                Qualquer uma das duas partes avança quando as condições estiverem preenchidas.
+              </span>
             </div>
           </div>
         </section>
 
         <HowItWorks />
+
+        <UniqueGuarantees />
 
         <AudienceValue />
 
@@ -612,8 +633,9 @@ export default function App() {
             <div className="sidebar-help">
               <Sparkles size={17} />
               <p>
-                <strong>Como funciona?</strong>
-                Você avança uma etapa por vez. O sistema sempre destaca a próxima ação.
+                <strong>Onde você está no rito</strong>
+                A etapa ativa, o que já está lacrado e o próximo ato aparecem no painel.
+                Subsidiários ajudam; só a parte principal conduz.
               </p>
             </div>
           </aside>
@@ -669,32 +691,45 @@ export default function App() {
 }
 
 function HowItWorks() {
-  const steps = [
+  const processSteps = [
     {
       title: 'As duas partes aderem',
-      text: 'Empresa e cliente aceitam as mesmas regras, com convite e consentimento registrados.'
+      text: 'Empresa e cliente leem o mesmo texto e aceitam. A versão e o hash SHA-256 do que foi exibido entram na auditoria. Enquanto o registro não trava, cada um pode retirar o aceite.'
     },
     {
       title: 'Provas com contraditório',
-      text: 'Cada documento enviado é visto e respondido pela outra parte antes de contar para qualquer coisa.'
+      text: 'Cada documento tem autor e finalidade. A outra parte toma ciência e responde, contesta ou renuncia. Completo isso, o sistema admite o material — sem clique de um administrador.'
+    },
+    {
+      title: 'O registro trava',
+      text: 'Qualquer uma das duas partes principais trava o manifesto. Depois disso nada entra nem sai. O conjunto fica lacrado por hash.'
     },
     {
       title: 'A IA busca acordo primeiro',
-      text: 'Propostas de conciliação fundamentadas, que cada parte pode aceitar, recusar ou ajustar.'
+      text: 'Propostas de composição, que cada lado aceita, recusa ou ajusta. Só se o acordo não fechar o procedimento segue para mérito.'
     },
     {
-      title: 'Sem acordo, decisão fundamentada',
-      text: 'A IA decide citando provas verificáveis; um segundo modelo audita. O sistema pode se abster. Hashes comprovam integridade, não a verdade material.'
+      title: 'Decisão ou abstenção',
+      text: 'Um modelo julgador aplica as regras fixadas só ao material admitido. Se o mérito não for seguro, a Valinor se abstém: não inventa vencedor.'
+    },
+    {
+      title: 'Auditoria independente',
+      text: 'Um segundo modelo, com política distinta, revisa a decisão. Um verificador determinístico checa schema, hashes, admissão e cálculos. Há recurso automático se a parte contestar.'
     }
   ]
   return (
     <section className="how-it-works">
       <div className="value-heading">
         <span className="section-label">Como funciona</span>
-        <h2>Quatro etapas, as mesmas regras para os dois lados.</h2>
+        <h2>Seis etapas, as mesmas regras para os dois lados.</h2>
+        <p>
+          Não há gestor do procedimento. Parte e contraparte avançam quando as
+          condições do rito já estiverem preenchidas. Advogados entram só como
+          subsidiários do respectivo lado.
+        </p>
       </div>
       <ol className="how-steps">
-        {steps.map((step, index) => (
+        {processSteps.map((step, index) => (
           <li key={step.title}>
             <span className="how-number">{index + 1}</span>
             <strong>{step.title}</strong>
@@ -706,6 +741,63 @@ function HowItWorks() {
   )
 }
 
+function UniqueGuarantees() {
+  const items = [
+    {
+      icon: <Users size={22} />,
+      title: 'Sem gestor',
+      text: 'O rito anda pelo impulso das duas partes. Ninguém de fora escolhe o que entra, o prazo que vale ou quem vence.'
+    },
+    {
+      icon: <Ban size={22} />,
+      title: 'Sem julgador humano interno',
+      text: 'A Valinor não encaminha o mérito a um operador. Se não houver base segura, o procedimento encerra inconclusivo, inadmissível ou invalidado.'
+    },
+    {
+      icon: <Eye size={22} />,
+      title: 'Nada entra em silêncio',
+      text: 'Toda prova é atribuída, disponibilizada e respondida. Completo o contraditório, a admissão é automática.'
+    },
+    {
+      icon: <GitCompare size={22} />,
+      title: 'Dois modelos, dois critérios',
+      text: 'Quem julga não é quem audita. A política do revisor é independente. Os modelos usados ficam registrados.'
+    },
+    {
+      icon: <Fingerprint size={22} />,
+      title: 'Verificável, não caixa-preta',
+      text: 'O material fica lacrado por hash. O verificador determinístico confere invariantes formais. A decisão cita provas, não um palpite.'
+    },
+    {
+      icon: <FileCheck2 size={22} />,
+      title: 'Attestation e contestação',
+      text: 'A decisão aprovada pode sair como attestation assinada, com janela para a parte barrar a execução. Recurso automático reexamina se houver contestação.'
+    }
+  ]
+  return (
+    <section className="unique-guarantees">
+      <div className="value-heading">
+        <span className="section-label">O que só a Valinor faz</span>
+        <h2>As garantias não dependem de um terceiro de confiança.</h2>
+        <p>
+          Custo baixo sem perder contraditório, simetria e trilha. O que diferencia
+          o procedimento é o que ele recusa: gestor, julgador interno, prova oculta
+          e decisão inverificável.
+        </p>
+      </div>
+      <div className="guarantee-grid">
+        {items.map((item) => (
+          <article key={item.title}>
+            <span className="guarantee-icon">{item.icon}</span>
+            <strong>{item.title}</strong>
+            <p>{item.text}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function AudienceValue() {
   return (
     <section className="audience-value">
@@ -713,10 +805,10 @@ function AudienceValue() {
         <span className="section-label">Por que usar</span>
         <h2>O custo de resolver deixa de ser maior que o valor da disputa.</h2>
         <p>
-          A IA faz o trabalho que consome tempo e honorários: organiza documentos,
-          identifica convergências, conduz rodadas de acordo e fundamenta a análise.
-          As garantias ficam: autoria, ciência, resposta, admissão e auditoria
-          registradas do início ao fim.
+          A IA organiza documentos, conduz o acordo e fundamenta o mérito. As
+          garantias ficam com as partes: autoria, ciência, resposta, admissão
+          automática, verificação determinística e auditoria independente, do
+          início ao fim.
         </p>
       </div>
 
@@ -725,21 +817,21 @@ function AudienceValue() {
           <CircleDollarSign size={22} />
           <span>
             <strong>Fração do custo</strong>
-            Sem custas, audiências ou anos de honorários. A IA absorve o trabalho repetitivo.
+            Sem custas, audiências ou um escritório para administrar o rito. A plataforma absorve o trabalho repetitivo.
           </span>
         </div>
         <div>
           <Clock3 size={22} />
           <span>
             <strong>Dias, não anos</strong>
-            O procedimento inteiro — adesão, provas, acordo, decisão — corre na plataforma, sem pauta.
+            Adesão, provas, acordo, decisão e auditoria correm aqui, sem pauta de tribunal.
           </span>
         </div>
         <div>
           <ShieldCheck size={22} />
           <span>
-            <strong>Verificável, não é caixa-preta</strong>
-            Decisão com provas citadas, auditoria independente e histórico lacrado por hash.
+            <strong>Simetria entre os lados</strong>
+            As mesmas regras, o mesmo acesso ao material e o mesmo poder de impulsionar o rito.
           </span>
         </div>
       </div>
@@ -751,7 +843,7 @@ function AudienceValue() {
           <h3>Reduza o custo por reclamação sem transformar eficiência em parcialidade.</h3>
           <ul>
             <li>Diminui horas operacionais e jurídicas consumidas em cada disputa.</li>
-            <li>Centraliza documentos, defesa e histórico em um único procedimento.</li>
+            <li>Centraliza documentos, defesa e histórico em um único procedimento lacrado.</li>
             <li>Cria novas propostas quando ainda houver espaço real para acordo.</li>
             <li>Produz uma trilha auditável para jurídico, atendimento e compliance.</li>
           </ul>
@@ -764,8 +856,8 @@ function AudienceValue() {
           <ul>
             <li>Evita que o custo de discutir o direito torne a reclamação inviável.</li>
             <li>Apresenta sua versão, documentos, pedidos e respostas às propostas.</li>
-            <li>Entende por que cada acordo foi sugerido e pode aceitar ou recusar.</li>
-            <li>Vê quais provas sustentam a decisão, em vez de receber apenas um resultado.</li>
+            <li>Vê cada prova da empresa e responde antes de ela contar para a decisão.</li>
+            <li>Recebe fundamentos, provas citadas e o resultado da auditoria — não só um placar.</li>
           </ul>
         </article>
       </div>
@@ -777,36 +869,36 @@ function AudienceValue() {
         </div>
         <div>
           <MessagesSquare size={20} />
-          <span><strong>Advogados e terceiros</strong> entram como subsidiários do respectivo lado, só com acesso ao caso.</span>
+          <span><strong>Advogados e terceiros</strong> entram como subsidiários do respectivo lado, com acesso e protocolo, sem conduzir.</span>
         </div>
         <div>
           <ShieldCheck size={20} />
-          <span><strong>Adesão transparente</strong> a contraparte deve compreender e aceitar o procedimento.</span>
+          <span><strong>Adesão transparente.</strong> A contraparte lê e aceita o mesmo texto, com hash gravado.</span>
         </div>
       </div>
 
       <div className="user-journeys">
         <div className="journey-heading">
-          <span className="section-label">Quem faz o quê?</span>
-          <h3>O fluxo de cada usuário dentro do caso</h3>
+          <span className="section-label">Quem faz o quê</span>
+          <h3>O mesmo percurso, visto de cada lugar</h3>
         </div>
         <div className="journey-columns">
           <Journey
-            title="Empresa reclamada"
+            title="Cliente reclamante"
             steps={[
-              'Aceita o convite da contraparte e as regras do procedimento.',
-              'Apresenta defesa, documentos e limites possíveis para acordo.',
-              'Responde a cada rodada com aceite, recusa ou contraproposta.',
-              'Recebe a decisão e a auditoria para cumprimento e controle interno.'
+              'Abre o caso, convida a empresa e aceita as regras.',
+              'Junta fatos e documentos; responde ao que a empresa protocolar.',
+              'Avalia cada proposta de acordo: aceita, recusa ou ajusta.',
+              'Recebe decisão fundamentada, auditoria e, se houver, attestation.'
             ]}
           />
           <Journey
-            title="Cliente reclamante"
+            title="Empresa reclamada"
             steps={[
-              'Abre o caso, convida a empresa e decide se aceita as regras.',
-              'Apresenta fatos, documentos, pedido e resultado esperado.',
-              'Avalia cada proposta e informa o que aceita ou deseja alterar.',
-              'Recebe decisão explicada, provas citadas e resultado da auditoria.'
+              'Aceita o convite e as mesmas regras do reclamante.',
+              'Apresenta defesa e documentos; responde ao material do cliente.',
+              'Responde a cada rodada de composição com a mesma liberdade.',
+              'Recebe a decisão e a trilha para cumprimento e controle interno.'
             ]}
           />
           <Journey
@@ -814,8 +906,8 @@ function AudienceValue() {
             steps={[
               'A parte principal vincula advogado ou terceiro ao próprio lado.',
               'O subsidiário acessa o caso e o material daquele lado.',
-              'Pode protocolar documentos em nome da parte, sem conduzir o rito.',
-              'O aceite e o impulso das etapas continuam com a parte principal.'
+              'Pode protocolar documentos em nome da parte.',
+              'Não aceita os termos no lugar da parte nem avança as etapas.'
             ]}
           />
         </div>
@@ -843,7 +935,7 @@ function Journey({ title, steps }) {
 const AUTH_COPY = {
   register: {
     title: 'Crie sua conta',
-    description: 'Uma conta permite receber convites, acessar apenas os casos vinculados e atuar com o papel correto. Confirmamos seu e-mail antes do primeiro ato no procedimento.',
+    description: 'A conta vincula você a casos em que é parte, contraparte ou subsidiário. Confirmamos o e-mail antes do primeiro ato. Não há gestor: as duas partes conduzem o rito.',
     submit: 'Criar conta'
   },
   login: {
@@ -931,7 +1023,11 @@ function CreateCase({ busy, onSubmit, onCancel }) {
         <div>
           <span className="section-label">Comece por aqui</span>
           <h2>Qual reclamação será encaminhada?</h2>
-          <p>Identifique o cliente reclamante e a empresa que responderá ao caso.</p>
+          <p>
+            Você entra como reclamante. Em seguida as duas partes aceitam as mesmas
+            regras, juntam provas com contraditório e qualquer uma delas avança o
+            rito. Não há gestor do procedimento.
+          </p>
         </div>
       </div>
 
@@ -1324,6 +1420,9 @@ function ProcessSteps({ currentStage, blockedByAI = false }) {
             : `${Math.round(((currentStage + 1) / steps.length) * 100)}% concluído`}
         </span>
       </div>
+      {steps[currentStage]?.guarantee && !blockedByAI && (
+        <p className="process-guarantee">{steps[currentStage].guarantee}</p>
+      )}
       <div className="progress-bar">
         <span style={{ width: `${((currentStage + 1) / steps.length) * 100}%` }} />
       </div>
@@ -1380,34 +1479,45 @@ function NextAction({
     draft: {
       icon: <Upload size={22} />,
       label: 'Etapa atual',
-      title: 'Adicione os documentos da disputa',
-      description: 'Inclua tudo que ajuda a entender o acordo, o que aconteceu e o que cada parte pede.'
+      title: 'Aceite as regras e junte as provas',
+      description: 'Primeiro as duas partes aderem ao mesmo texto. Depois cada lado protocola documentos; a contraparte vê e responde. Completo o contraditório, o sistema admite sozinho.',
+      guarantee: 'Nada entra na decisão sem a outra parte ter visto. Não há gestor para filtrar o mérito.'
     },
     locked: {
       icon: <Handshake size={22} />,
       label: 'Próximo passo',
-      title: 'Verifique se existe espaço para acordo',
-      description: 'A IA buscará interesses convergentes e indicará conciliação, mediação ou continuidade do julgamento.'
+      title: 'A IA busca acordo antes de julgar',
+      description: 'O registro já está travado. A conciliação usa só o material lacrado e não forma acordo sem o aceite expresso dos dois lados.',
+      guarantee: 'Recusar uma proposta não prejudica quem recusou. Qualquer parte principal pode disparar esta etapa.'
     },
     conciliation: {
       icon: <Search size={22} />,
       label: 'Sem acordo ou após a tentativa',
-      title: 'Prepare o caso para julgamento',
-      description: 'Se a composição não encerrar a disputa, o sistema organiza fatos, pedidos e evidências.'
+      title: 'Organize os fatos admitidos',
+      description: 'Se a composição não encerrou a disputa, o sistema separa fatos, pedidos e provas para o julgamento não misturar alegação com evidência.',
+      guarantee: 'O que não foi admitido no contraditório não entra nesta organização.'
     },
     organized: {
       icon: <Gavel size={22} />,
       label: 'Próximo passo',
-      title: 'Solicite a decisão da IA',
-      description: 'O agente julgador aplicará o framework Comercial Equilibrado às evidências do caso.'
+      title: 'Peça a decisão da IA',
+      description: 'O modelo julgador aplica as regras fixadas no manifesto. Se o mérito não for seguro, o procedimento se abstém — não inventa um vencedor.',
+      guarantee: 'Não há julgador humano interno. Hashes comprovam integridade, não a verdade material.'
     },
     decided: {
       icon: <ShieldCheck size={22} />,
       label: 'Último passo',
-      title: 'Audite a decisão',
-      description: 'Uma segunda IA verificará fundamentos, evidências, contradições e aderência às regras.'
+      title: 'Audite com um segundo modelo',
+      description: 'Um revisor com política independente procura falhas. Um verificador determinístico checa schema, hashes, admissão e cálculos.',
+      guarantee: 'Julgador e revisor não compartilham o mesmo critério. Sem aprovação, a decisão não segue.'
     }
-  }[caseData.status]
+  }[caseData.status] || {
+    icon: <Info size={22} />,
+    label: 'Etapa atual',
+    title: 'O rito está em andamento',
+    description: 'Quando as condições da etapa estiverem preenchidas, qualquer uma das duas partes principais pode avançar.',
+    guarantee: 'Subsidiários acessam e protocolam. Não conduzem o procedimento.'
+  }
 
   return (
     <section className="next-action">
@@ -1417,6 +1527,9 @@ function NextAction({
           <span className="section-label">{actionContent.label}</span>
           <h3>{actionContent.title}</h3>
           <p>{actionContent.description}</p>
+          {actionContent.guarantee && (
+            <em className="stage-guarantee">{actionContent.guarantee}</em>
+          )}
         </div>
       </div>
 
@@ -1524,10 +1637,10 @@ function NextAction({
           <div className="lock-explanation">
             <LockKeyhole size={20} />
             <div>
-              <strong>Quando terminar de adicionar documentos</strong>
+              <strong>Quando o contraditório estiver completo</strong>
               <span>
-                Fixe o conjunto documental. Depois disso, nenhum arquivo poderá ser
-                incluído ou alterado, preservando a integridade do processo.
+                Qualquer uma das duas partes principais trava o registro. Depois
+                disso nada entra nem sai: o manifesto fica lacrado por hash.
               </span>
             </div>
             <button
@@ -1558,7 +1671,7 @@ function NextAction({
                   ? 'A adesão das duas partes ainda está pendente. '
                   : ''}
                 {!caseData.contradictory?.complete
-                  ? 'Todos os materiais precisam de ciência e de resposta ou renúncia antes da trava.'
+                  ? 'Todos os materiais precisam de ciência e de resposta ou renúncia. Completo o contraditório, o sistema admite sozinho.'
                   : ''}
               </span>
             </div>
@@ -1629,7 +1742,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
         <ShieldCheck size={20} />
         <div>
           <strong>Adesão ao procedimento</strong>
-          <span>Cada parte deve aceitar as mesmas regras antes do procedimento Valinor.</span>
+          <span>As duas partes leem o mesmo texto. O aceite grava a versão e o hash na auditoria. Sem isso o rito não trava.</span>
         </div>
       </div>
       <div className="consent-grid">
@@ -1676,7 +1789,14 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão autônoma por IA; auditoria automática; recurso automático; o sistema pode se abster e o resultado não é sentença judicial ou arbitral.</span>
+        <ul>
+          <li>participação voluntária, com direito de retirar o aceite até o travamento;</li>
+          <li>acesso a todo material e oportunidade de resposta antes da admissão;</li>
+          <li>composição somente por acordo expresso das duas partes;</li>
+          <li>decisão autônoma por IA, sem julgador humano interno, com direito de o sistema se abster;</li>
+          <li>verificação determinística, auditoria de segundo modelo e recurso automático;</li>
+          <li>o resultado não é, por si só, sentença judicial nem arbitral.</li>
+        </ul>
         <button className="link-button" onClick={() => setShowTerms(!showTerms)}>
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>
@@ -2011,6 +2131,13 @@ function Conclusion({ caseData }) {
                     : 'A decisão ainda não está aprovada'}
         </h2>
         <p>{decisionText}</p>
+        {approvedFinal && (
+          <p className="conclusion-trail">
+            A decisão passou pelo verificador determinístico e pela auditoria de um
+            segundo modelo. A attestation assinada registra o resultado; a parte
+            ainda pode contestar dentro da janela prevista.
+          </p>
+        )}
       </div>
       <div className="conclusion-facts">
         <Fact
