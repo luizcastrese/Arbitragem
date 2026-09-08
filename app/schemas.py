@@ -145,6 +145,17 @@ class ConciliationRoundRequest(BaseModel):
     new_information: str = Field(default="", max_length=10_000)
 
 
+class AgreementAcceptanceRequest(BaseModel):
+    party: str
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
 class ContestRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

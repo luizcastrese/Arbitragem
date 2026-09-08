@@ -53,6 +53,12 @@ def _approved_case_data():
         "decision": {
             "outcome": "partial",
             "partial_claimant_bps": 6500,
+            "remedy_calculation": {
+                "result_minor_units": 100_000,
+                "currency": "BRL",
+                "payer_party": "respondent",
+                "payee_party": "claimant",
+            },
             "confidence": 0.83,
             "requires_human_review": False,
             "execution": {"mode": "openai"},
@@ -76,6 +82,16 @@ def test_attestation_roundtrip_signature_and_split(attestation_env):
     assert attestation["decision"]["split"] == {
         "claimant_bps": 6500,
         "respondent_bps": 3500,
+    }
+    assert attestation["payment"] == {
+        "payer_party": "respondent",
+        "payee_party": "claimant",
+        "award_minor_units": 100_000,
+        "platform_fee_minor_units": 10_000,
+        "total_charge_minor_units": 110_000,
+        "currency": "BRL",
+        "platform_fee_bps": 1000,
+        "remedy_calculation_hash": attestation["payment"]["remedy_calculation_hash"],
     }
     assert attestation["signature_algorithm"] == "Ed25519"
     assert attestation["platform"]["key_id"] == public_key_info()["key_id"]

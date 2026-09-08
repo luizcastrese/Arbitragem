@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -110,6 +110,8 @@ class RemedyCalculation(BaseModel):
     inputs: List[CalculationInput] = Field(default_factory=list)
     result_minor_units: int
     currency: str = Field(min_length=3, max_length=8)
+    payer_party: Optional[Literal["claimant", "respondent"]] = None
+    payee_party: Optional[Literal["claimant", "respondent"]] = None
 
     @field_validator("result_minor_units", mode="before")
     @classmethod

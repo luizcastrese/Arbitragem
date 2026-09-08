@@ -60,6 +60,9 @@ saída em sentença arbitral ou estatal.
   chave pública publicada em `/.well-known/valinor-signing-key`, emitido apenas
   com a cadeia de auditoria íntegra e sujeito a uma janela de contestação em que
   qualquer das partes pode barrar a execução;
+- instrução de pagamento assinada na attestation: o vencedor recebe o valor
+  determinado e o pagador arca com acréscimo de 10% destinado à Valinor via
+  `application_fee_amount` do Stripe Connect;
 - âncora pública opcional da attestation em relays Nostr (só hash, assinatura e
   identificadores — nunca o teor da decisão ou das partes), dando timestamp
   independente do servidor da Valinor; a âncora só é registrada quando algum
@@ -293,6 +296,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/lock` | Travar manifesto |
 | `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `POST /cases/{id}/agreement/accept` | Aceitar expressamente a proposta atual; o segundo aceite encerra o caso por acordo |
 | `GET /cases/{id}/manifest` | Ler o manifesto travado |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
 | `GET /cases/{id}/chunks` | Listar os trechos indexados do caso |
@@ -315,6 +319,9 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /health` | Saúde da API, do banco e do modo de IA |
 
 ## Testes
+
+O workflow `.github/workflows/ci.yml` executa testes, avaliações offline,
+build/auditoria do frontend, migrações e build da imagem em cada pull request.
 
 ```bash
 source .venv/bin/activate

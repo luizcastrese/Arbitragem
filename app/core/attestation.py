@@ -22,6 +22,7 @@ from app.core.config import get_settings
 
 ATTESTATION_VERSION = "1.0"
 SIGNATURE_ALGORITHM = "Ed25519"
+VALINOR_FEE_BPS = 1000
 
 _SIGNATURE_FIELDS = ("signature", "signature_algorithm")
 
@@ -138,6 +139,39 @@ def _outcome_split(decision: Dict[str, Any]) -> Dict[str, int]:
     )
 
 
+def _payment_terms(decision: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    remedy = decision.get("remedy_calculation") or {}
+    amount = remedy.get("result_minor_units")
+    currency = remedy.get("currency")
+    if amount is None and not currency:
+        return None
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0 or not currency:
+        raise AttestationError("Remédio monetário sem valor positivo e moeda")
+    payer = remedy.get("payer_party")
+    payee = remedy.get("payee_party")
+    if not payer or not payee:
+        outcome = decision.get("outcome")
+        if outcome == "claimant":
+            payer, payee = "respondent", "claimant"
+        elif outcome == "respondent":
+            payer, payee = "claimant", "respondent"
+        else:
+            raise AttestationError("Decisão parcial deve declarar payer_party e payee_party")
+    if payer == payee:
+        raise AttestationError("Pagador e recebedor não podem ser a mesma parte")
+    fee = (amount * VALINOR_FEE_BPS + 9999) // 10000
+    return {
+        "payer_party": payer,
+        "payee_party": payee,
+        "award_minor_units": amount,
+        "platform_fee_minor_units": fee,
+        "total_charge_minor_units": amount + fee,
+        "currency": str(currency).upper(),
+        "platform_fee_bps": VALINOR_FEE_BPS,
+        "remedy_calculation_hash": canonical_hash(remedy),
+    }
+
+
 def assert_executable(
     decision: Dict[str, Any],
     review: Dict[str, Any],
@@ -217,6 +251,7 @@ def build_decision_attestation(
         procedure_conclusion=procedure_conclusion,
     )
     split = _outcome_split(decision)
+    payment = _payment_terms(decision)
 
     key = private_key or load_private_key()
     key_info = public_key_info(key)
@@ -246,6 +281,7 @@ def build_decision_attestation(
             "confidence": decision.get("confidence"),
             "execution_id": (decision.get("execution") or {}).get("execution_id"),
         },
+        **({"payment": payment} if payment else {}),
         "review": {
             "approved": bool(review.get("approved") or review.get("outcome") == "approved"),
             "outcome": review.get("outcome") or (
