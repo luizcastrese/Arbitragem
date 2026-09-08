@@ -60,6 +60,9 @@ saída em sentença arbitral ou estatal.
   chave pública publicada em `/.well-known/valinor-signing-key`, emitido apenas
   com a cadeia de auditoria íntegra e sujeito a uma janela de contestação em que
   qualquer das partes pode barrar a execução;
+- instrução de pagamento assinada na attestation: o vencedor recebe o valor
+  determinado e o pagador arca com acréscimo de 10% destinado à Valinor via
+  `application_fee_amount` do Stripe Connect;
 - âncora pública opcional da attestation em relays Nostr (só hash, assinatura e
   identificadores — nunca o teor da decisão ou das partes), dando timestamp
   independente do servidor da Valinor; a âncora só é registrada quando algum
