@@ -128,6 +128,7 @@ from app.reports.docx_generator import build_docx_report
 from app.schemas import (
     AcceptInvitationRequest,
     AddDocumentRequest,
+    AgreementAcceptanceRequest,
     AttestationVerifyRequest,
     ConciliationRoundRequest,
     ConsentRequest,
@@ -1552,6 +1553,71 @@ def assess_case_conciliation(
         },
     )
     return conciliation
+
+
+@app.post("/cases/{case_id}/agreement/accept")
+def accept_conciliation_agreement(
+    case_id: str,
+    payload: AgreementAcceptanceRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Registra o aceite expresso da proposta mais recente por cada parte."""
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, payload.party)
+    case_data = case_to_dict(case)
+    if case.status == "agreement":
+        return case_data["conciliation"].get("agreement")
+    if case_data.get("organized"):
+        raise HTTPException(status_code=409, detail="A fase de composição já foi encerrada")
+
+    rounds = case_data["conciliation_rounds"]
+    if not rounds:
+        raise HTTPException(status_code=409, detail="Gere uma proposta de composição antes do aceite")
+    latest = dict(rounds[-1])
+    terms = latest.get("possible_terms") or []
+    if not terms:
+        raise HTTPException(status_code=409, detail="A rodada atual não contém proposta para aceite")
+
+    proposal = {
+        "round_number": latest.get("round_number") or len(rounds),
+        "terms": terms,
+    }
+    proposal_hash = canonical_hash(proposal)
+    agreement = dict(latest.get("agreement") or {})
+    if agreement and agreement.get("proposal_hash") != proposal_hash:
+        agreement = {}
+    acceptances = dict(agreement.get("acceptances") or {})
+    acceptances[payload.party] = {
+        "accepted": True,
+        "accepted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    complete = all(acceptances.get(party, {}).get("accepted") for party in ("claimant", "respondent"))
+    agreement = {
+        **proposal,
+        "proposal_hash": proposal_hash,
+        "acceptances": acceptances,
+        "complete": complete,
+    }
+    latest["agreement"] = agreement
+    updated_rounds = [*rounds[:-1], latest]
+    if complete:
+        case.procedure_conclusion = "agreement"
+    save_stage(
+        db,
+        case,
+        field="conciliation_json",
+        value=updated_rounds,
+        status="agreement" if complete else "conciliation",
+        event_type="agreement_completed" if complete else "agreement_accepted",
+        event_payload={
+            "party": payload.party,
+            "round_number": proposal["round_number"],
+            "proposal_hash": proposal_hash,
+            "complete": complete,
+        },
+    )
+    return agreement
 
 
 @app.post("/cases/{case_id}/organize")

@@ -341,6 +341,18 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
                 ("Próximo foco", str(round_data.get("next_round_focus", ""))),
             ),
         )
+        agreement = round_data.get("agreement") or {}
+        if agreement.get("complete"):
+            document.add_heading("Acordo aceito pelas partes", level=3)
+            document.add_paragraph(_join_items(agreement.get("terms") or []))
+            _add_key_value_table(
+                document,
+                (
+                    ("Hash SHA-256 da proposta", agreement.get("proposal_hash", "")),
+                    ("Aceite do cliente", (agreement.get("acceptances", {}).get("claimant") or {}).get("accepted_at", "")),
+                    ("Aceite da empresa", (agreement.get("acceptances", {}).get("respondent") or {}).get("accepted_at", "")),
+                ),
+            )
 
     document.add_heading("5. Organização e decisão por IA", level=1)
     organized = case.get("organized") or {}

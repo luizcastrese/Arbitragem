@@ -81,11 +81,18 @@ function userHasRole(caseData, user, role) {
   )
 }
 
+function nextOpenDeadline(caseData) {
+  return (caseData?.deadlines || [])
+    .filter((deadline) => deadline.status !== 'completed')
+    .sort((left, right) => new Date(left.due_at) - new Date(right.due_at))[0]
+}
+
 const statusLabels = {
   draft: 'Recebendo documentos',
   locked: 'Documentos protegidos',
   locking: 'Travando o manifesto',
   conciliation: 'Composição avaliada',
+  agreement: 'Acordo firmado',
   organized: 'Fatos organizados',
   processing_organize: 'Organizando o registro',
   processing_decision: 'Decisão em processamento',
@@ -100,6 +107,28 @@ const statusLabels = {
   inadmissible: 'Caso inadmissível',
   invalidated: 'Decisão invalidada',
   system_failure: 'Falha do sistema'
+}
+
+const actionableStatuses = new Set(['draft', 'locked', 'conciliation', 'organized', 'decided'])
+
+function stageIndexFor(caseData) {
+  const directIndex = steps.findIndex((step) => step.key === caseData?.status)
+  if (directIndex >= 0) return directIndex
+
+  if (['processing_review', 'reviewed', 'processing_attestation', 'attested', 'processing_appeal', 'contested'].includes(caseData?.status)) return 5
+  if (caseData?.status === 'processing_decision') return 4
+  if (caseData?.status === 'processing_organize') return 3
+  if (caseData?.status === 'locking') return 1
+
+  // Terminal outcomes do not have their own item in the visual timeline. Keep
+  // the progress at the latest phase that actually produced an artifact.
+  if (caseData?.status === 'agreement') return 2
+  if (caseData?.review) return 5
+  if (caseData?.decision) return 4
+  if (caseData?.organized) return 3
+  if (caseData?.conciliation || caseData?.conciliation_rounds?.length) return 2
+  if (caseData?.manifest_locked) return 1
+  return 0
 }
 
 export default function App() {
@@ -129,7 +158,7 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState('')
 
   const currentStage = useMemo(
-    () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
+    () => stageIndexFor(caseData),
     [caseData]
   )
 
@@ -570,6 +599,9 @@ export default function App() {
                         : statusLabels[item.status]}
                       {' · '}{item.documents_count} doc.
                     </em>
+                    {nextOpenDeadline(item) && (
+                      <em>Próximo prazo: {new Date(nextOpenDeadline(item).due_at).toLocaleDateString('pt-BR')}</em>
+                    )}
                   </span>
                 </button>
               ))}
@@ -1005,10 +1037,9 @@ function CaseWorkspace({
 
       <ProcessSteps currentStage={displayedStage} blockedByAI={unavailable} />
 
-      {caseData.status !== 'reviewed'
-        && caseData.status !== 'attested'
-        && caseData.status !== 'contested'
-        && !String(caseData.status || '').startsWith('processing') && (
+      <RoleChecklist caseData={caseData} roles={roles} />
+
+      {actionableStatuses.has(caseData.status) && (
         <NextAction
           caseData={caseData}
           busy={busy}
@@ -1064,7 +1095,7 @@ function CaseWorkspace({
         user={user}
       />
 
-      {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
+      {['agreement', 'reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
 
@@ -1078,6 +1109,32 @@ function CaseWorkspace({
         setOpen={setShowTechnical}
       />
     </>
+  )
+}
+
+function RoleChecklist({ caseData, roles }) {
+  const tasks = []
+  const pendingDocuments = caseData.documents.filter((document) => !document.admitted)
+  if (caseData.status === 'draft') {
+    if (roles.claimant && !caseData.consent?.claimant?.accepted) tasks.push('Aceitar os termos do procedimento como cliente.')
+    if (roles.respondent && !caseData.consent?.respondent?.accepted) tasks.push('Aceitar os termos do procedimento como empresa.')
+    if ((roles.claimant || roles.respondent) && !caseData.documents.length) tasks.push('Apresentar documentos e explicar o que cada material demonstra.')
+    if ((roles.claimant || roles.respondent) && pendingDocuments.some((document) => roles[document.counterparty])) tasks.push('Confirmar ciência e responder aos materiais da contraparte.')
+    if (roles.manager && pendingDocuments.length) tasks.push('Acompanhar o contraditório e admitir os materiais concluídos.')
+    if (roles.manager && caseData.consent?.complete && caseData.contradictory?.complete) tasks.push('Fixar o conjunto documental para iniciar a análise.')
+  } else if (caseData.status === 'conciliation') {
+    if (roles.claimant || roles.respondent) tasks.push('Avaliar a proposta atual: aceitar, recusar ou apresentar contraproposta.')
+    if (roles.manager) tasks.push('Conduzir outra rodada ou encerrar a composição e seguir para julgamento.')
+  } else if (roles.manager && actionableStatuses.has(caseData.status)) {
+    tasks.push('Executar a próxima etapa destacada abaixo.')
+  }
+
+  if (!tasks.length) return null
+  return (
+    <section className="role-checklist">
+      <div><span className="section-label">Suas pendências</span><strong>O que depende de você agora</strong></div>
+      <ul>{tasks.map((task) => <li key={task}><Circle size={10} /> {task}</li>)}</ul>
+    </section>
   )
 }
 
@@ -1680,6 +1737,18 @@ function ConciliationActions({
     || claimantResponse.trim()
     || respondentResponse.trim()
     || conciliationUpdate.trim()
+  const agreement = latest.agreement || {}
+
+  function acceptAgreement(party) {
+    return run(
+      `Registrando o aceite de ${partyLabel(party, caseData)}...`,
+      () => request(`/cases/${caseData.id}/agreement/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, party) },
+        body: JSON.stringify({ party })
+      })
+    )
+  }
 
   async function generateNextRound() {
     const result = await run(
@@ -1750,6 +1819,26 @@ function ConciliationActions({
           />
         </label>
       </div>
+
+      {latest.possible_terms?.length > 0 && (
+        <div className="agreement-box">
+          <div>
+            <span className="section-label">Proposta desta rodada</span>
+            <strong>Aceite bilateral do acordo</strong>
+            <ul>{latest.possible_terms.map((term) => <li key={term}>{term}</li>)}</ul>
+            {agreement.proposal_hash && <small>Proposta SHA-256 {agreement.proposal_hash.slice(0, 16)}…</small>}
+          </div>
+          <div className="agreement-actions">
+            {['claimant', 'respondent'].map((party) => agreement.acceptances?.[party]?.accepted ? (
+              <span className="agreement-accepted" key={party}><Check size={14} /> {partyLabel(party, caseData)} aceitou</span>
+            ) : (
+              <button className="button secondary compact" key={party} disabled={busy || !roles[party]} onClick={() => acceptAgreement(party)}>
+                Aceitar como {party === 'claimant' ? 'cliente' : 'empresa'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="conciliation-buttons">
         <button
@@ -1963,6 +2052,21 @@ function EvidenceState({ done, label }) {
 }
 
 function Conclusion({ caseData }) {
+  if (caseData.status === 'agreement' || caseData.procedure_conclusion === 'agreement') {
+    const agreement = caseData.conciliation?.agreement || {}
+    return (
+      <section className="conclusion approved">
+        <div className="conclusion-icon"><Handshake size={28} /></div>
+        <div className="conclusion-copy">
+          <span className="section-label">Composição consensual</span>
+          <h2>Acordo aceito pelas duas partes</h2>
+          <p>A proposta da rodada {agreement.round_number} foi aceita expressamente pelo cliente e pela empresa. O registro abaixo identifica exatamente os termos acordados.</p>
+          <ListBlock title="Termos do acordo" items={agreement.terms} />
+          <small>SHA-256 da proposta: {agreement.proposal_hash}</small>
+        </div>
+      </section>
+    )
+  }
   const decision = caseData.decision || {}
   const review = caseData.review || {}
   const verification = caseData.verification || {}

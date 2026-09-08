@@ -158,6 +158,55 @@ def prepare_locked_case(client):
     return case_id, document, locked
 
 
+def test_bilateral_agreement_closes_conciliation_with_auditable_proposal(client, monkeypatch):
+    from app import main as main_module
+    from app.agents.conciliator import assess_conciliation as original_assessment
+
+    def assessment_with_terms(context, round_number):
+        return {
+            **original_assessment(context, round_number),
+            "possible_terms": ["Entrega complementar em 15 dias", "Pagamento após o aceite"],
+        }
+
+    monkeypatch.setattr(main_module, "assess_conciliation", assessment_with_terms)
+    case_id, _, _ = prepare_locked_case(client)
+    round_response = client.post(
+        f"/cases/{case_id}/conciliation",
+        headers=actor_headers(case_id, "manager"),
+    )
+    assert round_response.status_code == 200
+    assert round_response.json()["possible_terms"]
+
+    claimant = client.post(
+        f"/cases/{case_id}/agreement/accept",
+        json={"party": "claimant"},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert claimant.status_code == 200
+    assert claimant.json()["complete"] is False
+    assert len(claimant.json()["proposal_hash"]) == 64
+
+    respondent = client.post(
+        f"/cases/{case_id}/agreement/accept",
+        json={"party": "respondent"},
+        headers=actor_headers(case_id, "respondent"),
+    )
+    assert respondent.status_code == 200
+    assert respondent.json()["complete"] is True
+
+    persisted = client.get(f"/cases/{case_id}").json()
+    assert persisted["status"] == "agreement"
+    assert persisted["procedure_conclusion"] == "agreement"
+    assert persisted["conciliation"]["agreement"]["proposal_hash"] == respondent.json()["proposal_hash"]
+    assert persisted["audit_log"][-1]["event_type"] == "agreement_completed"
+
+    blocked = client.post(
+        f"/cases/{case_id}/organize",
+        headers=actor_headers(case_id, "manager"),
+    )
+    assert blocked.status_code == 409
+
+
 def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert client.get("/health").json()["status"] == "ok"
     case = create_case(client)

@@ -929,6 +929,16 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #71
   border-radius: 15px;
 }
 .conclusion.approved .conclusion-icon { color: var(--green-700); background: var(--green-100); }
+.agreement-box { display: grid; grid-template-columns: 1fr auto; gap: 18px; margin-top: 18px; padding: 18px; border: 1px solid #c9dec5; border-radius: 12px; background: #f7fbf5; }
+.agreement-box strong { display: block; margin: 5px 0 8px; }
+.agreement-box ul { margin: 8px 0; padding-left: 20px; color: #5c665f; }
+.agreement-actions { display: grid; align-content: center; gap: 8px; }
+.agreement-accepted { display: flex; align-items: center; gap: 6px; color: var(--green-700); font-size: 12px; font-weight: 700; }
+.role-checklist { display: grid; grid-template-columns: minmax(180px, .7fr) 1.3fr; gap: 20px; margin: 14px 0; padding: 17px 20px; border: 1px solid #dbe5d8; border-radius: 12px; background: #fbfdf9; }
+.role-checklist strong { display: block; margin-top: 4px; }
+.role-checklist ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.role-checklist li { display: flex; align-items: baseline; gap: 8px; color: #5c665f; font-size: 12px; }
+.role-checklist li svg { flex: 0 0 auto; color: var(--green-700); fill: var(--green-100); }
 .conclusion-copy h2 { margin: 5px 0 8px; font-size: 27px; letter-spacing: -.025em; }
 .conclusion-copy p { max-width: 700px; margin: 0; color: #5c665f; line-height: 1.55; }
 .conclusion-facts {
@@ -1097,7 +1107,7 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .case-brief-grid { grid-template-columns: 1fr; }
   .progress-summary { display: none; }
   .guided-form { grid-template-columns: 1fr; }
-  .audience-cards, .party-response-grid, .consent-grid, .submission-context, .how-steps { grid-template-columns: 1fr; }
+  .audience-cards, .party-response-grid, .consent-grid, .submission-context, .how-steps, .agreement-box, .role-checklist { grid-template-columns: 1fr; }
   .auth-panel { grid-template-columns: 1fr; }
   .auth-switch { position: static; justify-self: start; }
   .invite-banner { grid-template-columns: auto 1fr; }

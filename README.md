@@ -293,6 +293,7 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/lock` | Travar manifesto |
 | `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `POST /cases/{id}/agreement/accept` | Aceitar expressamente a proposta atual; o segundo aceite encerra o caso por acordo |
 | `GET /cases/{id}/manifest` | Ler o manifesto travado |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
 | `GET /cases/{id}/chunks` | Listar os trechos indexados do caso |
