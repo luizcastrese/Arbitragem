@@ -103,7 +103,7 @@ from app.db.repository import (
     save_nostr_anchor,
     append_audit,
 )
-from app.db.models import Deadline, Invitation
+from app.db.models import Case, Deadline, Invitation
 from app.db.session import get_db
 from app.domain.concurrency import StageBusy, claim_case_stage
 from app.domain.frameworks import list_frameworks
@@ -1565,6 +1565,17 @@ def accept_conciliation_agreement(
     """Registra o aceite expresso da proposta mais recente por cada parte."""
     case = _case_or_404(db, case_id)
     _require_actor(db, case, x_actor_token, payload.party)
+    # Serialize acceptances for the same case. Without this lock, simultaneous
+    # accepts could both read the old JSON and the last commit would erase the
+    # other party's acceptance. PostgreSQL enforces FOR UPDATE; SQLite ignores
+    # it, which is sufficient for the single-process development/test setup.
+    case = (
+        db.query(Case)
+        .filter(Case.id == case_id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
     case_data = case_to_dict(case)
     if case.status == "agreement":
         return case_data["conciliation"].get("agreement")
@@ -1588,6 +1599,9 @@ def accept_conciliation_agreement(
     if agreement and agreement.get("proposal_hash") != proposal_hash:
         agreement = {}
     acceptances = dict(agreement.get("acceptances") or {})
+    existing_acceptance = acceptances.get(payload.party) or {}
+    if existing_acceptance.get("accepted"):
+        return {**agreement, "idempotent_replay": True}
     acceptances[payload.party] = {
         "accepted": True,
         "accepted_at": datetime.now(timezone.utc).isoformat(),

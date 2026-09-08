@@ -317,6 +317,9 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 
 ## Testes
 
+O workflow `.github/workflows/ci.yml` executa testes, avaliações offline,
+build/auditoria do frontend, migrações e build da imagem em cada pull request.
+
 ```bash
 source .venv/bin/activate
 python -m pytest

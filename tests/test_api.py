@@ -186,6 +186,17 @@ def test_bilateral_agreement_closes_conciliation_with_auditable_proposal(client,
     assert claimant.json()["complete"] is False
     assert len(claimant.json()["proposal_hash"]) == 64
 
+    replay = client.post(
+        f"/cases/{case_id}/agreement/accept",
+        json={"party": "claimant"},
+        headers=actor_headers(case_id, "claimant"),
+    )
+    assert replay.status_code == 200
+    assert replay.json()["idempotent_replay"] is True
+    assert replay.json()["acceptances"]["claimant"] == claimant.json()["acceptances"]["claimant"]
+    after_replay = client.get(f"/cases/{case_id}").json()
+    assert [event["event_type"] for event in after_replay["audit_log"]].count("agreement_accepted") == 1
+
     respondent = client.post(
         f"/cases/{case_id}/agreement/accept",
         json={"party": "respondent"},
