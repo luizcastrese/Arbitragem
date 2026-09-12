@@ -126,6 +126,7 @@ export default function App() {
   const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '')
   const [terms, setTerms] = useState(null)
+  const [privacy, setPrivacy] = useState(null)
   const [authNotice, setAuthNotice] = useState('')
 
   const currentStage = useMemo(
@@ -278,6 +279,9 @@ export default function App() {
         try {
           setTerms(await request('/terms'))
         } catch { /* sem os termos, o painel de aceite avisa e não deixa aceitar às cegas */ }
+        try {
+          setPrivacy(await request('/privacy'))
+        } catch { /* a política é informativa aqui; o aceite não depende dela */ }
 
         const verifyToken = new URLSearchParams(window.location.search).get('verify')
         if (verifyToken) {
@@ -310,18 +314,47 @@ export default function App() {
     bootstrap()
   }, [])
 
+  // As etapas que chamam modelos respondem 202 e seguem em segundo plano: uma
+  // decisão pode levar minutos e nenhum gateway segura a conexão até lá. O
+  // cliente acompanha pelo endpoint de polling que veio na resposta.
+  async function waitForStage(pollPath) {
+    const deadline = Date.now() + 15 * 60 * 1000
+    let delay = 800
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      delay = Math.min(Math.round(delay * 1.4), 5000)
+      const body = await request(pollPath)
+      if (body.state === 'failed') {
+        throw new Error(
+          body.error
+            ? `A etapa não pôde ser concluída (${body.error}). Você pode tentar de novo.`
+            : 'A etapa não pôde ser concluída. Você pode tentar de novo.'
+        )
+      }
+      if (body.state !== 'processing') return body.result
+    }
+    throw new Error(
+      'A etapa está demorando mais do que o esperado. Ela continua rodando: '
+      + 'recarregue o caso em alguns minutos para ver o resultado.'
+    )
+  }
+
   async function run(label, action) {
     setBusy(true)
     setError('')
     setStatus(label)
     try {
-      const result = await action()
+      let result = await action()
+      if (result?.state === 'processing' && result?.poll) {
+        result = await waitForStage(result.poll)
+      }
       if (caseData?.id) await loadCases(caseData.id)
       setStatus('Pronto. Você pode seguir para a próxima etapa.')
       return result
     } catch (err) {
       setError(err.message)
       setStatus('')
+      if (caseData?.id) await loadCases(caseData.id).catch(() => {})
     } finally {
       setBusy(false)
     }
@@ -625,6 +658,8 @@ export default function App() {
                 setClaimantResponse={setClaimantResponse}
                 setRespondentResponse={setRespondentResponse}
                 setConciliationUpdate={setConciliationUpdate}
+                terms={terms}
+                privacy={privacy}
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
                 user={user}
@@ -970,6 +1005,8 @@ function CaseWorkspace({
   setClaimantResponse,
   setRespondentResponse,
   setConciliationUpdate,
+  terms,
+  privacy,
   showTechnical,
   setShowTechnical,
   user
@@ -1034,6 +1071,8 @@ function CaseWorkspace({
           setRespondentResponse={setRespondentResponse}
           setConciliationUpdate={setConciliationUpdate}
           roles={roles}
+          terms={terms}
+          privacy={privacy}
         />
       )}
 
@@ -1340,7 +1379,9 @@ function NextAction({
   setClaimantResponse,
   setRespondentResponse,
   setConciliationUpdate,
-  roles
+  roles,
+  terms,
+  privacy
 }) {
   const actionContent = {
     draft: {
@@ -1411,6 +1452,7 @@ function NextAction({
             actorHeaders={actorHeaders}
             roles={roles}
             terms={terms}
+            privacy={privacy}
           />
 
           <div className="submission-context">
@@ -1572,8 +1614,9 @@ function NextAction({
   )
 }
 
-function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms }) {
+function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms, privacy }) {
   const [showTerms, setShowTerms] = useState(false)
+  const [showPrivacy, setShowPrivacy] = useState(false)
   const entries = [
     {
       party: 'claimant',
@@ -1649,12 +1692,21 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
         {showTerms && (
           <pre className="terms-text">{terms?.text || 'Carregando os termos...'}</pre>
         )}
+        <button className="link-button" onClick={() => setShowPrivacy(!showPrivacy)}>
+          {showPrivacy ? 'Ocultar a política de privacidade' : 'Ler a política de privacidade'}
+        </button>
+        {showPrivacy && (
+          <pre className="terms-text">{privacy?.text || 'Carregando a política de privacidade...'}</pre>
+        )}
       </div>
       <small>
         {terms
           ? <>Versão dos termos: {terms.version} · SHA-256 {terms.sha256.slice(0, 16)}…</>
           : 'Carregando a versão vigente dos termos...'}
         {' '}O aceite grava a versão e o hash deste texto na cadeia de auditoria, junto ao papel e ao momento.
+        {privacy && (
+          <> Política de privacidade: versão {privacy.version} · SHA-256 {privacy.sha256.slice(0, 16)}…</>
+        )}
       </small>
     </div>
   )

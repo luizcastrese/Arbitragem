@@ -134,25 +134,25 @@ def _reviewed_safe_case(client):
     )
     assert (
         client.post(
-            f"/cases/{case_id}/conciliation", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/conciliation?wait=120", headers=_headers(case_id, "manager")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/organize", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/organize?wait=120", headers=_headers(case_id, "manager")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/decide", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/decide?wait=120", headers=_headers(case_id, "manager")
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/review", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/review?wait=120", headers=_headers(case_id, "manager")
         ).status_code
         == 200
     )
@@ -187,7 +187,7 @@ def test_contest_requires_attestation_and_party_credential(client):
     case_id = _reviewed_safe_case(client)
     # Sem attestation emitida, contestar é 409
     response = client.post(
-        f"/cases/{case_id}/contest",
+        f"/cases/{case_id}/contest?wait=120",
         json={"reason": "Discordo do resultado apresentado."},
         headers=_headers(case_id, "claimant"),
     )
@@ -195,7 +195,7 @@ def test_contest_requires_attestation_and_party_credential(client):
 
     # Gestor não pode contestar
     response = client.post(
-        f"/cases/{case_id}/contest",
+        f"/cases/{case_id}/contest?wait=120",
         json={"reason": "Tentativa indevida de contestação."},
         headers=_headers(case_id, "manager"),
     )

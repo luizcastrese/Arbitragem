@@ -187,6 +187,8 @@ def test_production_forces_auth_and_disables_role_tokens(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "a-very-long-production-secret-value")
     monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    monkeypatch.setenv("DATA_CONTROLLER_NAME", "Valinor Testes Ltda")
+    monkeypatch.setenv("PRIVACY_CONTACT_EMAIL", "privacidade@example.com")
     config.get_settings.cache_clear()
     try:
         settings = config.get_settings()

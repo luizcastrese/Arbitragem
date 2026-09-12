@@ -62,20 +62,20 @@ def client():
 def _through_review(client):
     case_id, document, _ = prepare_locked_case(client)
     assert client.post(
-        f"/cases/{case_id}/conciliation",
+        f"/cases/{case_id}/conciliation?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).status_code == 200
     assert client.post(
-        f"/cases/{case_id}/organize",
+        f"/cases/{case_id}/organize?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).status_code == 200
     decision = client.post(
-        f"/cases/{case_id}/decide",
+        f"/cases/{case_id}/decide?wait=120",
         headers=actor_headers(case_id, "manager"),
     )
     assert decision.status_code == 200
     review = client.post(
-        f"/cases/{case_id}/review",
+        f"/cases/{case_id}/review?wait=120",
         headers=actor_headers(case_id, "manager"),
     )
     assert review.status_code == 200
@@ -103,17 +103,17 @@ def test_safe_flow_ends_autonomously_without_human_review(client):
 def test_decide_is_idempotent_and_does_not_loop(client):
     case_id, first, _ = _through_review(client)
     second = client.post(
-        f"/cases/{case_id}/decide",
+        f"/cases/{case_id}/decide?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     third = client.post(
-        f"/cases/{case_id}/review",
+        f"/cases/{case_id}/review?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     assert first["decision"] == second["decision"]
     assert canonical_hash(first) == canonical_hash(second)
     review_again = client.post(
-        f"/cases/{case_id}/review",
+        f"/cases/{case_id}/review?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     assert third == review_again
@@ -160,7 +160,7 @@ def test_locked_manifest_records_independence_and_framework(client):
 def test_contest_without_attestation_is_still_409(client):
     case_id, _, _ = _through_review(client)
     response = client.post(
-        f"/cases/{case_id}/contest",
+        f"/cases/{case_id}/contest?wait=120",
         json={"reason": "Discordo do resultado apresentado."},
         headers=actor_headers(case_id, "claimant"),
     )
