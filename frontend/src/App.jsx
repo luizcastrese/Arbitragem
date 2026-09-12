@@ -126,6 +126,7 @@ export default function App() {
   const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '')
   const [terms, setTerms] = useState(null)
+  const [privacy, setPrivacy] = useState(null)
   const [authNotice, setAuthNotice] = useState('')
 
   const currentStage = useMemo(
@@ -278,6 +279,9 @@ export default function App() {
         try {
           setTerms(await request('/terms'))
         } catch { /* sem os termos, o painel de aceite avisa e não deixa aceitar às cegas */ }
+        try {
+          setPrivacy(await request('/privacy'))
+        } catch { /* a política é informativa aqui; o aceite não depende dela */ }
 
         const verifyToken = new URLSearchParams(window.location.search).get('verify')
         if (verifyToken) {
@@ -625,6 +629,8 @@ export default function App() {
                 setClaimantResponse={setClaimantResponse}
                 setRespondentResponse={setRespondentResponse}
                 setConciliationUpdate={setConciliationUpdate}
+                terms={terms}
+                privacy={privacy}
                 showTechnical={showTechnical}
                 setShowTechnical={setShowTechnical}
                 user={user}
@@ -970,6 +976,8 @@ function CaseWorkspace({
   setClaimantResponse,
   setRespondentResponse,
   setConciliationUpdate,
+  terms,
+  privacy,
   showTechnical,
   setShowTechnical,
   user
@@ -1034,6 +1042,8 @@ function CaseWorkspace({
           setRespondentResponse={setRespondentResponse}
           setConciliationUpdate={setConciliationUpdate}
           roles={roles}
+          terms={terms}
+          privacy={privacy}
         />
       )}
 
@@ -1340,7 +1350,9 @@ function NextAction({
   setClaimantResponse,
   setRespondentResponse,
   setConciliationUpdate,
-  roles
+  roles,
+  terms,
+  privacy
 }) {
   const actionContent = {
     draft: {
@@ -1411,6 +1423,7 @@ function NextAction({
             actorHeaders={actorHeaders}
             roles={roles}
             terms={terms}
+            privacy={privacy}
           />
 
           <div className="submission-context">
@@ -1572,8 +1585,9 @@ function NextAction({
   )
 }
 
-function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms }) {
+function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms, privacy }) {
   const [showTerms, setShowTerms] = useState(false)
+  const [showPrivacy, setShowPrivacy] = useState(false)
   const entries = [
     {
       party: 'claimant',
@@ -1649,12 +1663,21 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
         {showTerms && (
           <pre className="terms-text">{terms?.text || 'Carregando os termos...'}</pre>
         )}
+        <button className="link-button" onClick={() => setShowPrivacy(!showPrivacy)}>
+          {showPrivacy ? 'Ocultar a política de privacidade' : 'Ler a política de privacidade'}
+        </button>
+        {showPrivacy && (
+          <pre className="terms-text">{privacy?.text || 'Carregando a política de privacidade...'}</pre>
+        )}
       </div>
       <small>
         {terms
           ? <>Versão dos termos: {terms.version} · SHA-256 {terms.sha256.slice(0, 16)}…</>
           : 'Carregando a versão vigente dos termos...'}
         {' '}O aceite grava a versão e o hash deste texto na cadeia de auditoria, junto ao papel e ao momento.
+        {privacy && (
+          <> Política de privacidade: versão {privacy.version} · SHA-256 {privacy.sha256.slice(0, 16)}…</>
+        )}
       </small>
     </div>
   )

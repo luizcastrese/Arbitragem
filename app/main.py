@@ -26,11 +26,13 @@ from app.agents.reviewer import review_decision
 from app.core.attestation import (
     AttestationError,
     build_decision_attestation,
+    key_set,
     public_key_info,
     verify_attestation,
 )
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
+from app.core.client_ip import resolve_client_ip
 from app.core.config import get_settings
 from app.core.email import (
     deliver_invitation_email,
@@ -40,6 +42,12 @@ from app.core.email import (
 from app.core.hashing import sha256_text
 from app.core.manifest import lock_case_manifest
 from app.core.nostr_anchor import publish_attestation_anchor
+from app.core.privacy import (
+    PrivacyPolicyNotFound,
+    current_policy,
+    get_policy,
+    list_versions as list_privacy_versions,
+)
 from app.core.prompt_registry import detect_drift
 from app.core.ratelimit import SlidingWindowRateLimiter
 from app.core.signed_url import (
@@ -78,6 +86,12 @@ from app.db.access_repository import (
     user_case_ids,
     user_has_role,
     user_to_dict,
+)
+from app.db.privacy_repository import (
+    ErasureBlocked,
+    anonymize_user,
+    export_user_data,
+    open_case_ids,
 )
 from app.db.init_db import init_db
 from app.db.repository import (
@@ -153,10 +167,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("valinor.request")
 
+TRUSTED_PROXY_NETWORKS = settings.trusted_proxy_networks
+
 rate_limiter = SlidingWindowRateLimiter(
     max_requests=settings.rate_limit_max_requests,
     window_seconds=settings.rate_limit_window_seconds,
     enabled=settings.rate_limit_enabled,
+    max_keys=settings.rate_limit_max_keys,
 )
 
 # As rotas de credencial (login, cadastro, verificação e redefinição) têm um
@@ -167,7 +184,15 @@ auth_rate_limiter = SlidingWindowRateLimiter(
     max_requests=settings.auth_rate_limit_max_requests,
     window_seconds=settings.auth_rate_limit_window_seconds,
     enabled=True,
+    max_keys=settings.rate_limit_max_keys,
 )
+
+if settings.proxy_awareness_missing:
+    logger.warning(
+        "rate_limit_sem_proxy_declarado: TRUSTED_PROXY_IPS está vazio. Se "
+        "houver proxy ou balanceador na frente do serviço, todas as "
+        "requisições compartilharão a mesma chave de rate limit."
+    )
 
 AUTH_RATE_LIMITED_PATHS = {
     "/auth/register",
@@ -219,7 +244,11 @@ async def observability_and_rate_limit(request: Request, call_next):
         request.scope["headers"] = headers
 
     request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    client_key = request.client.host if request.client else "unknown"
+    client_key = resolve_client_ip(
+        request.client.host if request.client else None,
+        request.headers.get("x-forwarded-for"),
+        TRUSTED_PROXY_NETWORKS,
+    )
 
     if request.url.path in AUTH_RATE_LIMITED_PATHS and request.method == "POST":
         allowed, retry_after = auth_rate_limiter.allow(f"auth:{client_key}")
@@ -539,6 +568,7 @@ def root():
         "status": "running",
         "docs": "/docs",
         "ui": "/ui/",
+        "privacy_policy": "/privacy",
         "openai_enabled": settings.openai_enabled,
         "auth_required": settings.auth_required,
         "procedure_terms": {
@@ -563,6 +593,19 @@ def root():
                 (
                     "PLATFORM_SIGNING_SECRET usa valor de desenvolvimento."
                     if settings.using_development_signing_secret
+                    else None
+                ),
+                (
+                    "TRUSTED_PROXY_IPS vazio com rate limit ligado: atrás de um "
+                    "proxy todas as requisições dividem a mesma chave."
+                    if settings.proxy_awareness_missing
+                    else None
+                ),
+                (
+                    "DATA_CONTROLLER_NAME/PRIVACY_CONTACT_EMAIL não declarados: "
+                    "a política de privacidade fica sem controlador e sem canal "
+                    "para o titular."
+                    if not settings.privacy_contacts_declared
                     else None
                 ),
             ]
@@ -1026,6 +1069,131 @@ def get_terms_version(version: str):
     }
 
 
+@app.get("/privacy")
+def get_current_privacy_policy():
+    """Política de privacidade vigente, com versão, hash e identificação do
+    controlador. É o endereço que os termos do procedimento referenciam."""
+    settings_now = get_settings()
+    return {
+        **current_policy().as_dict(),
+        "available_versions": list_privacy_versions(),
+        "controller": {
+            "name": settings_now.data_controller_name or None,
+            "contact_email": settings_now.privacy_contact_email or None,
+            "declared": settings_now.privacy_contacts_declared,
+        },
+        "retention": {
+            "document_retention_days": settings_now.document_retention_days,
+            "enabled": settings_now.document_retention_days > 0,
+        },
+        "processing": {
+            "llm_enabled": settings_now.llm_enabled,
+            "llm_providers": sorted(
+                {
+                    provider
+                    for provider, enabled in (
+                        ("openai", settings_now.openai_enabled),
+                        ("openrouter", settings_now.openrouter_enabled),
+                    )
+                    if enabled
+                }
+            ),
+            "nostr_anchor_enabled": settings_now.nostr_anchor_enabled,
+        },
+        "rights_endpoints": {
+            "access_and_portability": "GET /account/data-export",
+            "erasure": "POST /account/erasure",
+        },
+    }
+
+
+@app.get("/privacy/{version}")
+def get_privacy_policy_version(version: str):
+    try:
+        policy = get_policy(version)
+    except PrivacyPolicyNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Versão de política de privacidade desconhecida: {version}",
+        ) from exc
+    return {
+        **policy.as_dict(),
+        "current": version == current_policy().version,
+        "available_versions": list_privacy_versions(),
+    }
+
+
+@app.get("/account/data-export")
+def export_account_data(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Acesso e portabilidade (art. 18, II e V da LGPD): tudo o que a
+    plataforma guarda sobre a conta, em JSON."""
+    user = _session_user_or_401(db, x_session_token)
+    return export_user_data(db, user)
+
+
+@app.post("/account/erasure")
+def erase_account(
+    response: Response,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Eliminação (art. 18, VI da LGPD) por anonimização.
+
+    A cadeia de auditoria e as attestations não são apagadas: elas guardam
+    hashes e atos, e removê-las invalidaria decisões que terceiros podem ter
+    executado. O que sai é a identificação do titular.
+    """
+    user = _session_user_or_401(db, x_session_token)
+    try:
+        result = anonymize_user(db, user)
+    except ErasureBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        secure=settings.is_production,
+        httponly=True,
+        samesite="lax",
+    )
+    return result
+
+
+@app.get("/account/erasure/preview")
+def preview_account_erasure(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Diz de antemão se a eliminação seria aceita e o que ela preserva."""
+    user = _session_user_or_401(db, x_session_token)
+    blocking = open_case_ids(db, user.id)
+    return {
+        "allowed": not blocking,
+        "blocking_case_ids": blocking,
+        "detail": (
+            "A identificação não pode ser removida enquanto a conta for parte "
+            "de um caso em andamento."
+            if blocking
+            else "A conta pode ser anonimizada agora."
+        ),
+        "preserved": [
+            "cadeia de auditoria dos casos",
+            "hashes e metadados dos documentos",
+            "attestations emitidas",
+        ],
+        "removed": [
+            "nome de exibição e e-mail",
+            "credencial de acesso e sessões",
+            "notificações e convites pendentes",
+        ],
+    }
+
+
 @app.post("/cases/{case_id}/consent")
 def set_case_consent(
     case_id: str,
@@ -1142,6 +1310,20 @@ def _document_or_404(db: Session, case_id: str, document_id: str):
     return document
 
 
+def _assert_not_purged(document) -> None:
+    """410 e não 404: o documento existiu e seu hash continua no registro; o
+    que saiu foram os bytes, pela política de retenção."""
+    if getattr(document, "content_purged_at", None):
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "O conteúdo deste documento foi expurgado pela política de "
+                "retenção. Os metadados e o hash permanecem no registro do "
+                "caso, que segue verificável."
+            ),
+        )
+
+
 def _counterparty(document) -> str:
     return "respondent" if document.submitted_by == "claimant" else "claimant"
 
@@ -1250,6 +1432,7 @@ def download_document_original(
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
     document = _document_or_404(db, case_id, document_id)
+    _assert_not_purged(document)
     original = load_document_original(document)
     if original is None:
         raise HTTPException(
@@ -1277,6 +1460,7 @@ def issue_original_download_url(
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
     document = _document_or_404(db, case_id, document_id)
+    _assert_not_purged(document)
     if not document.original_key:
         raise HTTPException(
             status_code=404,
@@ -1826,13 +2010,24 @@ def review_case(
 
 @app.get("/.well-known/valinor-signing-key")
 def signing_key():
+    """Conjunto de chaves de assinatura da plataforma.
+
+    Os campos de topo descrevem a chave ativa (o formato que executores
+    externos já consomem). `keys` traz o conjunto completo: a ativa e as
+    aposentadas, que continuam válidas para verificar attestations emitidas
+    antes de uma rotação.
+    """
     settings_now = get_settings()
     if not settings_now.attestation_enabled:
         raise HTTPException(
             status_code=404,
             detail="A emissão de attestations não está habilitada nesta instância",
         )
-    return public_key_info()
+    try:
+        keys = key_set()
+    except AttestationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {**public_key_info(), **keys}
 
 
 @app.post("/cases/{case_id}/attestation")

@@ -10,65 +10,36 @@ editados; uma mudança de termos é sempre uma versão nova.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List
 
-from app.core.hashing import sha256_text
+from app.core.versioned_docs import (
+    DocumentNotFound,
+    VersionedDocument,
+    load_directory,
+    sorted_versions,
+)
 
 
 TERMS_DIR = Path(__file__).resolve().parent.parent / "terms"
 
+# Nome histórico, mantido porque o restante do código e os testes o importam.
+Terms = VersionedDocument
 
-class TermsNotFound(LookupError):
+
+class TermsNotFound(DocumentNotFound):
     pass
-
-
-@dataclass(frozen=True)
-class Terms:
-    version: str
-    text: str
-    sha256: str
-
-    def as_reference(self) -> Dict[str, str]:
-        """Identificação sem o corpo do texto, para gravar em consentimento,
-        auditoria e manifesto."""
-        return {"version": self.version, "sha256": self.sha256}
-
-    def as_dict(self) -> Dict[str, str]:
-        return {**self.as_reference(), "text": self.text}
-
-
-def _normalize(raw: str) -> str:
-    """Normaliza para que o mesmo texto produza o mesmo hash em qualquer
-    sistema: quebras de linha `\\n` e um único `\\n` no fim."""
-    return raw.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
 
 
 @lru_cache(maxsize=1)
 def _load_all() -> Dict[str, Terms]:
-    versions: Dict[str, Terms] = {}
-    for path in sorted(TERMS_DIR.glob("*.md")):
-        if path.name.lower() == "readme.md":
-            continue
-        text = _normalize(path.read_text(encoding="utf-8"))
-        versions[path.stem] = Terms(
-            version=path.stem,
-            text=text,
-            sha256=sha256_text(text),
-        )
-    if not versions:  # pragma: no cover - o repositório sempre traz uma versão
-        raise RuntimeError(
-            "Nenhum texto de termos encontrado em app/terms: o consentimento "
-            "não pode ser registrado sem o texto correspondente."
-        )
-    return versions
+    return load_directory(TERMS_DIR, "termos")
 
 
 def list_versions() -> List[str]:
     """Versões disponíveis, da mais antiga para a mais recente."""
-    return sorted(_load_all())
+    return sorted_versions(_load_all())
 
 
 def current_version() -> str:

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
+from app.core.client_ip import parse_trusted_proxies
 from app.core.encryption import load_key as load_document_encryption_key
 
 
@@ -37,6 +38,7 @@ class Settings:
     embedding_model: str
     platform_signing_secret: str
     platform_ed25519_private_key: str
+    platform_ed25519_retired_public_keys: List[str]
     contest_window_days: int
     app_env: str
     cors_origins: List[str]
@@ -52,6 +54,11 @@ class Settings:
     rate_limit_window_seconds: int
     auth_rate_limit_max_requests: int
     auth_rate_limit_window_seconds: int
+    rate_limit_max_keys: int
+    trusted_proxy_ips: List[str]
+    document_retention_days: int
+    privacy_contact_email: str
+    data_controller_name: str
     public_base_url: str
     smtp_host: str
     smtp_port: int
@@ -109,6 +116,23 @@ class Settings:
         """Tokens por papel são um atalho de operação local. Em produção o
         acesso deve depender exclusivamente de conta autenticada."""
         return not self.is_production
+
+    @property
+    def trusted_proxy_networks(self):
+        """Redes cujo `X-Forwarded-For` é considerado confiável."""
+        return parse_trusted_proxies(self.trusted_proxy_ips)
+
+    @property
+    def proxy_awareness_missing(self) -> bool:
+        """Rate limit ligado sem proxies declarados: se houver um balanceador
+        na frente, todas as requisições compartilham a mesma chave."""
+        return self.rate_limit_enabled and not self.trusted_proxy_ips
+
+    @property
+    def privacy_contacts_declared(self) -> bool:
+        """Sem controlador e canal de contato declarados, a política publicada
+        não atende ao art. 9º da LGPD: o titular não sabe a quem recorrer."""
+        return bool(self.privacy_contact_email and self.data_controller_name)
 
     @property
     def email_enabled(self) -> bool:
@@ -199,6 +223,19 @@ class Settings:
 
 def validate_runtime_policy(settings: Settings) -> None:
     """Em produção, julgador e revisor iguais com LLM ligado derrubam o boot."""
+    try:
+        settings.trusted_proxy_networks
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    if settings.is_production and not settings.privacy_contacts_declared:
+        raise RuntimeError(
+            "DATA_CONTROLLER_NAME e PRIVACY_CONTACT_EMAIL são obrigatórios em "
+            "produção: a política de privacidade publicada precisa dizer quem "
+            "é o controlador dos dados e por qual canal o titular exerce seus "
+            "direitos (art. 9º e 18 da LGPD)."
+        )
+
     if (
         settings.is_production
         and settings.llm_enabled
@@ -266,6 +303,9 @@ def get_settings() -> Settings:
         platform_ed25519_private_key=os.getenv(
             "PLATFORM_ED25519_PRIVATE_KEY", ""
         ).strip(),
+        platform_ed25519_retired_public_keys=_split_csv(
+            os.getenv("PLATFORM_ED25519_RETIRED_PUBLIC_KEYS", "")
+        ),
         contest_window_days=int(os.getenv("CONTEST_WINDOW_DAYS", "7")),
         app_env=app_env,
         cors_origins=_split_csv(
@@ -294,6 +334,11 @@ def get_settings() -> Settings:
         auth_rate_limit_window_seconds=int(
             os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "300")
         ),
+        rate_limit_max_keys=int(os.getenv("RATE_LIMIT_MAX_KEYS", "100000")),
+        trusted_proxy_ips=_split_csv(os.getenv("TRUSTED_PROXY_IPS", "")),
+        document_retention_days=int(os.getenv("DOCUMENT_RETENTION_DAYS", "365")),
+        privacy_contact_email=os.getenv("PRIVACY_CONTACT_EMAIL", "").strip(),
+        data_controller_name=os.getenv("DATA_CONTROLLER_NAME", "").strip(),
         public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
         smtp_host=os.getenv("SMTP_HOST", "").strip(),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),

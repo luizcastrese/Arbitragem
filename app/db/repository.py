@@ -125,6 +125,11 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         ),
         "chunks_count": document.chunks_count,
         "created_at": document.created_at.isoformat(),
+        "content_purged_at": (
+            document.content_purged_at.isoformat()
+            if document.content_purged_at
+            else None
+        ),
     }
     if include_content:
         result["content"] = load_document_content(document)

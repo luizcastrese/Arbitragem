@@ -124,6 +124,8 @@ class Document(Base):
     admitted = Column(Boolean, nullable=False, default=False)
     admitted_at = Column(String, nullable=True)
     chunks_count = Column(Integer, nullable=False, default=0)
+    # Expurgo por retenção: os bytes saem do object store, os hashes ficam.
+    content_purged_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     case = relationship("Case", back_populates="documents")
