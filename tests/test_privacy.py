@@ -312,6 +312,113 @@ def test_expurgo_apaga_bytes_e_preserva_hash(session_factory):
         db.close()
 
 
+def test_expurgo_apaga_o_texto_dos_trechos_indexados(session_factory):
+    """Os trechos são a segunda cópia do conteúdo, dentro do banco, e ficam
+    expostos em /cases/{id}/chunks e /retrieve. Apagar só o object store
+    deixaria o documento recuperável e faria o relatório de expurgo mentir."""
+    from app.db.models import Chunk
+
+    _documento_encerrado(session_factory, dias_atras=400)
+
+    db = session_factory()
+    try:
+        db.add(
+            Chunk(
+                id="chunk-1",
+                case_id="caso-retencao",
+                document_id="doc-1",
+                text="clausula sensivel com dado pessoal",
+                sha256="b" * 64,
+                embedding_json="[0.1, 0.2]",
+            )
+        )
+        db.commit()
+
+        assert purge_documents(db, dry_run=True)["chunks"] == 1
+        assert db.query(Chunk).one().text  # a simulação não apaga
+
+        report = purge_documents(db)
+        assert report["chunks"] == 1
+    finally:
+        db.close()
+
+    db = session_factory()
+    try:
+        chunk = db.query(Chunk).one()
+        assert chunk.text == ""
+        assert chunk.embedding_json is None
+        # O hash fica: é o que mantém verificável a prova citada na decisão.
+        assert chunk.sha256 == "b" * 64
+    finally:
+        db.close()
+
+
+def test_auditoria_de_convite_nao_guarda_o_email(client):
+    """A cadeia de auditoria é imutável e legível por todos os participantes:
+    um e-mail gravado ali não poderia mais ser removido na eliminação."""
+    register(client)
+    case_id = client.post(
+        "/cases",
+        json={
+            "title": "Caso com convite",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    ).json()["id"]
+
+    client.post(
+        f"/cases/{case_id}/invitations",
+        json={"email": "convidado@example.com", "role": "claimant"},
+    )
+
+    audit = client.get(f"/cases/{case_id}/audit").json()
+    convite = [
+        event
+        for event in audit["events"]
+        if event["event_type"] == "participant_invited"
+    ]
+    assert convite, audit
+    payload = convite[0]["payload"]
+    assert "convidado@example.com" not in str(payload)
+    assert payload["email_masked"] == "c****@example.com"
+    assert payload["email_sha256"]
+    assert audit["valid"] is True
+
+
+def test_eliminacao_relata_identificadores_residuais(client, session_factory):
+    """Eventos gravados antes da máscara não podem ser reescritos sem quebrar
+    a cadeia. O titular precisa saber disso, e não receber um `anonymized:
+    true` que não conta a história inteira."""
+    from app.db.models import AuditEvent
+
+    register(client)
+    case_id = client.post(
+        "/cases",
+        json={
+            "title": "Caso legado",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    ).json()["id"]
+
+    db = session_factory()
+    try:
+        case = db.query(Case).filter(Case.id == case_id).one()
+        case.status = "reviewed"
+        # Evento no formato antigo, com o endereço em texto claro.
+        legado = db.query(AuditEvent).filter(AuditEvent.case_id == case_id).first()
+        legado.payload_json = '{"email": "titular@example.com"}'
+        db.commit()
+    finally:
+        db.close()
+
+    body = client.post("/account/erasure").json()
+
+    assert body["anonymized"] is True
+    assert body["residual_identifiers"]["audit_event_ids"]
+    assert "attestations" in body["residual_identifiers"]["detail"]
+
+
 def test_expurgo_desligado_com_retencao_zero(session_factory):
     _documento_encerrado(session_factory, dias_atras=400)
     db = session_factory()

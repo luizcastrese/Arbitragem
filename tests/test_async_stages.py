@@ -290,6 +290,147 @@ def test_rodada_de_composicao_simultanea_e_recusada(client, monkeypatch):
     poll_until_done(client, case_id, "conciliation")
 
 
+def test_caso_orfanado_por_restart_deixa_de_reportar_processing(client, session_factory):
+    """Se o processo morre entre a reivindicação e o fim da etapa, o registro
+    em memória some e no banco sobra um `processing_*` que ninguém conclui.
+    Sem detectar o TTL vencido, o polling responderia `processing` para
+    sempre e o cliente nunca saberia que precisa repetir a chamada."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.domain.concurrency import PROCESSING_TTL
+
+    case_id, _document, _ = prepare_locked_case(client)
+
+    db = session_factory()
+    try:
+        case = db.query(Case).filter(Case.id == case_id).one()
+        case.status = "processing_decision"
+        case.processing_started_at = (
+            datetime.now(timezone.utc) - PROCESSING_TTL - timedelta(minutes=1)
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    stage_runner.reset()
+    body = client.get(f"/cases/{case_id}/stage/decide").json()
+
+    assert body["state"] == "failed"
+    assert body["error"] == "stage_abandoned"
+
+
+def test_processing_recente_sem_job_ainda_e_processing(client, session_factory):
+    """Antes do TTL a etapa pode estar rodando em outra réplica: só o prazo
+    vencido autoriza dizer que foi abandonada."""
+    from datetime import datetime, timezone
+
+    case_id, _document, _ = prepare_locked_case(client)
+
+    db = session_factory()
+    try:
+        case = db.query(Case).filter(Case.id == case_id).one()
+        case.status = "processing_decision"
+        case.processing_started_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+
+    stage_runner.reset()
+    body = client.get(f"/cases/{case_id}/stage/decide").json()
+
+    assert body["state"] == "processing"
+
+
+def test_recurso_que_falha_libera_nova_tentativa(session_factory):
+    """A marca de contestação e a linha do recurso são gravadas antes de o
+    recurso rodar, para a idempotência funcionar. Se a execução falha e elas
+    ficam, a repetição volta cedo com um recurso vazio E a tentativa
+    frustrada consome a cota de MAX_APPEALS_PER_ATTESTATION."""
+    from app.db.repository import (
+        count_appeals,
+        find_appeal_by_id,
+        persist_appeal,
+        register_contest,
+        revert_contest,
+    )
+
+    db = session_factory()
+    try:
+        case = Case(
+            id="caso-recurso",
+            title="Attestado",
+            claimant="Cliente Carlos",
+            respondent="Empresa Delta",
+            status="attested",
+        )
+        db.add(case)
+        db.commit()
+
+        appeal = persist_appeal(
+            db,
+            case,
+            filed_by="claimant",
+            grounds=["incorrect_calculation"],
+            original_decision_hash="a" * 64,
+            idempotency_key="tentativa-1",
+            status="processing",
+        )
+        appeal_id = appeal.id
+        register_contest(db, case, "claimant", "Discordo do cálculo.")
+
+        assert case.contested_at is not None
+        assert count_appeals(db, case.id) == 1
+
+        revert_contest(db, case, appeal_id, "attested", "RuntimeError: provedor caiu")
+
+        atualizado = db.query(Case).filter(Case.id == "caso-recurso").one()
+        assert atualizado.contested_at is None
+        assert atualizado.contested_by is None
+        assert atualizado.status == "attested"
+        # A cota volta a permitir a nova tentativa.
+        assert count_appeals(db, case.id) == 0
+        assert find_appeal_by_id(db, case.id, appeal_id) is None
+        # E a tentativa frustrada continua registrada na auditoria.
+        from app.db.models import AuditEvent
+
+        eventos = [
+            row.event_type
+            for row in db.query(AuditEvent).filter(
+                AuditEvent.case_id == "caso-recurso"
+            )
+        ]
+        assert "contest_attempt_failed" in eventos
+    finally:
+        db.close()
+
+
+def test_registro_de_jobs_nao_cresce_sem_limite():
+    """Um StageJob (e o Future com o resultado inteiro da etapa) por par
+    caso/etapa já executado ficaria residente para sempre."""
+    from app.domain.jobs import StageRunner
+
+    runner = StageRunner(max_workers=2, max_tracked_jobs=5)
+
+    class _Sessao:
+        def close(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    for index in range(40):
+        job = runner.submit(
+            f"caso-{index}",
+            "decide",
+            lambda _db: "pronto",
+            _Sessao,
+        )
+        job.future.result(timeout=10)
+
+    assert runner.tracked_jobs() <= 5
+    runner.shutdown()
+
+
 def test_wait_acima_do_teto_e_recusado(client):
     case_id, _document, _ = prepare_locked_case(client)
     response = client.post(

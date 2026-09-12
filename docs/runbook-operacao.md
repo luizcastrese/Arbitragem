@@ -98,9 +98,11 @@ em `GET /cases/{id}/manifest/verify`.
 
 ## 3. Retenção e expurgo de documentos
 
-O expurgo apaga os **bytes** dos documentos de casos encerrados há mais tempo
-que a janela de retenção, preservando metadados e hashes — o que mantém a
-cadeia de auditoria e as attestations verificáveis.
+O expurgo apaga o **conteúdo** dos documentos de casos encerrados há mais
+tempo que a janela de retenção — os bytes no object store e o texto dos
+trechos indexados no banco, que são a segunda cópia do mesmo material —
+preservando metadados e hashes, o que mantém a cadeia de auditoria e as
+attestations verificáveis.
 
 ```bash
 # Simulação: lista o que seria apagado, sem apagar

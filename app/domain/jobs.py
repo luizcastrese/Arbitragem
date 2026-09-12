@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +38,12 @@ logger = logging.getLogger("valinor.jobs")
 RUNNING = "processing"
 COMPLETED = "completed"
 FAILED = "failed"
+
+# O registro guarda só o andamento recente. O estado que importa está no
+# banco, então descartar entradas antigas não perde informação — e sem teto o
+# dicionário cresceria com um StageJob (e o Future com o resultado inteiro)
+# por par caso/etapa já executado, para sempre.
+DEFAULT_MAX_TRACKED_JOBS = 1000
 
 
 @dataclass
@@ -65,10 +72,15 @@ class StageJob:
 class StageRunner:
     """Fila de etapas em segundo plano, com um registro do que está em voo."""
 
-    def __init__(self, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        max_workers: int = 4,
+        max_tracked_jobs: int = DEFAULT_MAX_TRACKED_JOBS,
+    ) -> None:
         self._max_workers = max_workers
+        self._max_tracked_jobs = max(1, max_tracked_jobs)
         self._executor: Optional[ThreadPoolExecutor] = None
-        self._jobs: Dict[Tuple[str, str], StageJob] = {}
+        self._jobs: "OrderedDict[Tuple[str, str], StageJob]" = OrderedDict()
         self._lock = threading.Lock()
 
     def _ensure_executor(self) -> ThreadPoolExecutor:
@@ -100,6 +112,8 @@ class StageRunner:
         job = StageJob(case_id=case_id, stage=stage)
         with self._lock:
             self._jobs[(case_id, stage)] = job
+            self._jobs.move_to_end((case_id, stage))
+            self._evict()
 
         def runner() -> Any:
             db = session_factory()
@@ -140,6 +154,24 @@ class StageRunner:
 
         job.future = self._ensure_executor().submit(runner)
         return job
+
+    def _evict(self) -> None:
+        """Descarta os jobs concluídos mais antigos. Chamado com o lock.
+
+        Um job ainda em execução nunca é descartado: perdê-lo faria o polling
+        reportar `pending` para uma etapa que está rodando.
+        """
+        if len(self._jobs) <= self._max_tracked_jobs:
+            return
+        for key in list(self._jobs):
+            if len(self._jobs) <= self._max_tracked_jobs:
+                return
+            if self._jobs[key].state != RUNNING:
+                del self._jobs[key]
+
+    def tracked_jobs(self) -> int:
+        with self._lock:
+            return len(self._jobs)
 
     def get(self, case_id: str, stage: str) -> Optional[StageJob]:
         with self._lock:

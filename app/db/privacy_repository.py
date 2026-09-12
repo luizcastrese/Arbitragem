@@ -23,7 +23,9 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.identifiers import email_fingerprint
 from app.db.models import (
+    AuditEvent,
     AuthSession,
     AuthToken,
     Case,
@@ -62,6 +64,27 @@ def _iso(value) -> Optional[str]:
     if isinstance(value, str):
         return value
     return value.isoformat()
+
+
+def residual_audit_identifiers(db: Session, email: str) -> List[str]:
+    """Eventos de auditoria que ainda contêm o endereço em texto claro.
+
+    A cadeia é encadeada por hash e sustenta attestations já emitidas:
+    reescrever um evento antigo invalidaria tudo o que veio depois. Eventos
+    gravados antes de a plataforma passar a registrar e-mail apenas por
+    máscara e impressão são, portanto, irreversíveis — e o titular precisa
+    saber disso em vez de receber um `anonymized: true` que não conta a
+    história inteira.
+    """
+    if not email:
+        return []
+    needle = f'"{email}"'
+    return [
+        str(event.id)
+        for event in db.query(AuditEvent).filter(
+            AuditEvent.payload_json.contains(needle)
+        )
+    ]
 
 
 def open_case_ids(db: Session, user_id: str) -> List[str]:
@@ -195,6 +218,8 @@ def anonymize_user(db: Session, user: User) -> Dict[str, Any]:
     if open_cases:
         raise ErasureBlocked(open_cases)
 
+    original_email = user.email
+    residual = residual_audit_identifiers(db, original_email)
     now = _utc_now()
     # Sufixo aleatório: o hash sozinho seria reversível por dicionário de
     # e-mails conhecidos.
@@ -227,13 +252,27 @@ def anonymize_user(db: Session, user: User) -> Dict[str, Any]:
     db.add(user)
     db.commit()
 
-    return {
+    result = {
         "anonymized": True,
         "user_id": user.id,
         "anonymized_at_utc": now.isoformat(),
         "sessions_revoked": True,
+        "email_sha256": email_fingerprint(original_email),
         "preserved": (
             "Cadeia de auditoria, hashes de documentos e attestations "
             "permanecem para manter o procedimento verificável."
         ),
     }
+    if residual:
+        result["residual_identifiers"] = {
+            "audit_event_ids": residual,
+            "detail": (
+                "Estes eventos de auditoria foram gravados antes de a "
+                "plataforma passar a registrar e-mail apenas por máscara e "
+                "impressão, e ainda contêm o endereço em texto claro. A "
+                "cadeia é encadeada por hash e sustenta attestations já "
+                "emitidas: reescrevê-los invalidaria decisões que terceiros "
+                "podem ter executado. Eventos novos não retêm o endereço."
+            ),
+        }
+    return result

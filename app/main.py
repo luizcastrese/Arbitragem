@@ -53,6 +53,7 @@ from app.core.email import (
     deliver_verification_email,
 )
 from app.core.hashing import sha256_text
+from app.core.identifiers import email_reference
 from app.core.manifest import lock_case_manifest
 from app.core.nostr_anchor import publish_attestation_anchor
 from app.core.privacy import (
@@ -126,6 +127,7 @@ from app.db.repository import (
     persist_attestation_record,
     record_consent,
     register_contest,
+    revert_contest,
     respond_to_document as persist_response,
     save_stage,
     save_nostr_anchor,
@@ -133,7 +135,12 @@ from app.db.repository import (
 )
 from app.db.models import Deadline, Invitation
 from app.db.session import SessionLocal, get_db
-from app.domain.concurrency import StageBusy, claim_case_stage, release_processing
+from app.domain.concurrency import (
+    PROCESSING_TTL,
+    StageBusy,
+    claim_case_stage,
+    release_processing,
+)
 from app.domain.jobs import COMPLETED, FAILED, RUNNING, StageRunner
 from app.domain.frameworks import list_frameworks
 from app.domain.legacy import public_decision_view
@@ -425,7 +432,7 @@ def _stage_accepted_response(case_id: str, stage: str, job) -> JSONResponse:
     )
 
 
-def _run_stage(case_id: str, stage: str, work, wait: float):
+def _run_stage(case_id: str, stage: str, work, wait: float, on_failure=None):
     """Agenda a etapa e responde 202 — ou o resultado, se `wait` for pedido.
 
     `wait` é a saída para clientes que preferem uma chamada só: a requisição
@@ -433,12 +440,13 @@ def _run_stage(case_id: str, stage: str, work, wait: float):
     resultado como antes. Estourado o limite, vira 202 e o trabalho segue.
     """
     on_error_status = ASYNC_STAGES[stage]["on_error_status"]
+    recovery = on_failure or _release_stage(case_id, stage, on_error_status)
     job = stage_runner.submit(
         case_id,
         stage,
         work,
         _job_session,
-        on_failure=_release_stage(case_id, stage, on_error_status),
+        on_failure=recovery,
     )
     if wait <= 0:
         return _stage_accepted_response(case_id, stage, job)
@@ -1052,7 +1060,14 @@ def invite_participant(
         db,
         case,
         "participant_invited",
-        {"email": invitation.email, "role": invitation.role, "invitation_id": invitation.id},
+        # Máscara e impressão, nunca o endereço: a auditoria é imutável e
+        # legível por todos os participantes do caso, então um e-mail gravado
+        # aqui não poderia mais ser removido no pedido de eliminação.
+        {
+            **email_reference(invitation.email),
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+        },
     )
     db.commit()
     create_notification(
@@ -2530,6 +2545,12 @@ def contest_case(
     db.commit()
     appeal_id = appeal.id
 
+    def on_contest_failure(job_db: Session, error: str) -> None:
+        job_case = get_case(job_db, case_id)
+        if job_case is None:  # pragma: no cover - o caso existia ao reivindicar
+            return
+        revert_contest(job_db, job_case, appeal_id, "attested", error)
+
     def work(job_db: Session):
         job_case = get_case(job_db, case_id)
         job_appeal = find_appeal_by_id(job_db, case_id, appeal_id)
@@ -2548,7 +2569,19 @@ def contest_case(
             "grounds": grounds,
         }
 
-    return _run_stage(case_id, "contest", work, wait)
+    return _run_stage(case_id, "contest", work, wait, on_failure=on_contest_failure)
+
+
+def _claim_is_stale(case) -> bool:
+    """Caso preso em `processing_*` além do TTL de reivindicação."""
+    if not str(case.status or "").startswith("processing"):
+        return False
+    started = getattr(case, "processing_started_at", None)
+    if started is None:
+        return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - started > PROCESSING_TTL
 
 
 def _stage_result(case_data: Dict, stage: str):
@@ -2619,6 +2652,22 @@ def get_stage_status(
     # da mesma etapa em voo (a composição admite rodadas sucessivas).
     if result is not None and (job is None or job.state != RUNNING):
         return {**body, "state": COMPLETED, "result": result}
+    if _claim_is_stale(case) and job is None:
+        # O processo morreu entre a reivindicação da etapa e o fim dela: o
+        # registro em memória sumiu junto e no banco sobrou um `processing_*`
+        # que ninguém vai concluir. Passado o TTL a etapa pode ser
+        # reivindicada de novo, e é isso que o cliente precisa saber — sem
+        # este ramo o polling responderia `processing` para sempre.
+        return {
+            **body,
+            "state": FAILED,
+            "error": "stage_abandoned",
+            "detail": (
+                "A etapa foi interrompida (provavelmente por reinício do "
+                "serviço) e o prazo de reivindicação expirou. Repita a "
+                "chamada para executá-la de novo."
+            ),
+        }
     if job is not None or str(case.status or "").startswith("processing"):
         # Inclui o caso de um job já concluído cujo resultado ainda não
         # aparece nesta leitura. Reportar "pending" aqui seria dizer que a

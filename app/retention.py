@@ -1,7 +1,9 @@
 """Expurgo de documentos por retenção.
 
-Apaga os **bytes** dos documentos de casos encerrados há mais tempo que a
-janela de retenção e preserva metadados e hashes. É o único desenho compatível
+Apaga o **conteúdo** dos documentos de casos encerrados há mais tempo que a
+janela de retenção — os bytes no object store e o texto dos trechos indexados
+no banco, que são a segunda cópia do mesmo material — e preserva metadados e
+hashes. É o único desenho compatível
 com as duas obrigações do sistema: minimizar a guarda de dados pessoais (art.
 15 e 16 da LGPD) e manter verificável uma decisão que terceiros podem ter
 executado — a cadeia de auditoria e as attestations continuam conferindo
@@ -25,7 +27,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Case, Document
+from app.db.models import Case, Chunk, Document
 from app.db.repository import append_audit
 from app.documents.storage import StorageError, get_document_storage
 from app.domain.concurrency import TERMINAL_STATUSES
@@ -98,6 +100,7 @@ def purge_documents(
             "enabled": False,
             "retention_days": days,
             "documents": 0,
+            "chunks": 0,
             "cases": [],
             "dry_run": dry_run,
             "detail": "DOCUMENT_RETENTION_DAYS=0: expurgo desligado.",
@@ -108,9 +111,15 @@ def purge_documents(
     touched_cases: Dict[str, int] = {}
     errors: List[str] = []
 
+    purged_chunks = 0
     for document in documents:
         touched_cases[document.case_id] = touched_cases.get(document.case_id, 0) + 1
         if dry_run:
+            purged_chunks += (
+                db.query(Chunk)
+                .filter(Chunk.document_id == document.id, Chunk.text != "")
+                .count()
+            )
             continue
         for key in (document.content_key, document.original_key):
             if not key:
@@ -121,6 +130,21 @@ def purge_documents(
                 # Objeto já ausente não impede a marcação: o efeito desejado
                 # (bytes fora do armazenamento) está atingido de qualquer modo.
                 errors.append(f"{key}: {exc}")
+
+        # Os trechos indexados são uma segunda cópia do conteúdo, dentro do
+        # banco, e continuam servidos por /cases/{id}/chunks e /retrieve.
+        # Apagar só o object store deixaria o documento recuperável e faria o
+        # relatório de expurgo mentir. A linha fica, com o id e o sha256, para
+        # que as referências de prova da decisão continuem verificáveis.
+        purged_chunks += (
+            db.query(Chunk)
+            .filter(Chunk.document_id == document.id)
+            .update(
+                {Chunk.text: "", Chunk.embedding_json: None},
+                synchronize_session=False,
+            )
+        )
+
         document.content_purged_at = now
         db.add(document)
 
@@ -145,6 +169,7 @@ def purge_documents(
         "enabled": True,
         "retention_days": days,
         "documents": len(documents),
+        "chunks": purged_chunks,
         "cases": sorted(touched_cases),
         "dry_run": dry_run,
         "errors": errors,
@@ -187,9 +212,10 @@ def main() -> int:  # pragma: no cover - entrada de linha de comando
         logger.info("%s: %s", prefix, report["detail"])
         return 0
     logger.info(
-        "%s: %s documentos em %s casos (retenção de %s dias)",
+        "%s: %s documentos e %s trechos em %s casos (retenção de %s dias)",
         prefix,
         report["documents"],
+        report["chunks"],
         len(report["cases"]),
         report["retention_days"],
     )
