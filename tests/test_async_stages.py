@@ -19,7 +19,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base, Case
 from app.db.session import get_db
@@ -28,11 +27,24 @@ from tests.test_api import CASE_CREDENTIALS, actor_headers, prepare_locked_case
 
 
 @pytest.fixture()
-def session_factory():
+def session_factory(tmp_path):
+    """SQLite em ARQUIVO, de propósito.
+
+    Os outros testes usam `sqlite://` com `StaticPool`, o que dá uma única
+    conexão compartilhada por todas as sessões. Isso funciona enquanto só uma
+    thread toca o banco por vez — o caso de `?wait=`, em que o request fica
+    bloqueado enquanto a etapa roda. Aqui a etapa roda de verdade em paralelo
+    com as consultas de polling, e duas sessões na mesma conexão SQLite
+    interferem uma na transação da outra: o `close()` de uma emite ROLLBACK na
+    conexão da outra, e a escrita da etapa some.
+
+    Com arquivo, cada sessão pega a própria conexão — como em Postgres, que é
+    o que roda em produção.
+    """
+    db_path = tmp_path / "async-stages.db"
     engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
     factory = sessionmaker(
         bind=engine,
@@ -42,7 +54,7 @@ def session_factory():
     )
     Base.metadata.create_all(bind=engine)
     yield factory
-    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
 
 
 @pytest.fixture()
@@ -114,6 +126,25 @@ def test_polling_de_etapa_ainda_nao_iniciada(client):
 
     assert body["state"] == "pending"
     assert body["case_status"] == "locked"
+
+
+def test_estado_nunca_regride_para_pending_apos_iniciar(client):
+    """Entre o commit da etapa e a leitura seguinte existe um instante em que
+    o job já terminou e o resultado ainda não aparece na consulta. Reportar
+    `pending` ali diria que a etapa nunca começou, e um cliente que trata
+    `pending` como fim desistiria justamente nesse instante."""
+    from app.domain.jobs import COMPLETED, StageJob
+
+    case_id, _document, _ = prepare_locked_case(client)
+
+    concluido = StageJob(case_id=case_id, stage="decide")
+    concluido.state = COMPLETED
+    concluido.finished_at = "2026-09-12T22:00:00+00:00"
+    stage_runner._jobs[(case_id, "decide")] = concluido
+
+    body = client.get(f"/cases/{case_id}/stage/decide").json()
+
+    assert body["state"] == "processing"
 
 
 def test_polling_de_etapa_desconhecida_e_404(client):

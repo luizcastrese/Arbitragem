@@ -2605,8 +2605,6 @@ def get_stage_status(
         "finished_at": job.finished_at if job else None,
     }
 
-    if result is not None and (job is None or job.state != RUNNING):
-        return {**body, "state": COMPLETED, "result": result}
     if job is not None and job.state == FAILED:
         return {
             **body,
@@ -2617,12 +2615,17 @@ def get_stage_status(
                 "É possível repetir a chamada."
             ),
         }
-    if (job is not None and job.state == RUNNING) or str(
-        case.status or ""
-    ).startswith("processing"):
-        return {**body, "state": RUNNING}
-    if result is not None:
+    # Concluída é só quando o resultado está gravado E não há outra execução
+    # da mesma etapa em voo (a composição admite rodadas sucessivas).
+    if result is not None and (job is None or job.state != RUNNING):
         return {**body, "state": COMPLETED, "result": result}
+    if job is not None or str(case.status or "").startswith("processing"):
+        # Inclui o caso de um job já concluído cujo resultado ainda não
+        # aparece nesta leitura. Reportar "pending" aqui seria dizer que a
+        # etapa nunca começou, e um cliente que trata `pending` como fim
+        # desistiria justamente no instante entre o commit e a leitura. O
+        # estado só anda para frente: quem está em polling continua.
+        return {**body, "state": RUNNING}
     return {
         **body,
         "state": "pending",
