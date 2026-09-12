@@ -259,6 +259,23 @@ Sem `OPENAI_API_KEY`, o sistema continua executável. Ele organiza o material
 com recuperação lexical, mas não profere decisão de mérito: o resultado fica
 explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 
+## Operação
+
+`docs/runbook-operacao.md` reúne os procedimentos que precisam existir antes do
+primeiro caso real:
+
+- backup e rotação da chave Ed25519 (perdê-la torna inverificável toda
+  attestation já emitida);
+- backup do banco, do object store e dos segredos, com teste de restauração;
+- expurgo de documentos por retenção, via cron:
+  `python -m app.retention` (`--dry-run` para simular);
+- configuração de `TRUSTED_PROXY_IPS` atrás de proxy reverso;
+- o que monitorar nas etapas assíncronas.
+
+`GET /` lista avisos de configuração pendente (segredo de desenvolvimento,
+proxy não declarado, controlador de dados ausente). Em produção, os itens
+críticos derrubam o boot em vez de virar aviso.
+
 ## Endpoints principais
 
 | Endpoint | Função |
@@ -274,6 +291,11 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `GET /auth/me` | Conta da sessão atual, com o estado de verificação do e-mail |
 | `GET /terms` | Texto vigente dos termos, com versão e hash |
 | `GET /terms/{version}` | Texto de uma versão específica dos termos |
+| `GET /privacy` | Política de privacidade vigente, com hash e controlador |
+| `GET /privacy/{version}` | Texto de uma versão específica da política |
+| `GET /account/data-export` | Acesso e portabilidade dos dados do titular |
+| `GET /account/erasure/preview` | Diz se a eliminação seria aceita e o que preserva |
+| `POST /account/erasure` | Eliminação por anonimização da conta |
 | `GET /cases/{id}/invitations` | Listar convites do caso (gestor) |
 | `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
@@ -292,27 +314,66 @@ explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 | `POST /cases/{id}/documents/{document_id}/original-url` | Emitir link temporário e assinado do original |
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
 | `POST /cases/{id}/lock` | Travar manifesto |
-| `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição |
+| `POST /cases/{id}/conciliation` | Criar ou avançar uma rodada de composição (assíncrono) |
 | `GET /cases/{id}/manifest` | Ler o manifesto travado |
 | `GET /cases/{id}/manifest/verify` | Verificar hash e assinatura |
 | `GET /cases/{id}/chunks` | Listar os trechos indexados do caso |
 | `GET /cases/{id}/retrieve` | Consultar evidências |
-| `POST /cases/{id}/organize` | Organizar registro |
-| `POST /cases/{id}/decide` | Proferir decisão da IA |
-| `POST /cases/{id}/review` | Auditar decisão |
+| `POST /cases/{id}/organize` | Organizar registro (assíncrono) |
+| `POST /cases/{id}/decide` | Proferir decisão da IA (assíncrono) |
+| `POST /cases/{id}/review` | Auditar decisão (assíncrono) |
 | `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
 | `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
 | `POST /cases/{id}/attestation` | Emitir a Decision Attestation assinada |
 | `GET /cases/{id}/attestation` | Ler a attestation emitida |
 | `GET /cases/{id}/attestation/nostr-anchor` | Ler a âncora pública da attestation |
-| `POST /cases/{id}/contest` | Recurso automático estruturado |
+| `POST /cases/{id}/contest` | Recurso automático estruturado (assíncrono) |
+| `GET /cases/{id}/stage/{stage}` | Andamento de uma etapa assíncrona |
 | `GET /cases/{id}/verification` | Resultado do verificador determinístico |
 | `GET /cases/{id}/appeals` | Recursos automáticos do caso |
 | `GET /frameworks` | Frameworks versionados disponíveis |
 | `POST /attestations/verify` | Verificar uma attestation avulsa, sem contexto de caso |
 | `GET /.well-known/valinor-signing-key` | Publicar a chave pública Ed25519 da plataforma |
 | `GET /health` | Saúde da API, do banco e do modo de IA |
+
+### Etapas assíncronas
+
+As cinco etapas marcadas como assíncronas chamam modelos de linguagem: com
+timeout, novas tentativas e execuções de estabilidade, uma decisão pode levar
+minutos. Mantê-las dentro do request significava uma conexão aberta esse tempo
+todo — e um gateway que a derruba antes do fim, deixando o cliente sem saber se
+a etapa concluiu.
+
+Elas respondem **`202`** imediatamente:
+
+```json
+{
+  "state": "processing",
+  "stage": "decide",
+  "poll": "/cases/{id}/stage/decide"
+}
+```
+
+O cliente acompanha em `GET /cases/{id}/stage/{stage}`, que devolve
+`processing`, `completed` (com `result`) ou `failed` (com `error`). Uma etapa
+que falha devolve o caso ao estado anterior, então basta repetir a chamada.
+
+Para um cliente que prefere uma chamada só, `?wait=<segundos>` (até 300) faz a
+requisição aguardar: se a etapa terminar dentro do prazo, a resposta é `200`
+com o resultado, como antes; se estourar, vira `202` e o trabalho continua.
+
+```bash
+# assíncrono (padrão)
+curl -X POST .../cases/$ID/decide
+curl .../cases/$ID/stage/decide
+
+# síncrono, aguardando até 120s
+curl -X POST ".../cases/$ID/decide?wait=120"
+```
+
+As etapas rodam no processo da aplicação (`STAGE_WORKERS` controla quantas em
+paralelo). Um caso preso em `processing_*` é liberado pelo TTL de 10 minutos.
 
 ## Testes
 
@@ -347,9 +408,14 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
 - a conta já exige e-mail verificado para atuar no caso, oferece redefinição de
   senha e bloqueia tentativa repetida de senha, mas ainda não há autenticação
   multifator;
-- ainda faltam política de privacidade, base legal declarada, canal do titular e
-  exclusão ou portabilidade de dados (LGPD), incluindo o aviso de transferência
-  internacional pelo processamento dos documentos no provedor de modelo;
+- a camada de proteção de dados existe: política de privacidade versionada e
+  endereçada por hash (`GET /privacy`), bases legais declaradas, aviso de
+  transferência internacional pelo processamento no provedor de modelo, aviso
+  sobre a âncora pública em Nostr, exportação (`GET /account/data-export`),
+  eliminação por anonimização (`POST /account/erasure`) e expurgo por retenção
+  (`python -m app.retention`). O texto da política, porém, **ainda não passou
+  por validação jurídica**, e `DATA_CONTROLLER_NAME`/`PRIVACY_CONTACT_EMAIL`
+  precisam apontar para um responsável real;
 - em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e
   os tokens por papel são desabilitados; o modo local com tokens permanece
   apenas em desenvolvimento;
@@ -357,8 +423,11 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   transacional configurado e de um domínio com SPF/DKIM para entrega confiável;
 - os documentos ficam fora do banco (object store) e o texto dos chunks no
   banco, ambos cifrados em repouso com AES-256-GCM (`DOCUMENT_ENCRYPTION_KEY`,
-  obrigatória em produção) e acessíveis por link temporário assinado; ainda
-  falta rotação de chaves e um cofre dedicado;
+  obrigatória em produção) e acessíveis por link temporário assinado; a chave de
+  assinatura Ed25519 tem rotação com chaves aposentadas
+  (`PLATFORM_ED25519_RETIRED_PUBLIC_KEYS`, runbook em
+  `docs/runbook-operacao.md`), mas `DOCUMENT_ENCRYPTION_KEY` ainda não tem
+  rotação e a guarda dos segredos depende de um cofre externo;
 - prompts têm versão e hash fixados no manifesto, e a bateria de `evals/` roda
   offline no CI; falta ampliar os cenários para disputas reais anonimizadas e
   rodar o modo live a cada troca de modelo;
@@ -366,18 +435,24 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   por validação jurídica;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
-  exigem um backend compartilhado (por exemplo Redis);
+  exigem um backend compartilhado (por exemplo Redis). Atrás de proxy,
+  `TRUSTED_PROXY_IPS` precisa estar configurado, senão todos os clientes
+  compartilham a mesma chave de limite;
+- as etapas de modelo rodam em segundo plano no próprio processo, sem fila
+  durável: um restart no meio de uma etapa a perde (o caso é liberado pelo TTL
+  e a chamada pode ser repetida). Volume maior pede uma fila externa;
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
 - decisões inconclusivas, inadmissíveis ou invalidadas encerram o procedimento
   de forma autônoma; não há julgador humano interno.
 
-Antes de exposição pública, a próxima etapa é configurar o provedor SMTP com um
+Antes de exposição pública, o que resta é: configurar o provedor SMTP com um
 domínio autenticado (a verificação de e-mail depende de entrega confiável),
-publicar a política de privacidade com os direitos do titular, obter a revisão
-jurídica do rito e dos termos, montar CI e o ambiente de produção com TLS,
-backup testado e monitoramento, e migrar o rate limiting para um backend
-compartilhado com rotação de chaves e cofre de segredos.
+obter a revisão jurídica do rito, dos termos e da política de privacidade,
+subir o ambiente de produção com TLS, executar pelo menos uma restauração de
+backup de verdade (`docs/runbook-operacao.md`) e montar monitoramento. Com mais
+de uma réplica, migrar o rate limiting e a fila de etapas para backends
+compartilhados.
 
 ## Referências OpenAI
 

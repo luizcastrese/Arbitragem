@@ -926,5 +926,22 @@ def find_appeal_by_idempotency(
     )
 
 
+def find_appeal_by_id(
+    db: Session,
+    case_id: str,
+    appeal_id: str,
+) -> Optional[AutomaticAppeal]:
+    """Recarrega o recurso em outra sessão — a etapa de recurso roda fora do
+    request e não pode reusar o objeto anexado à sessão que já fechou."""
+    return (
+        db.query(AutomaticAppeal)
+        .filter(
+            AutomaticAppeal.case_id == case_id,
+            AutomaticAppeal.id == appeal_id,
+        )
+        .one_or_none()
+    )
+
+
 def count_appeals(db: Session, case_id: str) -> int:
     return db.query(AutomaticAppeal).filter(AutomaticAppeal.case_id == case_id).count()

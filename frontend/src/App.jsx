@@ -314,18 +314,47 @@ export default function App() {
     bootstrap()
   }, [])
 
+  // As etapas que chamam modelos respondem 202 e seguem em segundo plano: uma
+  // decisão pode levar minutos e nenhum gateway segura a conexão até lá. O
+  // cliente acompanha pelo endpoint de polling que veio na resposta.
+  async function waitForStage(pollPath) {
+    const deadline = Date.now() + 15 * 60 * 1000
+    let delay = 800
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      delay = Math.min(Math.round(delay * 1.4), 5000)
+      const body = await request(pollPath)
+      if (body.state === 'failed') {
+        throw new Error(
+          body.error
+            ? `A etapa não pôde ser concluída (${body.error}). Você pode tentar de novo.`
+            : 'A etapa não pôde ser concluída. Você pode tentar de novo.'
+        )
+      }
+      if (body.state !== 'processing') return body.result
+    }
+    throw new Error(
+      'A etapa está demorando mais do que o esperado. Ela continua rodando: '
+      + 'recarregue o caso em alguns minutos para ver o resultado.'
+    )
+  }
+
   async function run(label, action) {
     setBusy(true)
     setError('')
     setStatus(label)
     try {
-      const result = await action()
+      let result = await action()
+      if (result?.state === 'processing' && result?.poll) {
+        result = await waitForStage(result.poll)
+      }
       if (caseData?.id) await loadCases(caseData.id)
       setStatus('Pronto. Você pode seguir para a próxima etapa.')
       return result
     } catch (err) {
       setError(err.message)
       setStatus('')
+      if (caseData?.id) await loadCases(caseData.id).catch(() => {})
     } finally {
       setBusy(false)
     }

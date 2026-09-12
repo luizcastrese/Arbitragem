@@ -282,7 +282,7 @@ def test_stage_execution_records_prompt_and_model(client):
     client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager"))
 
     conciliation = client.post(
-        f"/cases/{case['id']}/conciliation",
+        f"/cases/{case['id']}/conciliation?wait=120",
         json={"claimant_response": "", "respondent_response": "", "new_information": ""},
         headers=actor_headers(case["id"], "manager"),
     ).json()
@@ -341,7 +341,7 @@ def test_drift_is_annotated_on_the_executed_stage(client, monkeypatch):
     )
 
     conciliation = client.post(
-        f"/cases/{case['id']}/conciliation",
+        f"/cases/{case['id']}/conciliation?wait=120",
         json={"claimant_response": "", "respondent_response": "", "new_information": ""},
         headers=actor_headers(case["id"], "manager"),
     ).json()

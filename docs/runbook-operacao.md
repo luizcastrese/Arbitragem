@@ -127,6 +127,41 @@ serviço, senão o rate limit trata todos os clientes como um só endereço.
 
 Conferência: `GET /` não deve listar o aviso sobre `TRUSTED_PROXY_IPS`.
 
+### Suba o uvicorn com `--no-proxy-headers`
+
+Esta é a pegadinha fácil de errar. O uvicorn **também** interpreta
+`X-Forwarded-For` por padrão e reescreve o endereço do cliente antes de a
+aplicação ver a requisição, usando uma política de confiança própria
+(`--forwarded-allow-ips`, que por padrão é só `127.0.0.1`). Com as duas
+camadas ligadas, quem decide em quem confiar deixa de ser
+`TRUSTED_PROXY_IPS` — e é assim que se acaba aceitando um `X-Forwarded-For`
+forjado sem perceber.
+
+O `Dockerfile` já sobe com `--no-proxy-headers`. Quem roda o uvicorn à mão em
+produção precisa do mesmo:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+  --no-proxy-headers --timeout-graceful-shutdown 60
+```
+
+Como testar que ficou certo, com `RATE_LIMIT_MAX_REQUESTS` baixo:
+
+```bash
+# clientes distintos: cada um com seu balde (todos 200)
+for i in 1 2 3 4 5; do
+  curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 203.0.113.$i" $URL/health
+done
+
+# mesmo cliente repetindo: 429 depois do limite
+for i in 1 2 3 4 5; do
+  curl -s -o /dev/null -w '%{http_code} ' -H "X-Forwarded-For: 198.51.100.9" $URL/health
+done
+```
+
+Se os cinco endereços distintos começarem a receber 429, o serviço está vendo
+todos como um cliente só: `TRUSTED_PROXY_IPS` não cobre o proxy.
+
 `*` só é correto quando o serviço **não** aceita conexões diretas da internet.
 Se aceitar, qualquer cliente escolhe a própria chave de rate limit mandando um
 `X-Forwarded-For`.

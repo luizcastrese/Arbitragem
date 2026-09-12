@@ -185,7 +185,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     }
 
     conciliation = client.post(
-        f"/cases/{case_id}/conciliation",
+        f"/cases/{case_id}/conciliation?wait=120",
         headers=actor_headers(case_id, "manager"),
     )
     assert conciliation.status_code == 200
@@ -196,7 +196,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert conciliation.json()["continue_recommended"] is False
 
     second_round = client.post(
-        f"/cases/{case_id}/conciliation",
+        f"/cases/{case_id}/conciliation?wait=120",
         headers=actor_headers(case_id, "manager"),
         json={
             "advance": True,
@@ -209,14 +209,14 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert second_round.json()["round_number"] == 2
 
     organized = client.post(
-        f"/cases/{case_id}/organize",
+        f"/cases/{case_id}/organize?wait=120",
         headers=actor_headers(case_id, "manager"),
     )
     assert organized.status_code == 200
     assert organized.json()["execution"]["mode"] == "safe_fallback"
 
     decision = client.post(
-        f"/cases/{case_id}/decide",
+        f"/cases/{case_id}/decide?wait=120",
         headers=actor_headers(case_id, "manager"),
     )
     assert decision.status_code == 200
@@ -227,7 +227,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert "decisão de mérito" in decision.json()["decision"]
 
     review = client.post(
-        f"/cases/{case_id}/review",
+        f"/cases/{case_id}/review?wait=120",
         headers=actor_headers(case_id, "manager"),
     )
     assert review.status_code == 200
@@ -417,21 +417,21 @@ def test_stages_are_idempotent(client):
     assert first_lock.json()["manifest"] == second_lock.json()["manifest"]
 
     first_conciliation = client.post(
-        f"/cases/{case_id}/conciliation",
+        f"/cases/{case_id}/conciliation?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     second_conciliation = client.post(
-        f"/cases/{case_id}/conciliation",
+        f"/cases/{case_id}/conciliation?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     assert first_conciliation == second_conciliation
 
     first_organization = client.post(
-        f"/cases/{case_id}/organize",
+        f"/cases/{case_id}/organize?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     second_organization = client.post(
-        f"/cases/{case_id}/organize",
+        f"/cases/{case_id}/organize?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).json()
     assert first_organization == second_organization
@@ -467,11 +467,11 @@ def test_pdf_upload_extracts_text(client):
 def test_invalid_transition_and_payload_are_rejected(client):
     case_id = create_case(client)["id"]
     assert client.post(
-        f"/cases/{case_id}/decide",
+        f"/cases/{case_id}/decide?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).status_code == 409
     assert client.post(
-        f"/cases/{case_id}/conciliation",
+        f"/cases/{case_id}/conciliation?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).status_code == 409
 
@@ -492,7 +492,7 @@ def test_invalid_transition_and_payload_are_rejected(client):
         headers=actor_headers(case_id, "manager"),
     ).status_code == 200
     assert client.post(
-        f"/cases/{case_id}/organize",
+        f"/cases/{case_id}/organize?wait=120",
         headers=actor_headers(case_id, "manager"),
     ).status_code == 409
 
