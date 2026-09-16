@@ -82,7 +82,12 @@ def test_attestation_roundtrip_signature_and_split(attestation_env):
 
     valid, checks = verify_attestation(attestation)
     assert valid is True
-    assert checks == {"hash_valid": True, "signature_valid": True}
+    assert checks == {
+        "hash_valid": True,
+        "signature_valid": True,
+        "key_id": public_key_info()["key_id"],
+        "key_status": "active",
+    }
 
     # Verificação por terceiro, apenas com a chave pública
     public_b64 = public_key_info()["public_key_b64"]

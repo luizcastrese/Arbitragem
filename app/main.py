@@ -3,15 +3,28 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 from io import BytesIO
 import logging
+import os
 from pathlib import Path
 import secrets
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,11 +39,13 @@ from app.agents.reviewer import review_decision
 from app.core.attestation import (
     AttestationError,
     build_decision_attestation,
+    key_set,
     public_key_info,
     verify_attestation,
 )
 from app.core.audit import verify_audit_chain
 from app.core.canonical import canonical_hash
+from app.core.client_ip import resolve_client_ip
 from app.core.config import get_settings
 from app.core.email import (
     deliver_invitation_email,
@@ -38,8 +53,15 @@ from app.core.email import (
     deliver_verification_email,
 )
 from app.core.hashing import sha256_text
+from app.core.identifiers import email_reference
 from app.core.manifest import lock_case_manifest
 from app.core.nostr_anchor import publish_attestation_anchor
+from app.core.privacy import (
+    PrivacyPolicyNotFound,
+    current_policy,
+    get_policy,
+    list_versions as list_privacy_versions,
+)
 from app.core.prompt_registry import detect_drift
 from app.core.ratelimit import SlidingWindowRateLimiter
 from app.core.signed_url import (
@@ -79,6 +101,12 @@ from app.db.access_repository import (
     user_has_role,
     user_to_dict,
 )
+from app.db.privacy_repository import (
+    ErasureBlocked,
+    anonymize_user,
+    export_user_data,
+    open_case_ids,
+)
 from app.db.init_db import init_db
 from app.db.repository import (
     add_document as persist_document,
@@ -88,6 +116,7 @@ from app.db.repository import (
     count_appeals,
     create_case as persist_case,
     document_to_dict,
+    find_appeal_by_id,
     find_appeal_by_idempotency,
     get_document,
     get_case,
@@ -98,14 +127,21 @@ from app.db.repository import (
     persist_attestation_record,
     record_consent,
     register_contest,
+    revert_contest,
     respond_to_document as persist_response,
     save_stage,
     save_nostr_anchor,
     append_audit,
 )
 from app.db.models import Deadline, Invitation
-from app.db.session import get_db
-from app.domain.concurrency import StageBusy, claim_case_stage
+from app.db.session import SessionLocal, get_db
+from app.domain.concurrency import (
+    PROCESSING_TTL,
+    StageBusy,
+    claim_case_stage,
+    release_processing,
+)
+from app.domain.jobs import COMPLETED, FAILED, RUNNING, StageRunner
 from app.domain.frameworks import list_frameworks
 from app.domain.legacy import public_decision_view
 from app.domain.procedure import (
@@ -153,10 +189,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("valinor.request")
 
+TRUSTED_PROXY_NETWORKS = settings.trusted_proxy_networks
+
 rate_limiter = SlidingWindowRateLimiter(
     max_requests=settings.rate_limit_max_requests,
     window_seconds=settings.rate_limit_window_seconds,
     enabled=settings.rate_limit_enabled,
+    max_keys=settings.rate_limit_max_keys,
 )
 
 # As rotas de credencial (login, cadastro, verificação e redefinição) têm um
@@ -167,7 +206,15 @@ auth_rate_limiter = SlidingWindowRateLimiter(
     max_requests=settings.auth_rate_limit_max_requests,
     window_seconds=settings.auth_rate_limit_window_seconds,
     enabled=True,
+    max_keys=settings.rate_limit_max_keys,
 )
+
+if settings.proxy_awareness_missing:
+    logger.warning(
+        "rate_limit_sem_proxy_declarado: TRUSTED_PROXY_IPS está vazio. Se "
+        "houver proxy ou balanceador na frente do serviço, todas as "
+        "requisições compartilharão a mesma chave de rate limit."
+    )
 
 AUTH_RATE_LIMITED_PATHS = {
     "/auth/register",
@@ -179,10 +226,33 @@ AUTH_RATE_LIMITED_PATHS = {
 }
 
 
+# Etapas de modelo rodam aqui, fora do request. O tamanho da fila é o teto de
+# etapas simultâneas no processo; cada uma segura uma conexão de banco
+# enquanto roda, então não adianta subir além do pool.
+stage_runner = StageRunner(max_workers=int(os.getenv("STAGE_WORKERS", "4")))
+
+# Etapas assíncronas: campo do resultado no caso e status a restaurar se a
+# execução falhar no meio.
+ASYNC_STAGES = {
+    "conciliation": {"claimed": False, "on_error_status": None},
+    "organize": {"claimed": True, "on_error_status": "conciliation"},
+    "decide": {"claimed": True, "on_error_status": "organized"},
+    "review": {"claimed": True, "on_error_status": "decided"},
+    "contest": {"claimed": True, "on_error_status": "attested"},
+}
+
+MAX_STAGE_WAIT_SECONDS = 300
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    yield
+    try:
+        yield
+    finally:
+        # Dreno: uma etapa cortada no meio deixaria o caso em processing_* até
+        # o TTL de 10 minutos.
+        stage_runner.shutdown(wait=True)
 
 
 app = FastAPI(
@@ -219,7 +289,11 @@ async def observability_and_rate_limit(request: Request, call_next):
         request.scope["headers"] = headers
 
     request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    client_key = request.client.host if request.client else "unknown"
+    client_key = resolve_client_ip(
+        request.client.host if request.client else None,
+        request.headers.get("x-forwarded-for"),
+        TRUSTED_PROXY_NETWORKS,
+    )
 
     if request.url.path in AUTH_RATE_LIMITED_PATHS and request.method == "POST":
         allowed, retry_after = auth_rate_limiter.allow(f"auth:{client_key}")
@@ -298,6 +372,97 @@ def _set_session_cookie(response: Response, token: str, max_age: int = 7 * 86400
         samesite="lax",
         path="/",
     )
+
+
+def _job_session() -> Session:
+    """Sessão de banco para uma etapa em segundo plano.
+
+    A sessão do request já foi devolvida quando a thread começa, então a etapa
+    precisa da própria. Quando os testes trocam `get_db` por uma base em
+    memória, a etapa tem que ir para a mesma base — daí a consulta ao override
+    antes de cair no `SessionLocal` do serviço.
+    """
+    override = app.dependency_overrides.get(get_db)
+    if override is not None:
+        return next(override())
+    return SessionLocal()
+
+
+def _release_stage(case_id: str, stage: str, status: Optional[str]):
+    """Devolve o caso ao status anterior quando a etapa falha.
+
+    Sem isso o caso ficaria em `processing_*` até o TTL de 10 minutos, sem
+    ninguém conseguir repetir a etapa.
+    """
+
+    def recover(db: Session, error: str) -> None:
+        if status is None:
+            return
+        case = get_case(db, case_id)
+        if case is None:  # pragma: no cover - o caso existia ao reivindicar
+            return
+        release_processing(db, case, status)
+        append_audit(
+            db,
+            case,
+            "stage_failed",
+            {"stage": stage, "error": error, "restored_status": status},
+        )
+        db.commit()
+
+    return recover
+
+
+def _stage_accepted_response(case_id: str, stage: str, job) -> JSONResponse:
+    return JSONResponse(
+        status_code=202,
+        content={
+            "state": RUNNING,
+            "case_id": case_id,
+            "stage": stage,
+            "started_at": job.started_at,
+            "poll": f"/cases/{case_id}/stage/{stage}",
+            "detail": (
+                "A etapa roda em segundo plano porque depende de modelos de "
+                "linguagem. Acompanhe em poll, ou repita a chamada com "
+                "?wait=<segundos> para aguardar a conclusão na própria "
+                "resposta."
+            ),
+        },
+    )
+
+
+def _run_stage(case_id: str, stage: str, work, wait: float, on_failure=None):
+    """Agenda a etapa e responde 202 — ou o resultado, se `wait` for pedido.
+
+    `wait` é a saída para clientes que preferem uma chamada só: a requisição
+    bloqueia até o limite pedido e, se a etapa terminar dentro dele, devolve o
+    resultado como antes. Estourado o limite, vira 202 e o trabalho segue.
+    """
+    on_error_status = ASYNC_STAGES[stage]["on_error_status"]
+    recovery = on_failure or _release_stage(case_id, stage, on_error_status)
+    job = stage_runner.submit(
+        case_id,
+        stage,
+        work,
+        _job_session,
+        on_failure=recovery,
+    )
+    if wait <= 0:
+        return _stage_accepted_response(case_id, stage, job)
+
+    try:
+        result = stage_runner.wait(job, timeout=min(wait, MAX_STAGE_WAIT_SECONDS))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"A etapa {stage} falhou: {type(exc).__name__}: {exc}",
+        ) from exc
+    if result is None:
+        return _stage_accepted_response(case_id, stage, job)
+    return result
 
 
 def _case_or_404(db: Session, case_id: str):
@@ -539,6 +704,7 @@ def root():
         "status": "running",
         "docs": "/docs",
         "ui": "/ui/",
+        "privacy_policy": "/privacy",
         "openai_enabled": settings.openai_enabled,
         "auth_required": settings.auth_required,
         "procedure_terms": {
@@ -563,6 +729,19 @@ def root():
                 (
                     "PLATFORM_SIGNING_SECRET usa valor de desenvolvimento."
                     if settings.using_development_signing_secret
+                    else None
+                ),
+                (
+                    "TRUSTED_PROXY_IPS vazio com rate limit ligado: atrás de um "
+                    "proxy todas as requisições dividem a mesma chave."
+                    if settings.proxy_awareness_missing
+                    else None
+                ),
+                (
+                    "DATA_CONTROLLER_NAME/PRIVACY_CONTACT_EMAIL não declarados: "
+                    "a política de privacidade fica sem controlador e sem canal "
+                    "para o titular."
+                    if not settings.privacy_contacts_declared
                     else None
                 ),
             ]
@@ -881,7 +1060,14 @@ def invite_participant(
         db,
         case,
         "participant_invited",
-        {"email": invitation.email, "role": invitation.role, "invitation_id": invitation.id},
+        # Máscara e impressão, nunca o endereço: a auditoria é imutável e
+        # legível por todos os participantes do caso, então um e-mail gravado
+        # aqui não poderia mais ser removido no pedido de eliminação.
+        {
+            **email_reference(invitation.email),
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+        },
     )
     db.commit()
     create_notification(
@@ -1026,6 +1212,131 @@ def get_terms_version(version: str):
     }
 
 
+@app.get("/privacy")
+def get_current_privacy_policy():
+    """Política de privacidade vigente, com versão, hash e identificação do
+    controlador. É o endereço que os termos do procedimento referenciam."""
+    settings_now = get_settings()
+    return {
+        **current_policy().as_dict(),
+        "available_versions": list_privacy_versions(),
+        "controller": {
+            "name": settings_now.data_controller_name or None,
+            "contact_email": settings_now.privacy_contact_email or None,
+            "declared": settings_now.privacy_contacts_declared,
+        },
+        "retention": {
+            "document_retention_days": settings_now.document_retention_days,
+            "enabled": settings_now.document_retention_days > 0,
+        },
+        "processing": {
+            "llm_enabled": settings_now.llm_enabled,
+            "llm_providers": sorted(
+                {
+                    provider
+                    for provider, enabled in (
+                        ("openai", settings_now.openai_enabled),
+                        ("openrouter", settings_now.openrouter_enabled),
+                    )
+                    if enabled
+                }
+            ),
+            "nostr_anchor_enabled": settings_now.nostr_anchor_enabled,
+        },
+        "rights_endpoints": {
+            "access_and_portability": "GET /account/data-export",
+            "erasure": "POST /account/erasure",
+        },
+    }
+
+
+@app.get("/privacy/{version}")
+def get_privacy_policy_version(version: str):
+    try:
+        policy = get_policy(version)
+    except PrivacyPolicyNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Versão de política de privacidade desconhecida: {version}",
+        ) from exc
+    return {
+        **policy.as_dict(),
+        "current": version == current_policy().version,
+        "available_versions": list_privacy_versions(),
+    }
+
+
+@app.get("/account/data-export")
+def export_account_data(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Acesso e portabilidade (art. 18, II e V da LGPD): tudo o que a
+    plataforma guarda sobre a conta, em JSON."""
+    user = _session_user_or_401(db, x_session_token)
+    return export_user_data(db, user)
+
+
+@app.post("/account/erasure")
+def erase_account(
+    response: Response,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Eliminação (art. 18, VI da LGPD) por anonimização.
+
+    A cadeia de auditoria e as attestations não são apagadas: elas guardam
+    hashes e atos, e removê-las invalidaria decisões que terceiros podem ter
+    executado. O que sai é a identificação do titular.
+    """
+    user = _session_user_or_401(db, x_session_token)
+    try:
+        result = anonymize_user(db, user)
+    except ErasureBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        secure=settings.is_production,
+        httponly=True,
+        samesite="lax",
+    )
+    return result
+
+
+@app.get("/account/erasure/preview")
+def preview_account_erasure(
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Diz de antemão se a eliminação seria aceita e o que ela preserva."""
+    user = _session_user_or_401(db, x_session_token)
+    blocking = open_case_ids(db, user.id)
+    return {
+        "allowed": not blocking,
+        "blocking_case_ids": blocking,
+        "detail": (
+            "A identificação não pode ser removida enquanto a conta for parte "
+            "de um caso em andamento."
+            if blocking
+            else "A conta pode ser anonimizada agora."
+        ),
+        "preserved": [
+            "cadeia de auditoria dos casos",
+            "hashes e metadados dos documentos",
+            "attestations emitidas",
+        ],
+        "removed": [
+            "nome de exibição e e-mail",
+            "credencial de acesso e sessões",
+            "notificações e convites pendentes",
+        ],
+    }
+
+
 @app.post("/cases/{case_id}/consent")
 def set_case_consent(
     case_id: str,
@@ -1142,6 +1453,20 @@ def _document_or_404(db: Session, case_id: str, document_id: str):
     return document
 
 
+def _assert_not_purged(document) -> None:
+    """410 e não 404: o documento existiu e seu hash continua no registro; o
+    que saiu foram os bytes, pela política de retenção."""
+    if getattr(document, "content_purged_at", None):
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "O conteúdo deste documento foi expurgado pela política de "
+                "retenção. Os metadados e o hash permanecem no registro do "
+                "caso, que segue verificável."
+            ),
+        )
+
+
 def _counterparty(document) -> str:
     return "respondent" if document.submitted_by == "claimant" else "claimant"
 
@@ -1250,6 +1575,7 @@ def download_document_original(
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
     document = _document_or_404(db, case_id, document_id)
+    _assert_not_purged(document)
     original = load_document_original(document)
     if original is None:
         raise HTTPException(
@@ -1277,6 +1603,7 @@ def issue_original_download_url(
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
     document = _document_or_404(db, case_id, document_id)
+    _assert_not_purged(document)
     if not document.original_key:
         raise HTTPException(
             status_code=404,
@@ -1448,6 +1775,15 @@ def retrieve_chunks(
 def assess_case_conciliation(
     case_id: str,
     payload: ConciliationRoundRequest = ConciliationRoundRequest(),
+    wait: float = Query(
+        0,
+        ge=0,
+        le=MAX_STAGE_WAIT_SECONDS,
+        description=(
+            "Segundos a aguardar a conclusão na própria resposta. 0 (padrão) "
+            "responde 202 e a etapa segue em segundo plano."
+        ),
+    ),
     x_actor_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
@@ -1489,6 +1825,17 @@ def assess_case_conciliation(
             ),
         )
 
+    # A triagem de composição não passa por claim_case_stage: rodadas podem se
+    # repetir legitimamente, então não há "etapa concluída" a reivindicar. O
+    # registro de jobs faz as vezes de trava contra duas rodadas simultâneas
+    # no mesmo processo.
+    running = stage_runner.get(case_id, "conciliation")
+    if running is not None and running.state == RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail="Já existe uma rodada de composição em processamento",
+        )
+
     context = {
         "round_number": len(rounds) + 1,
         "manifest": case_data["locked_manifest"],
@@ -1522,41 +1869,55 @@ def assess_case_conciliation(
         },
     }
     round_number = len(rounds) + 1
-    conciliation = _record_prompt_provenance(
-        case_data,
-        "conciliator",
-        assess_conciliation(context, round_number),
-    )
-    updated_rounds = [*rounds, conciliation]
-    save_stage(
-        db,
-        case,
-        field="conciliation_json",
-        value=updated_rounds,
-        status="conciliation",
-        event_type=(
-            "conciliation_screened"
-            if round_number == 1
-            else "conciliation_round_generated"
-        ),
-        event_payload={
-            "round_number": round_number,
-            "convergence": conciliation.get("convergence"),
-            "recommended_path": conciliation.get("recommended_path"),
-            "confidence": conciliation.get("confidence"),
-            "continue_recommended": conciliation.get("continue_recommended"),
-            "recommended_additional_rounds": conciliation.get(
-                "recommended_additional_rounds"
+
+    def work(job_db: Session):
+        job_case = get_case(job_db, case_id)
+        conciliation = _record_prompt_provenance(
+            case_data,
+            "conciliator",
+            assess_conciliation(context, round_number),
+        )
+        updated_rounds = [*rounds, conciliation]
+        save_stage(
+            job_db,
+            job_case,
+            field="conciliation_json",
+            value=updated_rounds,
+            status="conciliation",
+            event_type=(
+                "conciliation_screened"
+                if round_number == 1
+                else "conciliation_round_generated"
             ),
-            "execution": conciliation.get("execution", {}),
-        },
-    )
-    return conciliation
+            event_payload={
+                "round_number": round_number,
+                "convergence": conciliation.get("convergence"),
+                "recommended_path": conciliation.get("recommended_path"),
+                "confidence": conciliation.get("confidence"),
+                "continue_recommended": conciliation.get("continue_recommended"),
+                "recommended_additional_rounds": conciliation.get(
+                    "recommended_additional_rounds"
+                ),
+                "execution": conciliation.get("execution", {}),
+            },
+        )
+        return conciliation
+
+    return _run_stage(case_id, "conciliation", work, wait)
 
 
 @app.post("/cases/{case_id}/organize")
 def organize_case(
     case_id: str,
+    wait: float = Query(
+        0,
+        ge=0,
+        le=MAX_STAGE_WAIT_SECONDS,
+        description=(
+            "Segundos a aguardar a conclusão na própria resposta. 0 (padrão) "
+            "responde 202 e a etapa segue em segundo plano."
+        ),
+    ),
     x_actor_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
@@ -1591,29 +1952,43 @@ def organize_case(
             return organized
         raise HTTPException(status_code=409, detail="Organização já em andamento")
 
-    organized = _record_prompt_provenance(
-        case_data,
-        "organizer",
-        organizer_organize_case(
-            documents=case_data["documents"],
-            chunks=case_data["chunks"],
-        ),
-    )
-    save_stage(
-        db,
-        case,
-        field="organized_json",
-        value=organized,
-        status="organized",
-        event_type="case_organized",
-        event_payload={"execution": organized.get("execution", {})},
-    )
-    return organized
+    def work(job_db: Session):
+        job_case = get_case(job_db, case_id)
+        job_data = case_to_dict(job_case)
+        organized = _record_prompt_provenance(
+            job_data,
+            "organizer",
+            organizer_organize_case(
+                documents=job_data["documents"],
+                chunks=job_data["chunks"],
+            ),
+        )
+        save_stage(
+            job_db,
+            job_case,
+            field="organized_json",
+            value=organized,
+            status="organized",
+            event_type="case_organized",
+            event_payload={"execution": organized.get("execution", {})},
+        )
+        return organized
+
+    return _run_stage(case_id, "organize", work, wait)
 
 
 @app.post("/cases/{case_id}/decide")
 def decide_case(
     case_id: str,
+    wait: float = Query(
+        0,
+        ge=0,
+        le=MAX_STAGE_WAIT_SECONDS,
+        description=(
+            "Segundos a aguardar a conclusão na própria resposta. 0 (padrão) "
+            "responde 202 e a etapa segue em segundo plano."
+        ),
+    ),
     x_actor_token: str = Header(default=""),
     idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     db: Session = Depends(get_db),
@@ -1644,76 +2019,94 @@ def decide_case(
             return existing
         raise HTTPException(status_code=409, detail="Decisão já em processamento")
 
-    decision_context = {
-        "manifest": case_data["locked_manifest"],
-        "conciliation_rounds": case_data["conciliation_rounds"],
-        "organized_case": case_data["organized"],
-        "retrieved_evidence": {
-            "delivery": _retrieve(
-                case_data,
-                "obrigações de entrega e cumprimento parcial",
-            ),
-            "payment": _retrieve(
-                case_data,
-                "condições de pagamento e proporcionalidade",
-            ),
-            "deadline": _retrieve(
-                case_data,
-                "cumprimento de prazo e atraso",
-            ),
-        },
-    }
-    decision, verification, conclusion = generate_and_verify_decision(
-        db,
-        case,
-        case_data,
-        decision_context,
-        role="judge",
-        idempotency_key=idempotency_key or None,
-    )
-    decision = _record_prompt_provenance(case_data, "judge", decision)
-    stability = maybe_run_stability(db, case, case_data, decision_context, decision)
-    if stability and not stability.get("stable"):
-        decision["outcome"] = "inconclusive"
-        decision["procedure_conclusion"] = "inconclusive"
-        decision.setdefault("abstention_reasons", [])
-        if "unstable_decision" not in decision["abstention_reasons"]:
-            decision["abstention_reasons"].append("unstable_decision")
-        if "material_model_disagreement" not in decision["abstention_reasons"]:
-            decision["abstention_reasons"].append("material_model_disagreement")
-        conclusion = "inconclusive"
-        append_audit(
-            db,
-            case,
-            "decision_unstable",
-            {"disagreements": stability.get("material_disagreements") or []},
+    def work(job_db: Session):
+        job_case = get_case(job_db, case_id)
+        job_data = case_to_dict(job_case)
+        decision_context = {
+            "manifest": job_data["locked_manifest"],
+            "conciliation_rounds": job_data["conciliation_rounds"],
+            "organized_case": job_data["organized"],
+            "retrieved_evidence": {
+                "delivery": _retrieve(
+                    job_data,
+                    "obrigações de entrega e cumprimento parcial",
+                ),
+                "payment": _retrieve(
+                    job_data,
+                    "condições de pagamento e proporcionalidade",
+                ),
+                "deadline": _retrieve(
+                    job_data,
+                    "cumprimento de prazo e atraso",
+                ),
+            },
+        }
+        decision, verification, conclusion = generate_and_verify_decision(
+            job_db,
+            job_case,
+            job_data,
+            decision_context,
+            role="judge",
+            idempotency_key=idempotency_key or None,
         )
-    case.procedure_conclusion = conclusion
-    case.stability_json = (
-        __import__("json").dumps(stability, ensure_ascii=False) if stability else case.stability_json
-    )
-    status = "invalidated" if conclusion == "invalidated" else "decided"
-    save_stage(
-        db,
-        case,
-        field="decision_json",
-        value=decision,
-        status=status,
-        event_type="decision_generated",
-        event_payload={
-            "outcome": decision.get("outcome"),
-            "confidence": decision.get("confidence"),
-            "procedure_conclusion": conclusion,
-            "verification_valid": verification.get("valid"),
-            "execution": decision.get("execution", {}),
-        },
-    )
-    return public_decision_view(decision)
+        decision = _record_prompt_provenance(job_data, "judge", decision)
+        stability = maybe_run_stability(
+            job_db, job_case, job_data, decision_context, decision
+        )
+        if stability and not stability.get("stable"):
+            decision["outcome"] = "inconclusive"
+            decision["procedure_conclusion"] = "inconclusive"
+            decision.setdefault("abstention_reasons", [])
+            if "unstable_decision" not in decision["abstention_reasons"]:
+                decision["abstention_reasons"].append("unstable_decision")
+            if "material_model_disagreement" not in decision["abstention_reasons"]:
+                decision["abstention_reasons"].append("material_model_disagreement")
+            conclusion = "inconclusive"
+            append_audit(
+                job_db,
+                job_case,
+                "decision_unstable",
+                {"disagreements": stability.get("material_disagreements") or []},
+            )
+        job_case.procedure_conclusion = conclusion
+        job_case.stability_json = (
+            json.dumps(stability, ensure_ascii=False)
+            if stability
+            else job_case.stability_json
+        )
+        status = "invalidated" if conclusion == "invalidated" else "decided"
+        save_stage(
+            job_db,
+            job_case,
+            field="decision_json",
+            value=decision,
+            status=status,
+            event_type="decision_generated",
+            event_payload={
+                "outcome": decision.get("outcome"),
+                "confidence": decision.get("confidence"),
+                "procedure_conclusion": conclusion,
+                "verification_valid": verification.get("valid"),
+                "execution": decision.get("execution", {}),
+            },
+        )
+        return public_decision_view(decision)
+
+    return _run_stage(case_id, "decide", work, wait)
 
 
 @app.post("/cases/{case_id}/review")
 def review_case(
     case_id: str,
+    wait: float = Query(
+        0,
+        ge=0,
+        le=MAX_STAGE_WAIT_SECONDS,
+        description=(
+            "Segundos a aguardar a conclusão na própria resposta. 0 (padrão) "
+            "responde 202 e a etapa segue em segundo plano."
+        ),
+    ),
     x_actor_token: str = Header(default=""),
     idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     db: Session = Depends(get_db),
@@ -1744,95 +2137,117 @@ def review_case(
             return existing
         raise HTTPException(status_code=409, detail="Auditoria já em processamento")
 
-    verification = case_data.get("verification") or {}
-    review = _record_prompt_provenance(
-        case_data,
-        "reviewer",
-        run_automatic_review(db, case, case_data, case_data["decision"], verification),
-    )
+    def work(job_db: Session):
+        job_case = get_case(job_db, case_id)
+        job_data = case_to_dict(job_case)
+        verification = job_data.get("verification") or {}
+        review = _record_prompt_provenance(
+            job_data,
+            "reviewer",
+            run_automatic_review(
+                job_db, job_case, job_data, job_data["decision"], verification
+            ),
+        )
 
-    reconstruction_used = False
-    decision = case_data["decision"]
-    conclusion, decision = finalize_review_outcome(
-        decision, verification, review, reconstruction_used
-    )
-    if conclusion == "pending_reconstruction":
-        if not alternate_judge_available():
-            conclusion, decision = finalize_review_outcome(
-                decision, verification, review, reconstruction_used=True
-            )
-        else:
-            reconstruction_used = True
-            new_input = {
-                "manifest": case_data["locked_manifest"],
-                "conciliation_rounds": case_data["conciliation_rounds"],
-                "organized_case": case_data["organized"],
-                "retrieved_evidence": {
-                    "delivery": _retrieve(
-                        case_data, "obrigações de entrega e cumprimento parcial"
-                    ),
-                    "payment": _retrieve(
-                        case_data, "condições de pagamento e proporcionalidade"
-                    ),
-                    "deadline": _retrieve(case_data, "cumprimento de prazo e atraso"),
-                },
-                "reconstruction": True,
-            }
-            decision, verification, _conclusion, review = reconstruct_once(
-                db,
-                case,
-                case_data,
-                new_input,
-                case.current_decision_run_id,
-            )
-            review = _record_prompt_provenance(case_data, "reviewer", review)
-            conclusion, decision = finalize_review_outcome(
-                decision, verification, review, reconstruction_used=True
-            )
-            save_stage(
-                db,
-                case,
-                field="decision_json",
-                value=decision,
-                status="invalidated" if conclusion == "invalidated" else "decided",
-                event_type="decision_reconstructed",
-                event_payload={
-                    "outcome": decision.get("outcome"),
-                    "procedure_conclusion": conclusion,
-                    "supersedes_id": case.current_decision_run_id,
-                },
-            )
+        reconstruction_used = False
+        decision = job_data["decision"]
+        conclusion, decision = finalize_review_outcome(
+            decision, verification, review, reconstruction_used
+        )
+        if conclusion == "pending_reconstruction":
+            if not alternate_judge_available():
+                conclusion, decision = finalize_review_outcome(
+                    decision, verification, review, reconstruction_used=True
+                )
+            else:
+                reconstruction_used = True
+                new_input = {
+                    "manifest": job_data["locked_manifest"],
+                    "conciliation_rounds": job_data["conciliation_rounds"],
+                    "organized_case": job_data["organized"],
+                    "retrieved_evidence": {
+                        "delivery": _retrieve(
+                            job_data, "obrigações de entrega e cumprimento parcial"
+                        ),
+                        "payment": _retrieve(
+                            job_data, "condições de pagamento e proporcionalidade"
+                        ),
+                        "deadline": _retrieve(
+                            job_data, "cumprimento de prazo e atraso"
+                        ),
+                    },
+                    "reconstruction": True,
+                }
+                decision, verification, _conclusion, review = reconstruct_once(
+                    job_db,
+                    job_case,
+                    job_data,
+                    new_input,
+                    job_case.current_decision_run_id,
+                )
+                review = _record_prompt_provenance(job_data, "reviewer", review)
+                conclusion, decision = finalize_review_outcome(
+                    decision, verification, review, reconstruction_used=True
+                )
+                save_stage(
+                    job_db,
+                    job_case,
+                    field="decision_json",
+                    value=decision,
+                    status="invalidated" if conclusion == "invalidated" else "decided",
+                    event_type="decision_reconstructed",
+                    event_payload={
+                        "outcome": decision.get("outcome"),
+                        "procedure_conclusion": conclusion,
+                        "supersedes_id": job_case.current_decision_run_id,
+                    },
+                )
 
-    case.procedure_conclusion = (
-        conclusion if conclusion != "pending_reconstruction" else decision.get("procedure_conclusion")
-    )
-    save_stage(
-        db,
-        case,
-        field="review_json",
-        value=review,
-        status="reviewed",
-        event_type="review_generated",
-        event_payload={
-            "approved": review.get("approved"),
-            "outcome": review.get("outcome"),
-            "procedure_conclusion": case.procedure_conclusion,
-            "reconstruction_used": reconstruction_used,
-            "execution": review.get("execution", {}),
-        },
-    )
-    return review
+        job_case.procedure_conclusion = (
+            conclusion
+            if conclusion != "pending_reconstruction"
+            else decision.get("procedure_conclusion")
+        )
+        save_stage(
+            job_db,
+            job_case,
+            field="review_json",
+            value=review,
+            status="reviewed",
+            event_type="review_generated",
+            event_payload={
+                "approved": review.get("approved"),
+                "outcome": review.get("outcome"),
+                "procedure_conclusion": job_case.procedure_conclusion,
+                "reconstruction_used": reconstruction_used,
+                "execution": review.get("execution", {}),
+            },
+        )
+        return review
+
+    return _run_stage(case_id, "review", work, wait)
 
 
 @app.get("/.well-known/valinor-signing-key")
 def signing_key():
+    """Conjunto de chaves de assinatura da plataforma.
+
+    Os campos de topo descrevem a chave ativa (o formato que executores
+    externos já consomem). `keys` traz o conjunto completo: a ativa e as
+    aposentadas, que continuam válidas para verificar attestations emitidas
+    antes de uma rotação.
+    """
     settings_now = get_settings()
     if not settings_now.attestation_enabled:
         raise HTTPException(
             status_code=404,
             detail="A emissão de attestations não está habilitada nesta instância",
         )
-    return public_key_info()
+    try:
+        keys = key_set()
+    except AttestationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {**public_key_info(), **keys}
 
 
 @app.post("/cases/{case_id}/attestation")
@@ -2001,6 +2416,15 @@ def verify_attestation_endpoint(payload: AttestationVerifyRequest):
 def contest_case(
     case_id: str,
     payload: ContestRequest,
+    wait: float = Query(
+        0,
+        ge=0,
+        le=MAX_STAGE_WAIT_SECONDS,
+        description=(
+            "Segundos a aguardar a conclusão na própria resposta. 0 (padrão) "
+            "responde 202 e o recurso automático segue em segundo plano."
+        ),
+    ),
     x_actor_token: str = Header(default=""),
     idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     db: Session = Depends(get_db),
@@ -2032,7 +2456,7 @@ def contest_case(
         if existing:
             return {
                 **case_data["contest"],
-                "appeal": existing.result_json and __import__("json").loads(existing.result_json),
+                "appeal": existing.result_json and json.loads(existing.result_json),
                 "appeal_id": existing.id,
             }
         return {
@@ -2118,13 +2542,143 @@ def contest_case(
         "requested_correction": payload.requested_correction,
         "filed_by": actor_role,
     }
-    result = run_appeal(db, updated, case_to_dict(updated), appeal, contest_payload)
     db.commit()
-    refreshed = case_to_dict(get_case(db, case_id))
+    appeal_id = appeal.id
+
+    def on_contest_failure(job_db: Session, error: str) -> None:
+        job_case = get_case(job_db, case_id)
+        if job_case is None:  # pragma: no cover - o caso existia ao reivindicar
+            return
+        revert_contest(job_db, job_case, appeal_id, "attested", error)
+
+    def work(job_db: Session):
+        job_case = get_case(job_db, case_id)
+        job_appeal = find_appeal_by_id(job_db, case_id, appeal_id)
+        result = run_appeal(
+            job_db,
+            job_case,
+            case_to_dict(job_case),
+            job_appeal,
+            contest_payload,
+        )
+        job_db.commit()
+        refreshed = case_to_dict(get_case(job_db, case_id))
+        return {
+            **refreshed["contest"],
+            "appeal": result,
+            "grounds": grounds,
+        }
+
+    return _run_stage(case_id, "contest", work, wait, on_failure=on_contest_failure)
+
+
+def _claim_is_stale(case) -> bool:
+    """Caso preso em `processing_*` além do TTL de reivindicação."""
+    if not str(case.status or "").startswith("processing"):
+        return False
+    started = getattr(case, "processing_started_at", None)
+    if started is None:
+        return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - started > PROCESSING_TTL
+
+
+def _stage_result(case_data: Dict, stage: str):
+    """Resultado já persistido da etapa, ou None se ela ainda não concluiu."""
+    if stage == "conciliation":
+        rounds = case_data.get("conciliation_rounds") or []
+        return rounds[-1] if rounds else None
+    if stage == "organize":
+        return case_data.get("organized")
+    if stage == "decide":
+        decision = case_data.get("decision")
+        return public_decision_view(decision) if decision else None
+    if stage == "review":
+        return case_data.get("review")
+    if stage == "contest":
+        contest = case_data.get("contest") or {}
+        if not contest.get("contested"):
+            return None
+        appeals = case_data.get("appeals") or []
+        return {**contest, "appeal": appeals[-1] if appeals else None}
+    return None
+
+
+@app.get("/cases/{case_id}/stage/{stage}")
+def get_stage_status(
+    case_id: str,
+    stage: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Andamento de uma etapa que roda em segundo plano.
+
+    A fonte da verdade é o banco: se o resultado já está gravado, a etapa
+    concluiu — mesmo que o serviço tenha reiniciado no meio e o registro em
+    memória tenha se perdido. O registro só acrescenta o motivo de uma falha.
+    """
+    if stage not in ASYNC_STAGES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Etapa desconhecida: {stage}. "
+            f"Etapas assíncronas: {', '.join(sorted(ASYNC_STAGES))}.",
+        )
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    case_data = case_to_dict(case, include_content=False, include_embeddings=False)
+
+    job = stage_runner.get(case_id, stage)
+    result = _stage_result(case_data, stage)
+    body = {
+        "case_id": case_id,
+        "stage": stage,
+        "case_status": case.status,
+        "started_at": job.started_at if job else None,
+        "finished_at": job.finished_at if job else None,
+    }
+
+    if job is not None and job.state == FAILED:
+        return {
+            **body,
+            "state": FAILED,
+            "error": job.error,
+            "detail": (
+                "A etapa falhou e o caso voltou ao estado anterior. "
+                "É possível repetir a chamada."
+            ),
+        }
+    # Concluída é só quando o resultado está gravado E não há outra execução
+    # da mesma etapa em voo (a composição admite rodadas sucessivas).
+    if result is not None and (job is None or job.state != RUNNING):
+        return {**body, "state": COMPLETED, "result": result}
+    if _claim_is_stale(case) and job is None:
+        # O processo morreu entre a reivindicação da etapa e o fim dela: o
+        # registro em memória sumiu junto e no banco sobrou um `processing_*`
+        # que ninguém vai concluir. Passado o TTL a etapa pode ser
+        # reivindicada de novo, e é isso que o cliente precisa saber — sem
+        # este ramo o polling responderia `processing` para sempre.
+        return {
+            **body,
+            "state": FAILED,
+            "error": "stage_abandoned",
+            "detail": (
+                "A etapa foi interrompida (provavelmente por reinício do "
+                "serviço) e o prazo de reivindicação expirou. Repita a "
+                "chamada para executá-la de novo."
+            ),
+        }
+    if job is not None or str(case.status or "").startswith("processing"):
+        # Inclui o caso de um job já concluído cujo resultado ainda não
+        # aparece nesta leitura. Reportar "pending" aqui seria dizer que a
+        # etapa nunca começou, e um cliente que trata `pending` como fim
+        # desistiria justamente no instante entre o commit e a leitura. O
+        # estado só anda para frente: quem está em polling continua.
+        return {**body, "state": RUNNING}
     return {
-        **refreshed["contest"],
-        "appeal": result,
-        "grounds": grounds,
+        **body,
+        "state": "pending",
+        "detail": "A etapa ainda não foi iniciada para este caso.",
     }
 
 

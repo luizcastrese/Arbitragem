@@ -9,7 +9,7 @@ pública da plataforma.
 
 import base64
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -52,6 +52,11 @@ def load_private_key(raw: Optional[str] = None) -> Ed25519PrivateKey:
         ) from exc
 
 
+def key_id_for(public_b64: str) -> str:
+    """key_id determinístico derivado da chave pública."""
+    return canonical_hash({"ed25519_public_key": public_b64})[:16]
+
+
 def public_key_info(private_key: Optional[Ed25519PrivateKey] = None) -> Dict[str, str]:
     """Retorna a chave pública (base64) e o key_id derivado dela."""
     key = private_key or load_private_key()
@@ -60,12 +65,72 @@ def public_key_info(private_key: Optional[Ed25519PrivateKey] = None) -> Dict[str
         format=serialization.PublicFormat.Raw,
     )
     public_b64 = base64.b64encode(public_bytes).decode("ascii")
-    key_id = canonical_hash({"ed25519_public_key": public_b64})[:16]
     return {
         "algorithm": SIGNATURE_ALGORITHM,
         "public_key_b64": public_b64,
-        "key_id": key_id,
+        "key_id": key_id_for(public_b64),
     }
+
+
+def retired_public_keys() -> List[Dict[str, str]]:
+    """Chaves públicas aposentadas, ainda aceitas na verificação.
+
+    Rotacionar a chave de assinatura não pode invalidar as attestations já
+    emitidas: elas continuam sendo verificadas contra a chave que as assinou.
+    A chave privada correspondente não fica mais no ambiente — só a pública,
+    em ``PLATFORM_ED25519_RETIRED_PUBLIC_KEYS``.
+    """
+    entries: List[Dict[str, str]] = []
+    seen = set()
+    for raw in get_settings().platform_ed25519_retired_public_keys:
+        public_b64 = raw.strip()
+        if not public_b64 or public_b64 in seen:
+            continue
+        try:
+            decoded = base64.b64decode(public_b64, validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise AttestationError(
+                "PLATFORM_ED25519_RETIRED_PUBLIC_KEYS contém um valor que não "
+                f"é base64: {public_b64[:12]}..."
+            ) from exc
+        if len(decoded) != 32:
+            raise AttestationError(
+                "PLATFORM_ED25519_RETIRED_PUBLIC_KEYS espera chaves públicas "
+                f"Ed25519 de 32 bytes; recebi {len(decoded)}."
+            )
+        seen.add(public_b64)
+        entries.append(
+            {
+                "algorithm": SIGNATURE_ALGORITHM,
+                "public_key_b64": public_b64,
+                "key_id": key_id_for(public_b64),
+                "status": "retired",
+            }
+        )
+    return entries
+
+
+def key_set() -> Dict[str, Any]:
+    """Conjunto de chaves publicado: a ativa mais as aposentadas."""
+    active = None
+    if get_settings().attestation_enabled:
+        active = {**public_key_info(), "status": "active"}
+    retired = retired_public_keys()
+    keys = ([active] if active else []) + retired
+    return {"active": active, "retired": retired, "keys": keys}
+
+
+def _verification_candidates() -> List[Dict[str, str]]:
+    candidates: List[Dict[str, str]] = []
+    try:
+        candidates.append({**public_key_info(), "status": "active"})
+    except AttestationError:
+        pass
+    try:
+        candidates.extend(retired_public_keys())
+    except AttestationError:
+        pass
+    return candidates
 
 
 def _sign(payload: Dict[str, Any], private_key: Ed25519PrivateKey) -> Dict[str, Any]:
@@ -79,13 +144,36 @@ def _sign(payload: Dict[str, Any], private_key: Ed25519PrivateKey) -> Dict[str, 
     }
 
 
+def _signature_matches(
+    public_b64: str,
+    signed_body: Dict[str, Any],
+    signature_b64: str,
+) -> bool:
+    try:
+        public_key = Ed25519PublicKey.from_public_bytes(
+            base64.b64decode(public_b64, validate=True)
+        )
+        public_key.verify(
+            base64.b64decode(signature_b64, validate=True),
+            canonical_json(signed_body).encode("utf-8"),
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def verify_attestation(
     attestation: Dict[str, Any],
     public_key_b64: Optional[str] = None,
-) -> Tuple[bool, Dict[str, bool]]:
+) -> Tuple[bool, Dict[str, Any]]:
     """Verificação stateless: hash interno + assinatura Ed25519.
 
-    Retorna (valid, {"hash_valid": ..., "signature_valid": ...}).
+    Sem chave informada, a assinatura é conferida contra o conjunto de chaves
+    da plataforma — a ativa e as aposentadas. É isso que mantém verificável
+    uma attestation emitida antes de uma rotação. O `key_id` que fechou a
+    verificação volta no resultado.
+
+    Retorna (valid, {"hash_valid", "signature_valid", "key_id", "key_status"}).
     """
     unsigned = {
         key: value
@@ -95,23 +183,34 @@ def verify_attestation(
     declared_hash = unsigned.pop("attestation_hash", None)
     hash_valid = declared_hash == canonical_hash(unsigned)
 
-    signature_valid = False
-    try:
-        if public_key_b64:
-            public_bytes = base64.b64decode(public_key_b64, validate=True)
-            public_key = Ed25519PublicKey.from_public_bytes(public_bytes)
-        else:
-            public_key = load_private_key().public_key()
-        signed_body = {**unsigned, "attestation_hash": declared_hash}
-        signature = base64.b64decode(attestation.get("signature", ""), validate=True)
-        public_key.verify(signature, canonical_json(signed_body).encode("utf-8"))
-        signature_valid = True
-    except Exception:
-        signature_valid = False
+    signed_body = {**unsigned, "attestation_hash": declared_hash}
+    signature_b64 = attestation.get("signature", "") or ""
 
+    if public_key_b64:
+        candidates = [
+            {
+                "public_key_b64": public_key_b64,
+                "key_id": key_id_for(public_key_b64),
+                "status": "provided",
+            }
+        ]
+    else:
+        candidates = _verification_candidates()
+
+    matched: Optional[Dict[str, str]] = None
+    for candidate in candidates:
+        if _signature_matches(
+            candidate["public_key_b64"], signed_body, signature_b64
+        ):
+            matched = candidate
+            break
+
+    signature_valid = matched is not None
     return hash_valid and signature_valid, {
         "hash_valid": hash_valid,
         "signature_valid": signature_valid,
+        "key_id": matched["key_id"] if matched else None,
+        "key_status": matched["status"] if matched else None,
     }
 
 
@@ -291,5 +390,42 @@ def generate_private_key_b64() -> str:
     return base64.b64encode(seed).decode("ascii")
 
 
+def _rotation_plan() -> str:
+    """Texto de apoio à rotação: a chave nova e o que fazer com a atual."""
+    new_private = generate_private_key_b64()
+    new_public = public_key_info(load_private_key(new_private))["public_key_b64"]
+    lines = [
+        "# Nova chave de assinatura",
+        f"PLATFORM_ED25519_PRIVATE_KEY={new_private}",
+        "",
+        "# Guarde a chave privada no cofre ANTES de trocar o ambiente.",
+        f"# Chave pública correspondente (key_id {key_id_for(new_public)}):",
+        f"#   {new_public}",
+    ]
+    try:
+        current = public_key_info()
+    except AttestationError:
+        lines += [
+            "",
+            "# Não há chave ativa configurada: nada a aposentar.",
+        ]
+        return "\n".join(lines)
+
+    retired = [item["public_key_b64"] for item in retired_public_keys()]
+    retired_value = ",".join([current["public_key_b64"], *retired])
+    lines += [
+        "",
+        "# Acrescente a chave atual às aposentadas para que as attestations",
+        f"# já emitidas (key_id {current['key_id']}) continuem verificáveis:",
+        f"PLATFORM_ED25519_RETIRED_PUBLIC_KEYS={retired_value}",
+    ]
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
-    print(generate_private_key_b64())
+    import sys
+
+    if "--rotate" in sys.argv:
+        print(_rotation_plan())
+    else:
+        print(generate_private_key_b64())

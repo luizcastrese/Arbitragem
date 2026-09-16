@@ -34,3 +34,13 @@ def reset_rate_limiters():
     main.rate_limiter.reset()
     main.auth_rate_limiter.reset()
     yield
+
+
+@pytest.fixture(autouse=True)
+def reset_stage_runner():
+    """O registro de etapas em segundo plano também é objeto de módulo: sem
+    zerar, um job de um teste apareceria como 'em processamento' no seguinte."""
+    from app import main
+
+    yield
+    main.stage_runner.reset()

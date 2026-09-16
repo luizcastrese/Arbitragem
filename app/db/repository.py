@@ -125,6 +125,11 @@ def _document_to_dict(document: Document, include_content: bool = True) -> Dict[
         ),
         "chunks_count": document.chunks_count,
         "created_at": document.created_at.isoformat(),
+        "content_purged_at": (
+            document.content_purged_at.isoformat()
+            if document.content_purged_at
+            else None
+        ),
     }
     if include_content:
         result["content"] = load_document_content(document)
@@ -674,6 +679,49 @@ def register_contest(
     return get_case(db, case.id)
 
 
+def revert_contest(
+    db: Session,
+    case: Case,
+    appeal_id: str,
+    status: str,
+    reason: str,
+) -> Case:
+    """Desfaz a abertura de um recurso cuja execução falhou.
+
+    A marca de contestação e a linha do recurso são gravadas antes de o
+    recurso rodar, para que a idempotência funcione. Se a execução falha,
+    deixá-las no lugar tem dois efeitos ruins: a repetição da chamada volta
+    cedo com um recurso vazio, e a tentativa frustrada consome a cota de
+    `MAX_APPEALS_PER_ATTESTATION`. A tentativa fica registrada na auditoria;
+    o que sai é só o estado que impediria outra.
+    """
+    appeal = (
+        db.query(AutomaticAppeal)
+        .filter(
+            AutomaticAppeal.case_id == case.id,
+            AutomaticAppeal.id == appeal_id,
+        )
+        .one_or_none()
+    )
+    if appeal is not None and not appeal.result_json:
+        db.delete(appeal)
+
+    case.contested_at = None
+    case.contested_by = None
+    case.status = status
+    case.processing_started_at = None
+    case.row_version = (case.row_version or 1) + 1
+    db.add(case)
+    append_audit(
+        db,
+        case,
+        "contest_attempt_failed",
+        {"appeal_id": appeal_id, "error": reason, "restored_status": status},
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
 def next_decision_version(db: Session, case_id: str) -> int:
     current = (
         db.query(DecisionRun)
@@ -916,6 +964,23 @@ def find_appeal_by_idempotency(
         .filter(
             AutomaticAppeal.case_id == case_id,
             AutomaticAppeal.idempotency_key == idempotency_key,
+        )
+        .one_or_none()
+    )
+
+
+def find_appeal_by_id(
+    db: Session,
+    case_id: str,
+    appeal_id: str,
+) -> Optional[AutomaticAppeal]:
+    """Recarrega o recurso em outra sessão — a etapa de recurso roda fora do
+    request e não pode reusar o objeto anexado à sessão que já fechou."""
+    return (
+        db.query(AutomaticAppeal)
+        .filter(
+            AutomaticAppeal.case_id == case_id,
+            AutomaticAppeal.id == appeal_id,
         )
         .one_or_none()
     )
