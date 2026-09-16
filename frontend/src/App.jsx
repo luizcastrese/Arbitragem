@@ -92,6 +92,7 @@ const statusLabels = {
   decided: 'Decisão proferida',
   processing_review: 'Auditoria automática',
   reviewed: 'Auditoria automática concluída',
+  agreement: 'Encerrado por acordo bilateral',
   processing_attestation: 'Emitindo attestation',
   attested: 'Attestation emitida',
   processing_appeal: 'Recurso automático',
@@ -1016,7 +1017,9 @@ function CaseWorkspace({
   const roles = {
     claimant: userHasRole(caseData, user, 'claimant'),
     respondent: userHasRole(caseData, user, 'respondent'),
-    manager: userHasRole(caseData, user, 'manager')
+    // A condução é das partes. O nome legado evita espalhar uma mudança
+    // estrutural pelos cartões enquanto os casos antigos ainda são lidos.
+    manager: userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
   }
 
   return (
@@ -1124,7 +1127,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
   const [inviteLink, setInviteLink] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
-  const isManager = userHasRole(caseData, user, 'manager')
+  const canConduct = userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
 
   async function invite(event) {
     event.preventDefault()
@@ -1180,7 +1183,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
       <div className="card-title-row">
         <div>
           <span className="section-label">Acesso, agenda e entrega</span>
-          <h3>Administração do procedimento</h3>
+          <h3>Condução pelas partes</h3>
         </div>
         <button className="button secondary" onClick={downloadReport} disabled={busy}>
           <Download size={16} /> Baixar relatório Word
@@ -1196,12 +1199,11 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
               <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
             </span>
           ))}
-          {isManager && <form className="compact-form" onSubmit={invite}>
+          {canConduct && <form className="compact-form" onSubmit={invite}>
             <input name="email" type="email" required placeholder="E-mail da parte" />
             <select name="role" defaultValue="claimant">
               <option value="claimant">Cliente reclamante</option>
               <option value="respondent">Empresa reclamada</option>
-              <option value="manager">Gestor</option>
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
           </form>}
@@ -1211,7 +1213,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
               <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
             </label>
           )}
-          {!isManager && <small>Somente gestores podem criar novos convites.</small>}
+          {!canConduct && <small>Somente as partes podem criar novos convites.</small>}
         </div>
 
         <div className="operation-block">
@@ -1226,13 +1228,12 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
             ))}
             {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
           </div>
-          {isManager && <form className="compact-form deadline-form" onSubmit={addDeadline}>
+          {canConduct && <form className="compact-form deadline-form" onSubmit={addDeadline}>
             <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
             <select name="assigned_to" defaultValue="all">
               <option value="all">Todas as pessoas</option>
               <option value="claimant">Cliente</option>
               <option value="respondent">Empresa</option>
-              <option value="manager">Gestor</option>
             </select>
             <input name="due_at" type="datetime-local" required />
             <button className="button secondary" disabled={busy}>Adicionar prazo</button>
@@ -1732,6 +1733,18 @@ function ConciliationActions({
     || claimantResponse.trim()
     || respondentResponse.trim()
     || conciliationUpdate.trim()
+  const agreement = latest.agreement || { responses: {} }
+
+  function answerAgreement(party, accepted) {
+    return run(
+      accepted ? 'Registrando seu aceite da proposta...' : 'Registrando sua recusa da proposta...',
+      () => request(`/cases/${caseData.id}/conciliation/${latest.round_number || rounds.length}/agreement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, party) },
+        body: JSON.stringify({ party, accepted })
+      })
+    )
+  }
 
   async function generateNextRound() {
     const result = await run(
@@ -1804,6 +1817,19 @@ function ConciliationActions({
       </div>
 
       <div className="conciliation-buttons">
+        {['claimant', 'respondent'].map((party) => roles[party] && (
+          <button
+            key={`accept-${party}`}
+            className="button primary"
+            disabled={busy || agreement.complete || !latest.possible_terms?.length}
+            onClick={() => answerAgreement(party, true)}
+          >
+            <Handshake size={17} />
+            {(agreement.responses?.[party]?.accepted)
+              ? 'Aceite registrado — aguardando a outra parte'
+              : 'Aceitar esta proposta'}
+          </button>
+        ))}
         <button
           className="button secondary"
           disabled={busy || !roles.manager || !canAdvance}
@@ -1826,8 +1852,9 @@ function ConciliationActions({
         </button>
       </div>
       <small className="consent-note">
-        Nenhuma proposta é aceita automaticamente. Cada parte decide se concorda,
-        contrapropõe ou encerra a negociação.
+        {agreement.complete
+          ? 'Acordo formado: as duas partes aceitaram a mesma proposta.'
+          : 'Nenhuma proposta é aceita automaticamente. O acordo só se forma com o aceite separado das duas partes.'}
       </small>
     </div>
   )

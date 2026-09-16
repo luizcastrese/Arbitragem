@@ -30,7 +30,8 @@ saída em sentença arbitral ou estatal.
 - API FastAPI com validação e documentação OpenAPI;
 - painel React responsivo;
 - casos persistidos em SQLite;
-- autorização separada para cliente, empresa e gestor em cada caso;
+- autorização separada para cliente e empresa em cada caso, que conduzem o
+  procedimento sem um terceiro gestor;
 - contas com senha derivada por PBKDF2 e sessões expiráveis em cookie HttpOnly;
 - verificação de e-mail, redefinição de senha por link de uso único e bloqueio
   da conta após tentativas de senha malsucedidas;
@@ -120,8 +121,8 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
   às propostas; deve compreender e aceitar o procedimento;
 - **empresa reclamada:** apresenta defesa e documentos, formula contrapropostas
   e acompanha exposição, acordos e decisões de forma consistente;
-- **gestor do procedimento:** administra convites, acesso, prazos e integridade
-  do rito, sem decidir o mérito;
+- **as próprias partes:** administram convites, prazos e o avanço do rito; uma
+  não pode registrar manifestações nem aceite de acordo em nome da outra;
 - **representantes e advogados:** podem apoiar qualquer parte na preparação e
   manifestação dentro do caso.
 
@@ -296,7 +297,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `GET /account/data-export` | Acesso e portabilidade dos dados do titular |
 | `GET /account/erasure/preview` | Diz se a eliminação seria aceita e o que preserva |
 | `POST /account/erasure` | Eliminação por anonimização da conta |
-| `GET /cases/{id}/invitations` | Listar convites do caso (gestor) |
+| `GET /cases/{id}/invitations` | Listar convites do caso (partes) |
 | `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
 | `GET /cases/{id}/deadlines` | Listar a agenda processual |
@@ -305,6 +306,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte |
+| `POST /cases/{id}/conciliation/{round}/agreement` | Aceitar ou recusar individualmente a proposta da rodada; o acordo exige os dois aceites |
 | `POST /cases/{id}/documents/text` | Adicionar texto |
 | `POST /cases/{id}/documents/pdf` | Adicionar PDF |
 | `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |

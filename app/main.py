@@ -164,6 +164,7 @@ from app.reports.docx_generator import build_docx_report
 from app.schemas import (
     AcceptInvitationRequest,
     AddDocumentRequest,
+    AgreementResponseRequest,
     AttestationVerifyRequest,
     ConciliationRoundRequest,
     ConsentRequest,
@@ -508,6 +509,31 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
     raise HTTPException(
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
+    )
+
+
+def _require_procedure_party(db: Session, case, token: str) -> str:
+    """Autoriza a condução do rito por qualquer uma das duas partes.
+
+    O papel de gestor continua aceito apenas como compatibilidade para casos
+    antigos. Casos novos e a interface usam as credenciais das próprias partes.
+    """
+    for party in ("claimant", "respondent"):
+        try:
+            _require_actor(db, case, token, party)
+            return party
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+    try:
+        _require_actor(db, case, token, "manager")
+        return "manager"
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+    raise HTTPException(
+        status_code=403,
+        detail="Somente as partes do caso podem conduzir o procedimento",
     )
 
 
@@ -1020,7 +1046,9 @@ def create_case(
         manager_token_hash=_hash_token(credentials["manager"]),
     )
     if user:
-        add_member(db, case.id, user.id, "manager")
+        # Quem abre o caso o conduz como parte reclamante; não existe um
+        # terceiro gestor com poderes processuais sobre as duas partes.
+        add_member(db, case.id, user.id, "claimant")
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
@@ -1036,7 +1064,7 @@ def get_invitations(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     return [invitation_to_dict(item) for item in case.invitations]
 
 
@@ -1048,7 +1076,8 @@ def invite_participant(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    actor = _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
+    actor = get_user_by_token(db, x_actor_token)
     token, invitation = create_invitation(
         db,
         case.id,
@@ -1140,7 +1169,7 @@ def add_deadline(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     try:
         due_at = datetime.fromisoformat(payload.due_at.replace("Z", "+00:00"))
         if due_at.tzinfo is None:
@@ -1177,7 +1206,7 @@ def complete_deadline(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     deadline = db.query(Deadline).filter(
         Deadline.case_id == case.id, Deadline.id == deadline_id
     ).one_or_none()
@@ -1551,7 +1580,7 @@ def admit_evidence(
 ):
     case = _case_or_404(db, case_id)
     _assert_evidence_mutable(case)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     document = _document_or_404(db, case_id, document_id)
     if not document.acknowledged_at:
         raise HTTPException(status_code=409, detail="A contraparte ainda não confirmou ciência")
@@ -1650,7 +1679,7 @@ def lock_manifest(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     if case.manifest_locked:
         return {
             "message": "Manifesto já estava travado",
@@ -1788,7 +1817,11 @@ def assess_case_conciliation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    actor_party = _require_procedure_party(db, case, x_actor_token)
+    if actor_party == "claimant" and payload.respondent_response:
+        raise HTTPException(status_code=403, detail="Uma parte não pode responder pela outra")
+    if actor_party == "respondent" and payload.claimant_response:
+        raise HTTPException(status_code=403, detail="Uma parte não pode responder pela outra")
     case_data = case_to_dict(case)
     if not case.manifest_locked:
         raise HTTPException(
@@ -1906,6 +1939,84 @@ def assess_case_conciliation(
     return _run_stage(case_id, "conciliation", work, wait)
 
 
+@app.post("/cases/{case_id}/conciliation/{round_number}/agreement")
+def respond_to_conciliation_agreement(
+    case_id: str,
+    round_number: int,
+    payload: AgreementResponseRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Registra aceite ou recusa individual da proposta de uma rodada.
+
+    Acordo só existe depois de dois aceites independentes sobre exatamente a
+    mesma proposta. O hash impede que a proposta seja alterada entre as duas
+    manifestações. Uma parte não pode falar pela outra.
+    """
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, payload.party)
+    if case.organized_json or case.decision_json:
+        raise HTTPException(
+            status_code=409,
+            detail="A fase consensual já foi encerrada",
+        )
+
+    rounds = case_to_dict(case)["conciliation_rounds"]
+    if round_number < 1 or round_number > len(rounds):
+        raise HTTPException(status_code=404, detail="Rodada de composição não encontrada")
+    index = round_number - 1
+    selected = dict(rounds[index])
+    terms = selected.get("possible_terms") or []
+    if not terms:
+        raise HTTPException(
+            status_code=409,
+            detail="Esta rodada não contém proposta que possa ser aceita",
+        )
+
+    proposal_sha256 = canonical_hash(
+        {"round_number": round_number, "possible_terms": terms}
+    )
+    agreement = dict(selected.get("agreement") or {})
+    recorded_hash = agreement.get("proposal_sha256")
+    if recorded_hash and recorded_hash != proposal_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="A proposta mudou depois da primeira manifestação",
+        )
+    responses = dict(agreement.get("responses") or {})
+    responses[payload.party] = {
+        "accepted": payload.accepted,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    complete = all(
+        (responses.get(party) or {}).get("accepted") is True
+        for party in ("claimant", "respondent")
+    )
+    selected["agreement"] = {
+        "proposal_sha256": proposal_sha256,
+        "responses": responses,
+        "complete": complete,
+    }
+    rounds[index] = selected
+    case.conciliation_json = json.dumps(rounds, ensure_ascii=False)
+    if complete:
+        case.status = "agreement"
+        case.procedure_conclusion = "agreement"
+    append_audit(
+        db,
+        case,
+        "conciliation_agreement_completed" if complete else "conciliation_agreement_response",
+        {
+            "round_number": round_number,
+            "party": payload.party,
+            "accepted": payload.accepted,
+            "proposal_sha256": proposal_sha256,
+        },
+    )
+    db.commit()
+    return selected["agreement"]
+
+
 @app.post("/cases/{case_id}/organize")
 def organize_case(
     case_id: str,
@@ -1922,8 +2033,13 @@ def organize_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     case_data = case_to_dict(case)
+    if case_data.get("procedure_conclusion") == "agreement":
+        raise HTTPException(
+            status_code=409,
+            detail="O procedimento foi encerrado por acordo bilateral",
+        )
     if not case.manifest_locked:
         raise HTTPException(
             status_code=409,
@@ -1994,7 +2110,7 @@ def decide_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["organized"]:
         raise HTTPException(
@@ -2112,7 +2228,7 @@ def review_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["decision"]:
         raise HTTPException(
@@ -2257,7 +2373,7 @@ def issue_attestation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_actor(db, case, x_actor_token, "manager")
+    _require_procedure_party(db, case, x_actor_token)
     settings_now = get_settings()
     if not settings_now.attestation_enabled:
         raise HTTPException(

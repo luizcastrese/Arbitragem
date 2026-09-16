@@ -38,7 +38,7 @@ class InvitationRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent", "manager"}:
+        if value not in {"claimant", "respondent"}:
             raise ValueError("unsupported role")
         return value
 
@@ -57,7 +57,7 @@ class DeadlineRequest(BaseModel):
     @field_validator("assigned_to")
     @classmethod
     def assigned_to_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent", "manager", "all"}:
+        if value not in {"claimant", "respondent", "all"}:
             raise ValueError("unsupported assignee")
         return value
 
@@ -143,6 +143,25 @@ class ConciliationRoundRequest(BaseModel):
     claimant_response: str = Field(default="", max_length=10_000)
     respondent_response: str = Field(default="", max_length=10_000)
     new_information: str = Field(default="", max_length=10_000)
+
+
+class AgreementResponseRequest(BaseModel):
+    """Manifestação individual sobre a proposta de uma rodada.
+
+    O cliente nunca pode registrar a manifestação da empresa (ou vice-versa),
+    por isso o papel faz parte do corpo e também é conferido contra a
+    credencial pelo endpoint.
+    """
+
+    party: str
+    accepted: bool
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
 
 
 class ContestRequest(BaseModel):
