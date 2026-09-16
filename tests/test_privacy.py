@@ -146,7 +146,7 @@ def test_exportacao_traz_conta_e_casos(client):
 
     assert body["account"]["email"] == "titular@example.com"
     assert [item["id"] for item in body["cases"]] == [case_id]
-    assert "manager" in body["cases"][0]["roles"]
+    assert body["cases"][0]["roles"] == ["claimant"]
     assert body["generated_at_utc"]
 
 

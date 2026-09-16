@@ -290,7 +290,7 @@ def test_accounts_invitations_deadlines_and_word_report(client):
     case = created.json()
     case_id = case["id"]
     CASE_CREDENTIALS[case_id] = case["access_credentials"]
-    assert case["participants"][0]["role"] == "manager"
+    assert case["participants"][0]["role"] == "claimant"
 
     invite = client.post(
         f"/cases/{case_id}/invitations",
