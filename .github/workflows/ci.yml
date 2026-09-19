@@ -50,6 +50,16 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  compose:
+    name: Compose válido
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar docker compose
+        run: |
+          cp .env.example .env
+          docker compose config >/dev/null
+
   producao:
     name: Guardas de produção
     runs-on: ubuntu-latest

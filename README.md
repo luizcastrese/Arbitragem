@@ -69,7 +69,9 @@ saída em sentença arbitral ou estatal.
 - etapas idempotentes e documentos imutáveis após o lock;
 - modo seguro sem chave de modelo, sempre inconclusivo e encerrado de forma autônoma;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
-- convites por e-mail transacional (SMTP) com fallback para log quando não configurado;
+- convites por e-mail transacional (SMTP) com fallback para log quando não configurado; convite pendente pode ser reenviado, o que revoga o token anterior;
+- a contraparte lê o teor do material no painel (e o original, quando houver) antes de confirmar ciência e responder;
+- a conta exporta seus dados e pede eliminação por anonimização a partir do painel;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
 - rate limiting por IP (janela deslizante) e logging estruturado com identificador de requisição;
 - documentos armazenados fora do banco (object store local, S3-compatível ou memória nos testes), com o arquivo original preservado e baixável;
@@ -247,7 +249,7 @@ Variáveis do arquivo `.env`:
 Gere os segredos:
 
 ```bash
-# PLATFORM_SIGNING_SECRET (obrigatório em produção)
+# PLATFORM_SIGNING_SECRET (obrigatório em produção; mínimo de 32 caracteres)
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 # DOCUMENT_ENCRYPTION_KEY, AES-256-GCM (obrigatória em produção)
@@ -303,6 +305,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /account/erasure` | Eliminação por anonimização da conta |
 | `GET /cases/{id}/invitations` | Listar convites do caso (partes) |
 | `POST /cases/{id}/invitations` | Convidar participante por e-mail e papel |
+| `POST /cases/{id}/invitations/{invitation_id}/resend` | Reemitir convite pendente (revoga o token anterior) |
 | `POST /invitations/accept` | Aceitar convite na conta correspondente |
 | `GET /cases/{id}/deadlines` | Listar a agenda processual |
 | `POST /cases/{id}/deadlines` | Criar prazo e notificações |
@@ -316,6 +319,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /cases/{id}/documents/{document_id}/acknowledge` | Confirmar ciência da contraparte |
 | `POST /cases/{id}/documents/{document_id}/respond` | Responder, contestar ou renunciar |
 | `POST /cases/{id}/documents/{document_id}/admit` | Admitir material após contraditório |
+| `GET /cases/{id}/documents/{document_id}/content` | Ler o teor do material (participantes do caso) |
 | `GET /cases/{id}/documents/{document_id}/original` | Baixar o arquivo original armazenado |
 | `POST /cases/{id}/documents/{document_id}/original-url` | Emitir link temporário e assinado do original |
 | `GET /documents/download` | Baixar via link assinado (valida token e expiração) |
@@ -341,7 +345,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `GET /frameworks` | Frameworks versionados disponíveis |
 | `POST /attestations/verify` | Verificar uma attestation avulsa, sem contexto de caso |
 | `GET /.well-known/valinor-signing-key` | Publicar a chave pública Ed25519 da plataforma |
-| `GET /health` | Saúde da API, do banco e do modo de IA |
+| `GET /health` | Saúde da API, do banco, do e-mail e do modo de IA |
 
 ### Etapas assíncronas
 
@@ -452,13 +456,13 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
 - decisões inconclusivas, inadmissíveis ou invalidadas encerram o procedimento
   de forma autônoma; não há julgador humano interno.
 
-Antes de exposição pública, o que resta é: configurar o provedor SMTP com um
-domínio autenticado (a verificação de e-mail depende de entrega confiável),
-obter a revisão jurídica do rito, dos termos e da política de privacidade,
-subir o ambiente de produção com TLS, executar pelo menos uma restauração de
-backup de verdade (`docs/runbook-operacao.md`) e montar monitoramento. Com mais
-de uma réplica, migrar o rate limiting e a fila de etapas para backends
-compartilhados.
+Antes de exposição pública, o que resta é operacional e jurídico, não de
+produto: configurar o provedor SMTP com um domínio autenticado (a verificação
+de e-mail depende de entrega confiável), obter a revisão jurídica do rito, dos
+termos e da política de privacidade, subir o ambiente de produção com TLS,
+executar pelo menos uma restauração de backup de verdade
+(`docs/runbook-operacao.md`) e montar monitoramento. Com mais de uma réplica,
+migrar o rate limiting e a fila de etapas para backends compartilhados.
 
 ## Referências OpenAI
 
