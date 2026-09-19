@@ -5,6 +5,12 @@ operação perfeita, mas evita publicar uma instalação que sobe e não consegu
 confirmar usuários, perde documentos ao recriar o contêiner ou confia em IPs
 forjados.
 
+O produto já cobre o fluxo de duas partes no painel: a contraparte lê o teor
+do material, o convite pendente pode ser reenviado, a conta exporta e elimina
+dados, e o boot de produção recusa segredo fraco, SQLite, SMTP ausente e
+CORS inseguro. O que falta abaixo é instalação, e-mail, backup, jurídico e
+monitoramento.
+
 ## 1. Infraestrutura e segredos
 
 - [ ] Definir `APP_ENV=production`.

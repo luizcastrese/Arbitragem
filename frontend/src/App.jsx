@@ -29,11 +29,40 @@ import {
   ShieldCheck,
   Sparkles,
   Upload,
-  UserRound
+  UserRound,
+  Eye
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE
   || (window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin)
+
+function formatApiDetail(detail, fallback = 'Erro inesperado') {
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => item?.msg || item?.detail || (typeof item === 'string' ? item : JSON.stringify(item)))
+      .filter(Boolean)
+      .join('; ') || fallback
+  }
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.message === 'string') return detail.message
+    if (typeof detail.detail === 'string') return detail.detail
+    return JSON.stringify(detail)
+  }
+  return fallback
+}
+
+function invitationDeliveryMessage(data) {
+  const delivery = data?.email_delivery || {}
+  if (delivery.delivered) return `Convite enviado para ${data.email}.`
+  if (delivery.error) {
+    return `O e-mail não saiu (${delivery.error}). Use Reenviar quando o SMTP estiver ok.`
+  }
+  if (data?.acceptance_token) {
+    return 'SMTP não configurado: copie o link abaixo para o convidado.'
+  }
+  return `Convite registrado para ${data.email}. Em produção o link só chega por e-mail.`
+}
 
 const steps = [
   {
@@ -129,6 +158,8 @@ export default function App() {
   const [terms, setTerms] = useState(null)
   const [privacy, setPrivacy] = useState(null)
   const [authNotice, setAuthNotice] = useState('')
+  const [showAccount, setShowAccount] = useState(false)
+  const [legalView, setLegalView] = useState(null)
 
   const currentStage = useMemo(
     () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
@@ -142,7 +173,7 @@ export default function App() {
       headers: options.headers || {}
     })
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(data.detail || `Erro HTTP ${response.status}`)
+    if (!response.ok) throw new Error(formatApiDetail(data.detail, `Erro HTTP ${response.status}`))
     return data
   }
 
@@ -168,7 +199,20 @@ export default function App() {
       })
       setUser(data.user)
       setShowAuth(false)
-      setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
+      if (authMode === 'register' && data.user?.email_verified === false) {
+        const delivery = data.email_verification?.delivery || {}
+        if (data.email_verification?.verification_path) {
+          setAuthNotice(`Confirme o e-mail. Link local: ${data.email_verification.verification_path}`)
+        } else if (delivery.delivered) {
+          setAuthNotice(`Enviamos um link de confirmação para ${data.user.email}.`)
+        } else if (delivery.error) {
+          setAuthNotice(`Não foi possível enviar o e-mail de confirmação (${delivery.error}). Use Reenviar link.`)
+        } else {
+          setAuthNotice(`Confirme o e-mail enviado para ${data.user.email} antes de atuar no procedimento.`)
+        }
+      } else {
+        setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
+      }
       await loadCases()
     } catch (err) {
       setError(err.message)
@@ -238,7 +282,49 @@ export default function App() {
     setUser(null)
     setCases([])
     setCaseData(null)
+    setShowAccount(false)
     setShowAuth(true)
+  }
+
+  async function exportAccountData() {
+    setError('')
+    try {
+      const data = await request('/account/data-export')
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'valinor-meus-dados.json'
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setStatus('Exportação da conta baixada.')
+      setShowAccount(false)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function eraseAccount() {
+    setError('')
+    try {
+      const preview = await request('/account/erasure/preview')
+      if (!preview.allowed) {
+        throw new Error(preview.detail)
+      }
+      const confirmed = window.confirm(
+        'Anonimizar esta conta? A identificação é removida e a sessão encerra. Casos, hashes e a cadeia de auditoria permanecem.'
+      )
+      if (!confirmed) return
+      await request('/account/erasure', { method: 'POST' })
+      setAuthNotice('Conta anonimizada. A identificação pessoal foi removida.')
+      setUser(null)
+      setCases([])
+      setCaseData(null)
+      setShowAccount(false)
+      setShowAuth(true)
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   async function acceptPendingInvite() {
@@ -453,10 +539,24 @@ export default function App() {
               {system?.openai_enabled ? 'Chave de IA configurada' : 'Modo demonstração'}
             </span>
             {user ? (
-              <span className="account-chip">
-                <UserRound size={15} /> {user.display_name}
-                <button onClick={logout} title="Sair"><LogOut size={14} /></button>
-              </span>
+              <div className="account-menu-wrap">
+                <span className="account-chip">
+                  <button type="button" className="account-chip-open" onClick={() => setShowAccount((open) => !open)}>
+                    <UserRound size={15} /> {user.display_name}
+                  </button>
+                  <button onClick={logout} title="Sair"><LogOut size={14} /></button>
+                </span>
+                {showAccount && (
+                  <AccountPanel
+                    user={user}
+                    busy={busy}
+                    onClose={() => setShowAccount(false)}
+                    onExport={exportAccountData}
+                    onErase={eraseAccount}
+                    onOpenLegal={setLegalView}
+                  />
+                )}
+              </div>
             ) : (
               <button className="button ghost compact" onClick={() => setShowAuth(true)}>
                 <LogIn size={16} /> Entrar
@@ -540,6 +640,9 @@ export default function App() {
             busy={busy}
             onSubmit={authMode === 'forgot' ? requestPasswordReset : authenticate}
             onClose={() => setShowAuth(false)}
+            terms={terms}
+            privacy={privacy}
+            onOpenLegal={setLegalView}
           />
         )}
 
@@ -670,7 +773,23 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {legalView && (
+          <LegalReader
+            kind={legalView}
+            terms={terms}
+            privacy={privacy}
+            onClose={() => setLegalView(null)}
+          />
+        )}
       </main>
+      <footer className="legal-footer">
+        <button type="button" onClick={() => setLegalView('terms')}>Termos do procedimento</button>
+        <button type="button" onClick={() => setLegalView('privacy')}>Política de privacidade</button>
+        {privacy?.controller?.contact_email && (
+          <span>Privacidade: {privacy.controller.contact_email}</span>
+        )}
+      </footer>
     </div>
   )
 }
@@ -865,7 +984,7 @@ const AUTH_COPY = {
   }
 }
 
-function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
+function AuthPanel({ mode, setMode, busy, onSubmit, onClose, terms, privacy, onOpenLegal }) {
   const copy = AUTH_COPY[mode] || AUTH_COPY.login
   return (
     <section className="auth-panel">
@@ -873,6 +992,19 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
         <span className="section-label">Acesso protegido</span>
         <h2>{copy.title}</h2>
         <p>{copy.description}</p>
+        {mode === 'register' && (
+          <p className="auth-legal">
+            Ao criar a conta você declara ter lido os{' '}
+            <button type="button" className="auth-switch" onClick={() => onOpenLegal?.('terms')}>
+              termos do procedimento
+            </button>
+            {terms?.version ? ` (versão ${terms.version})` : ''} e a{' '}
+            <button type="button" className="auth-switch" onClick={() => onOpenLegal?.('privacy')}>
+              política de privacidade
+            </button>
+            {privacy?.version ? ` (versão ${privacy.version})` : ''}.
+          </p>
+        )}
       </div>
       <form onSubmit={onSubmit} className="auth-form">
         {mode === 'register' && (
@@ -904,6 +1036,45 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose }) {
           {mode === 'forgot' ? 'Voltar para o acesso' : 'Esqueci minha senha'}
         </button>
       </div>
+    </section>
+  )
+}
+
+function AccountPanel({ user, busy, onClose, onExport, onErase, onOpenLegal }) {
+  return (
+    <div className="account-panel">
+      <strong>{user.display_name}</strong>
+      <span>{user.email}</span>
+      <button type="button" className="button ghost compact" onClick={onExport} disabled={busy}>
+        Baixar meus dados
+      </button>
+      <button type="button" className="button ghost compact" onClick={onErase} disabled={busy}>
+        Anonimizar conta
+      </button>
+      <button type="button" className="button ghost compact" onClick={() => onOpenLegal('privacy')}>
+        Política de privacidade
+      </button>
+      <button type="button" className="button ghost compact" onClick={onClose}>
+        Fechar
+      </button>
+    </div>
+  )
+}
+
+function LegalReader({ kind, terms, privacy, onClose }) {
+  const doc = kind === 'privacy' ? privacy : terms
+  const title = kind === 'privacy' ? 'Política de privacidade' : 'Termos do procedimento'
+  return (
+    <section className="legal-reader">
+      <div className="legal-reader-heading">
+        <div>
+          <span className="section-label">{title}</span>
+          <h2>{doc?.version ? `Versão ${doc.version}` : title}</h2>
+          {doc?.sha256 && <small>SHA-256 {doc.sha256.slice(0, 16)}…</small>}
+        </div>
+        <button type="button" className="button ghost compact" onClick={onClose}>Fechar</button>
+      </div>
+      <pre className="terms-text">{doc?.text || 'Não foi possível carregar este texto agora.'}</pre>
     </section>
   )
 }
@@ -1125,8 +1296,10 @@ function CaseWorkspace({
 
 function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
   const [inviteLink, setInviteLink] = useState('')
+  const [inviteNotice, setInviteNotice] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
+  const pendingInvites = (caseData.invitations || []).filter((item) => item.status === 'pending')
   const canConduct = userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
 
   async function invite(event) {
@@ -1138,8 +1311,25 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
         headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, 'manager') },
         body: JSON.stringify({ email: form.get('email'), role: form.get('role') })
       })
-      setInviteLink(`${window.location.origin}/ui/?invite=${data.acceptance_token}`)
+      setInviteLink(data.acceptance_token
+        ? `${window.location.origin}/ui/?invite=${data.acceptance_token}`
+        : '')
+      setInviteNotice(invitationDeliveryMessage(data))
       event.currentTarget?.reset?.()
+      return data
+    })
+  }
+
+  async function resendInvite(invitation) {
+    await run('Reenviando convite...', async () => {
+      const data = await request(`/cases/${caseData.id}/invitations/${invitation.id}/resend`, {
+        method: 'POST',
+        headers: actorHeaders(caseData.id, 'manager')
+      })
+      setInviteLink(data.acceptance_token
+        ? `${window.location.origin}/ui/?invite=${data.acceptance_token}`
+        : '')
+      setInviteNotice(invitationDeliveryMessage(data))
       return data
     })
   }
@@ -1166,7 +1356,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
-        throw new Error(data.detail || 'Não foi possível gerar o relatório')
+        throw new Error(formatApiDetail(data.detail, 'Não foi possível gerar o relatório'))
       }
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
@@ -1199,14 +1389,33 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
               <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
             </span>
           ))}
+          {pendingInvites.map((invitation) => (
+            <span className="participant-row pending-invite" key={invitation.id}>
+              <span>
+                <strong>{invitation.email}</strong>
+                <small>{invitation.role} · convite pendente</small>
+              </span>
+              {canConduct && (
+                <button
+                  type="button"
+                  className="button ghost compact"
+                  disabled={busy}
+                  onClick={() => resendInvite(invitation)}
+                >
+                  Reenviar
+                </button>
+              )}
+            </span>
+          ))}
           {canConduct && <form className="compact-form" onSubmit={invite}>
             <input name="email" type="email" required placeholder="E-mail da parte" />
-            <select name="role" defaultValue="claimant">
+            <select name="role" defaultValue="respondent">
               <option value="claimant">Cliente reclamante</option>
               <option value="respondent">Empresa reclamada</option>
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
           </form>}
+          {inviteNotice && <small className="invite-notice">{inviteNotice}</small>}
           {inviteLink && (
             <label className="invite-link">
               <span>Link protegido para envio</span>
@@ -1883,7 +2092,107 @@ function DocumentsCard({
       </div>
       <div className="document-list">
         {documents.map((document) => (
-          <article className="evidence-item" key={document.id}>
+          <DocumentEvidenceItem
+            key={document.id}
+            document={document}
+            caseData={caseData}
+            locked={locked}
+            busy={busy}
+            run={run}
+            request={request}
+            actorHeaders={actorHeaders}
+            evidenceResponses={evidenceResponses}
+            setEvidenceResponses={setEvidenceResponses}
+            roles={roles}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function DocumentEvidenceItem({
+  document,
+  caseData,
+  locked,
+  busy,
+  run,
+  request,
+  actorHeaders,
+  evidenceResponses,
+  setEvidenceResponses,
+  roles
+}) {
+  const [open, setOpen] = useState(false)
+  const [content, setContent] = useState(null)
+  const [readError, setReadError] = useState('')
+  const purged = Boolean(document.content_purged_at)
+
+  async function toggleContent() {
+    if (purged || content !== null) {
+      setOpen((value) => !value)
+      return
+    }
+    setReadError('')
+    try {
+      const data = await request(`/cases/${caseData.id}/documents/${document.id}/content`)
+      setContent(data.content || '')
+      setOpen(true)
+    } catch (err) {
+      setReadError(err.message)
+    }
+  }
+
+  async function downloadOriginal() {
+    setReadError('')
+    try {
+      const response = await fetch(
+        `${API_BASE}/cases/${caseData.id}/documents/${document.id}/original`,
+        { credentials: 'include' }
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(formatApiDetail(data.detail, 'Não foi possível baixar o original'))
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = document.name
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setReadError(err.message)
+    }
+  }
+
+  function respondToEvidence(responseStatus) {
+    return run(
+      'Registrando a manifestação da contraparte...',
+      () => request(
+        `/cases/${caseData.id}/documents/${document.id}/respond`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...actorHeaders(caseData.id, document.counterparty)
+          },
+          body: JSON.stringify({
+            party: document.counterparty,
+            response_status: responseStatus,
+            response_text: (
+              responseStatus === 'waived'
+                ? ''
+                : evidenceResponses[document.id] || ''
+            )
+          })
+        }
+      )
+    )
+  }
+
+  return (
+          <article className="evidence-item">
             <div className="evidence-main">
               <span className="document-icon"><FileCheck2 size={20} /></span>
               <div className="evidence-copy">
@@ -1898,6 +2207,26 @@ function DocumentsCard({
                 {document.purpose && <p>{document.purpose}</p>}
               </div>
             </div>
+
+            <div className="evidence-actions">
+              <button type="button" className="button ghost compact" onClick={toggleContent} disabled={busy}>
+                <Eye size={14} /> {open ? 'Ocultar teor' : 'Ler teor'}
+              </button>
+              {document.has_original && !purged && (
+                <button type="button" className="button ghost compact" onClick={downloadOriginal} disabled={busy}>
+                  <Download size={14} /> Baixar original
+                </button>
+              )}
+            </div>
+
+            {open && (
+              <div className="document-body">
+                {purged
+                  ? <p>O conteúdo foi expurgado pela política de retenção. Metadados e hash permanecem.</p>
+                  : <pre>{content || 'Este documento não tem texto extraído.'}</pre>}
+              </div>
+            )}
+            {readError && <p className="document-read-error">{readError}</p>}
 
             <div className="evidence-timeline">
               <EvidenceState done={Boolean(document.disclosed_at)} label="Disponibilizado" />
@@ -1949,21 +2278,21 @@ function DocumentsCard({
                   <button
                     className="button secondary compact"
                     disabled={busy || !(evidenceResponses[document.id] || '').trim()}
-                    onClick={() => respondToEvidence(document, 'answered')}
+                    onClick={() => respondToEvidence('answered')}
                   >
                     Registrar resposta
                   </button>
                   <button
                     className="button ghost compact"
                     disabled={busy || !(evidenceResponses[document.id] || '').trim()}
-                    onClick={() => respondToEvidence(document, 'challenged')}
+                    onClick={() => respondToEvidence('challenged')}
                   >
                     Contestar
                   </button>
                   <button
                     className="button ghost compact"
                     disabled={busy}
-                    onClick={() => respondToEvidence(document, 'waived')}
+                    onClick={() => respondToEvidence('waived')}
                   >
                     Renunciar à resposta
                   </button>
@@ -2001,35 +2330,7 @@ function DocumentsCard({
               </div>
             )}
           </article>
-        ))}
-      </div>
-    </section>
   )
-
-  function respondToEvidence(document, responseStatus) {
-    return run(
-      'Registrando a manifestação da contraparte...',
-      () => request(
-        `/cases/${caseData.id}/documents/${document.id}/respond`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...actorHeaders(caseData.id, document.counterparty)
-          },
-          body: JSON.stringify({
-            party: document.counterparty,
-            response_status: responseStatus,
-            response_text: (
-              responseStatus === 'waived'
-                ? ''
-                : evidenceResponses[document.id] || ''
-            )
-          })
-        }
-      )
-    )
-  }
 }
 
 function EvidenceState({ done, label }) {

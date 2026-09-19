@@ -230,6 +230,16 @@ def validate_runtime_policy(settings: Settings) -> None:
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
 
+    if settings.is_production and (
+        settings.using_development_signing_secret
+        or len(settings.platform_signing_secret) < 32
+    ):
+        raise RuntimeError(
+            "PLATFORM_SIGNING_SECRET em produção precisa ser um valor exclusivo "
+            "com pelo menos 32 caracteres. O segredo de desenvolvimento e "
+            "valores curtos são recusados."
+        )
+
     if settings.is_production and not settings.privacy_contacts_declared:
         raise RuntimeError(
             "DATA_CONTROLLER_NAME e PRIVACY_CONTACT_EMAIL são obrigatórios em "

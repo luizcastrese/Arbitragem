@@ -87,6 +87,7 @@ from app.db.access_repository import (
     create_deadline,
     create_invitation,
     create_notification,
+    reissue_invitation,
     create_session,
     deadline_to_dict,
     get_user_by_email,
@@ -378,6 +379,19 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     if settings.is_production:
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
@@ -805,6 +819,9 @@ def health(db: Session = Depends(get_db)):
         "status": "ok",
         "database": "ok",
         "openai_enabled": settings.openai_enabled,
+        "llm_enabled": settings.llm_enabled,
+        "email_configured": settings.email_enabled,
+        "attestation_enabled": settings.attestation_enabled,
     }
 
 
@@ -1100,13 +1117,16 @@ def invite_participant(
     case = _case_or_404(db, case_id)
     _require_procedure_party(db, case, x_actor_token)
     actor = get_user_by_token(db, x_actor_token)
-    token, invitation = create_invitation(
-        db,
-        case.id,
-        payload.email,
-        payload.role,
-        actor.id if actor else None,
-    )
+    try:
+        token, invitation = create_invitation(
+            db,
+            case.id,
+            payload.email,
+            payload.role,
+            actor.id if actor else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     append_audit(
         db,
         case,
@@ -1129,6 +1149,10 @@ def invite_participant(
         "Convite para participar do procedimento",
         f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
     )
+    return _invitation_delivery_payload(invitation, token, case)
+
+
+def _invitation_delivery_payload(invitation, token: str, case) -> dict:
     email_delivery = deliver_invitation_email(
         to_email=invitation.email,
         role=invitation.role,
@@ -1144,6 +1168,46 @@ def invite_participant(
         result["acceptance_token"] = token
         result["acceptance_path"] = f"/ui/?invite={token}"
     return result
+
+
+@app.post("/cases/{case_id}/invitations/{invitation_id}/resend")
+def resend_invitation(
+    case_id: str,
+    invitation_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Reemite um convite pendente: o token anterior deixa de valer.
+
+    Sem isto, um convite perdido ou um e-mail que não chegou deixa a
+    contraparte sem entrada — e um segundo POST /invitations colide com o
+    pendente.
+    """
+    case = _case_or_404(db, case_id)
+    actor_role = _require_procedure_party(db, case, x_actor_token)
+    invitation = next(
+        (item for item in case.invitations if item.id == invitation_id),
+        None,
+    )
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="Convite não encontrado")
+    try:
+        token, invitation = reissue_invitation(db, invitation)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    append_audit(
+        db,
+        case,
+        "invitation_reissued",
+        {
+            **email_reference(invitation.email),
+            "role": invitation.role,
+            "invitation_id": invitation.id,
+            "actor": actor_role,
+        },
+    )
+    db.commit()
+    return _invitation_delivery_payload(invitation, token, case)
 
 
 @app.post("/invitations/accept")
@@ -1614,6 +1678,36 @@ def admit_evidence(
         include_content=False,
         include_embeddings=False,
     )
+
+
+@app.get("/cases/{case_id}/documents/{document_id}/content")
+def get_document_content(
+    case_id: str,
+    document_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Devolve o teor do material para quem participa do caso.
+
+    O detalhe do caso omite o conteúdo para manter a listagem leve; sem este
+    endpoint a contraparte confirmaria ciência e responderia sem conseguir
+    ler o que foi apresentado.
+    """
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    document = _document_or_404(db, case_id, document_id)
+    _assert_not_purged(document)
+    payload = document_to_dict(document, include_content=True)
+    return {
+        "id": payload["id"],
+        "name": payload["name"],
+        "content": payload.get("content") or "",
+        "sha256": payload["sha256"],
+        "submitted_by": payload["submitted_by"],
+        "purpose": payload["purpose"],
+        "has_original": payload["has_original"],
+        "material_type": payload["material_type"],
+    }
 
 
 @app.get("/cases/{case_id}/documents/{document_id}/original")

@@ -304,6 +304,24 @@ def user_case_ids(db: Session, user_id: str) -> list[str]:
     return [row.case_id for row in db.query(CaseMember).filter(CaseMember.user_id == user_id)]
 
 
+def find_pending_invitation(
+    db: Session,
+    case_id: str,
+    email: str,
+    role: str,
+) -> Optional[Invitation]:
+    return (
+        db.query(Invitation)
+        .filter(
+            Invitation.case_id == case_id,
+            Invitation.email == email.strip().lower(),
+            Invitation.role == role,
+            Invitation.status == "pending",
+        )
+        .one_or_none()
+    )
+
+
 def create_invitation(
     db: Session,
     case_id: str,
@@ -311,17 +329,40 @@ def create_invitation(
     role: str,
     invited_by_user_id: Optional[str],
 ) -> tuple[str, Invitation]:
+    normalized_email = email.strip().lower()
+    existing = find_pending_invitation(db, case_id, normalized_email, role)
+    if existing:
+        raise ValueError(
+            "Já existe um convite pendente para este e-mail e papel. "
+            "Reenvie o convite existente em vez de criar outro."
+        )
     token = secrets.token_urlsafe(40)
     invitation = Invitation(
         id=str(uuid.uuid4()),
         case_id=case_id,
-        email=email.strip().lower(),
+        email=normalized_email,
         role=role,
         token_hash=hash_access_token(token),
         expires_at=utc_now() + timedelta(days=7),
         invited_by_user_id=invited_by_user_id,
     )
     db.add(invitation)
+    db.commit()
+    db.refresh(invitation)
+    return token, invitation
+
+
+def reissue_invitation(db: Session, invitation: Invitation) -> tuple[str, Invitation]:
+    """Gera um token novo, revoga o anterior e reabre a validade.
+
+    O banco só guarda o hash: o token antigo deixa de aceitar na hora.
+    Convites já aceitos não voltam a circular.
+    """
+    if invitation.status != "pending":
+        raise ValueError("Só é possível reenviar um convite pendente")
+    token = secrets.token_urlsafe(40)
+    invitation.token_hash = hash_access_token(token)
+    invitation.expires_at = utc_now() + timedelta(days=7)
     db.commit()
     db.refresh(invitation)
     return token, invitation

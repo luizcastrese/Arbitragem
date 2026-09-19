@@ -99,6 +99,18 @@ def test_security_headers_are_present(client):
     assert response.headers["Permissions-Policy"] == (
         "camera=(), microphone=(), geolocation=()"
     )
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+
+
+def test_health_reports_operational_signals(client):
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["database"] == "ok"
+    assert "llm_enabled" in body
+    assert "email_configured" in body
+    assert "attestation_enabled" in body
 
 
 def test_rate_limit_middleware_returns_429(client):

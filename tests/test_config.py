@@ -6,7 +6,7 @@ def _complete_production_environment(monkeypatch):
     from app.core.encryption import generate_key
 
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "test-signing-secret")
+    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "a-very-long-production-secret-value")
     monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
     monkeypatch.setenv("DATA_CONTROLLER_NAME", "Valinor Testes Ltda")
     monkeypatch.setenv("PRIVACY_CONTACT_EMAIL", "privacidade@example.com")
@@ -131,5 +131,48 @@ def test_api_docs_default_to_disabled_in_production(monkeypatch):
     get_settings.cache_clear()
     try:
         assert get_settings().expose_api_docs is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_development_signing_secret(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "development-only-secret-change-me")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="PLATFORM_SIGNING_SECRET"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_short_signing_secret(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "curto-demais")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="32 caracteres"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_same_judge_and_reviewer_when_llm_enabled(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setenv("JUDGE_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("REVIEWER_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("JUDGE_PROVIDER", "openai")
+    monkeypatch.setenv("REVIEWER_PROVIDER", "openai")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="julgador e o revisor"):
+            get_settings()
     finally:
         get_settings.cache_clear()
