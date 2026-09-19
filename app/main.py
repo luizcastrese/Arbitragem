@@ -267,6 +267,9 @@ app = FastAPI(
         "ou arbitral."
     ),
     lifespan=lifespan,
+    docs_url="/docs" if settings.expose_api_docs else None,
+    redoc_url="/redoc" if settings.expose_api_docs else None,
+    openapi_url="/openapi.json" if settings.expose_api_docs else None,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -360,6 +363,25 @@ async def observability_and_rate_limit(request: Request, call_next):
         elapsed_ms,
     )
     response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Aplica uma linha de base também a erros e respostas do rate limiter.
+
+    HSTS só é seguro quando a instalação declarou explicitamente que está em
+    produção, onde ``PUBLIC_BASE_URL`` já é validada como HTTPS.
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
     return response
 
 
@@ -728,7 +750,7 @@ def root():
         "project": "Valinor",
         "version": app.version,
         "status": "running",
-        "docs": "/docs",
+        "docs": "/docs" if settings.expose_api_docs else None,
         "ui": "/ui/",
         "privacy_policy": "/privacy",
         "openai_enabled": settings.openai_enabled,

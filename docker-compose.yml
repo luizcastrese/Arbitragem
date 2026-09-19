@@ -23,6 +23,10 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arbitragem}:${POSTGRES_PASSWORD:-change-this-password}@database:5432/${POSTGRES_DB:-arbitragem}
       AUTH_REQUIRED: "true"
+    volumes:
+      # O backend local é o padrão. Sem este volume, recriar o contêiner
+      # preservaria o banco, mas apagaria os documentos dos casos.
+      - document_data:/app/data/documents
     depends_on:
       database:
         condition: service_healthy
@@ -39,3 +43,4 @@ services:
 
 volumes:
   postgres_data:
+  document_data:

@@ -134,7 +134,7 @@ como imposição automática da empresa à contraparte.
 
 ## Rodar localmente
 
-Requisitos: Python 3.9+ e Node.js 20.19+.
+Requisitos: Python 3.10+ (a imagem usa 3.11) e Node.js 20.19+.
 
 ```bash
 python3 -m venv .venv
@@ -172,8 +172,11 @@ docker compose up --build
 ```
 
 O Compose publica a aplicação apenas em `127.0.0.1:8000`, inicia PostgreSQL,
-aguarda o banco ficar saudável e executa as migrações antes da API. Troque
-`POSTGRES_PASSWORD` no `.env` antes de usar fora da máquina local.
+aguarda o banco ficar saudável, executa as migrações antes da API e mantém os
+documentos do backend local no volume `document_data`. Troque
+`POSTGRES_PASSWORD` no `.env` antes de usar fora da máquina local. Para publicar,
+coloque um proxy HTTPS na frente da porta local e siga o
+[`checklist de publicação`](docs/checklist-publicacao.md).
 
 Para aplicar migrações sem Docker:
 
@@ -206,6 +209,7 @@ Variáveis do arquivo `.env`:
 | `DECISION_STABILITY_ENABLED` | Segunda execução controlada |
 | `DECISION_STABILITY_RUNS` / `DECISION_STABILITY_THRESHOLD` | Política de estabilidade |
 | `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |
+| `EXPOSE_API_DOCS` | Expõe `/docs`, `/redoc` e `/openapi.json`; padrão ligado em desenvolvimento e desligado em produção |
 | `DATABASE_URL` | Banco SQLAlchemy |
 | `POSTGRES_DB` | Banco criado pelo Docker Compose |
 | `POSTGRES_USER` | Usuário PostgreSQL do Compose |

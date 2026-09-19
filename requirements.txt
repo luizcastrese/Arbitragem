@@ -12,6 +12,9 @@ psycopg[binary]>=3.2,<4
 alembic>=1.14,<2
 cryptography>=42,<46
 nostr-sdk>=0.44,<0.45
+# Necessário quando DOCUMENT_STORAGE_BACKEND=s3. O backend já é carregado sob
+# demanda, mas a imagem de produção precisa trazer o cliente disponível.
+boto3>=1.35,<2
 
 # Development and verification
 httpx>=0.27,<1

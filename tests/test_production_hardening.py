@@ -91,6 +91,16 @@ def test_request_id_header_is_present(client):
     assert response.headers.get("X-Request-ID")
 
 
+def test_security_headers_are_present(client):
+    response = client.get("/health")
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert response.headers["Permissions-Policy"] == (
+        "camera=(), microphone=(), geolocation=()"
+    )
+
+
 def test_rate_limit_middleware_returns_429(client):
     limiter = main.rate_limiter
     original_enabled = limiter.enabled
@@ -189,6 +199,14 @@ def test_production_forces_auth_and_disables_role_tokens(monkeypatch):
     monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
     monkeypatch.setenv("DATA_CONTROLLER_NAME", "Valinor Testes Ltda")
     monkeypatch.setenv("PRIVACY_CONTACT_EMAIL", "privacidade@example.com")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_FROM", "nao-responda@example.com")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://valinor.example.com")
+    monkeypatch.setenv("CORS_ORIGINS", "https://valinor.example.com")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://valinor:strong-secret@db/valinor",
+    )
     config.get_settings.cache_clear()
     try:
         settings = config.get_settings()
