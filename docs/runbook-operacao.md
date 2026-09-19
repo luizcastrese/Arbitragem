@@ -3,6 +3,9 @@
 Procedimentos que precisam existir antes do primeiro caso real. Cada seção
 descreve o que fazer, com que frequência e como conferir que funcionou.
 
+Antes do primeiro deploy, percorra também o
+[`checklist de publicação`](checklist-publicacao.md).
+
 ---
 
 ## 1. Chave de assinatura Ed25519
@@ -189,3 +192,24 @@ As etapas que chamam modelos (`conciliation`, `organize`, `decide`, `review`,
 As etapas rodam no processo da aplicação. Ao reiniciar o serviço, dê
 tempo de dreno (`--timeout-graceful-shutdown` no uvicorn) para não cortar uma
 etapa no meio.
+
+---
+
+## 6. E-mail transacional
+
+Em produção, confirmação de e-mail, convites e redefinição de senha dependem de
+SMTP. Os tokens não são devolvidos pela API nesse ambiente, portanto a
+aplicação recusa o boot quando `SMTP_HOST` ou `SMTP_FROM` estão vazios.
+
+Depois de configurar o provedor:
+
+1. verifique o remetente e publique SPF, DKIM e DMARC;
+2. cadastre uma conta numa caixa externa e confira o link de confirmação;
+3. convide a segunda parte e aceite o convite em outro navegador;
+4. solicite uma redefinição de senha e confirme que o link é de uso único;
+5. confira que os três links usam o `PUBLIC_BASE_URL` HTTPS público;
+6. monitore no provedor rejeições, bounces e bloqueios.
+
+Uma resposta com `delivery.delivered=false` em produção é falha operacional e
+deve gerar alerta, mesmo que a operação que criou o token tenha respondido com
+sucesso.

@@ -1,6 +1,25 @@
 from app.core.config import get_settings
 
 
+def _complete_production_environment(monkeypatch):
+    """Preenche a infraestrutura mínima; cada teste remove o item sob teste."""
+    from app.core.encryption import generate_key
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "test-signing-secret")
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    monkeypatch.setenv("DATA_CONTROLLER_NAME", "Valinor Testes Ltda")
+    monkeypatch.setenv("PRIVACY_CONTACT_EMAIL", "privacidade@example.com")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_FROM", "nao-responda@example.com")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://valinor.example.com")
+    monkeypatch.setenv("CORS_ORIGINS", "https://valinor.example.com")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://valinor:strong-secret@db/valinor",
+    )
+
+
 def test_authentication_is_required_by_default(monkeypatch):
     monkeypatch.delenv("AUTH_REQUIRED", raising=False)
     monkeypatch.setenv("APP_ENV", "development")
@@ -13,14 +32,8 @@ def test_authentication_is_required_by_default(monkeypatch):
 
 
 def test_production_forces_authentication(monkeypatch):
-    from app.core.encryption import generate_key
-
+    _complete_production_environment(monkeypatch)
     monkeypatch.setenv("AUTH_REQUIRED", "false")
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "test-signing-secret")
-    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
-    monkeypatch.setenv("DATA_CONTROLLER_NAME", "Valinor Testes Ltda")
-    monkeypatch.setenv("PRIVACY_CONTACT_EMAIL", "privacidade@example.com")
     get_settings.cache_clear()
     try:
         assert get_settings().auth_required is True
@@ -33,16 +46,90 @@ def test_production_exige_controlador_e_canal_de_privacidade(monkeypatch):
     deixa a política de privacidade sem endereço. O boot recusa."""
     import pytest
 
-    from app.core.encryption import generate_key
-
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("PLATFORM_SIGNING_SECRET", "test-signing-secret")
-    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", generate_key())
+    _complete_production_environment(monkeypatch)
     monkeypatch.delenv("DATA_CONTROLLER_NAME", raising=False)
     monkeypatch.delenv("PRIVACY_CONTACT_EMAIL", raising=False)
     get_settings.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="DATA_CONTROLLER_NAME"):
             get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_requires_transactional_email(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SMTP_HOST"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_requires_public_https_url(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://localhost:8000")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="PUBLIC_BASE_URL"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_wildcard_cors(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_sqlite(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./data/arbitragem.db")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="PostgreSQL"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_default_database_password(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://valinor:change-this-password@db/valinor",
+    )
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="senha padrão"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_api_docs_default_to_disabled_in_production(monkeypatch):
+    _complete_production_environment(monkeypatch)
+    monkeypatch.delenv("EXPOSE_API_DOCS", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert get_settings().expose_api_docs is False
     finally:
         get_settings.cache_clear()

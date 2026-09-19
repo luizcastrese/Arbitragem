@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -95,6 +96,7 @@ class Settings:
     case_value_limit_minor_units: int
     llm_fallback_provider: str
     llm_fallback_model: str
+    expose_api_docs: bool
 
     @property
     def openai_enabled(self) -> bool:
@@ -235,6 +237,44 @@ def validate_runtime_policy(settings: Settings) -> None:
             "é o controlador dos dados e por qual canal o titular exerce seus "
             "direitos (art. 9º e 18 da LGPD)."
         )
+
+    if settings.is_production and not settings.email_enabled:
+        raise RuntimeError(
+            "SMTP_HOST e SMTP_FROM são obrigatórios em produção: a confirmação "
+            "de e-mail é obrigatória e o token não é exposto pela API."
+        )
+
+    if settings.is_production:
+        public_url = urlparse(settings.public_base_url)
+        if (
+            public_url.scheme != "https"
+            or not public_url.netloc
+            or public_url.hostname in {"localhost", "127.0.0.1", "::1"}
+        ):
+            raise RuntimeError(
+                "PUBLIC_BASE_URL deve ser uma URL pública HTTPS válida em produção."
+            )
+        invalid_origins = [
+            origin
+            for origin in settings.cors_origins
+            if origin == "*"
+            or urlparse(origin).scheme != "https"
+            or not urlparse(origin).netloc
+        ]
+        if invalid_origins:
+            raise RuntimeError(
+                "CORS_ORIGINS deve conter somente origens HTTPS explícitas em "
+                f"produção; inválidas: {', '.join(invalid_origins)}"
+            )
+        if not settings.database_url.startswith(("postgresql://", "postgresql+")):
+            raise RuntimeError(
+                "DATABASE_URL deve apontar para PostgreSQL em produção; SQLite "
+                "é reservado ao desenvolvimento local."
+            )
+        if "change-this-password" in settings.database_url:
+            raise RuntimeError(
+                "DATABASE_URL ainda contém a senha padrão change-this-password."
+            )
 
     if (
         settings.is_production
@@ -383,6 +423,7 @@ def get_settings() -> Settings:
         ),
         llm_fallback_provider=os.getenv("LLM_FALLBACK_PROVIDER", "").strip(),
         llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", "").strip(),
+        expose_api_docs=_env_flag("EXPOSE_API_DOCS", not is_production),
     )
     validate_runtime_policy(settings)
     return settings
