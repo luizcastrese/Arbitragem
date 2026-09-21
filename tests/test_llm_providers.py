@@ -46,6 +46,25 @@ def _policy(**overrides) -> ExecutionPolicy:
     return ExecutionPolicy(**{**base.__dict__, **overrides})
 
 
+def test_openrouter_model_slugs_identify_independent_families():
+    from app.llm.models import (
+        families_are_independent,
+        model_vendor,
+        normalize_openrouter_model,
+    )
+
+    assert model_vendor("anthropic/claude-sonnet-4") == "anthropic"
+    assert model_vendor("gpt-4.1-mini") == "openai"
+    assert normalize_openrouter_model("gpt-4.1-mini") == "openai/gpt-4.1-mini"
+    assert normalize_openrouter_model("google/gemini-2.5-flash") == "google/gemini-2.5-flash"
+    assert families_are_independent(
+        "anthropic/claude-sonnet-4", "openai/gpt-4.1"
+    )
+    assert not families_are_independent(
+        "anthropic/claude-sonnet-4", "anthropic/claude-3.7-sonnet"
+    )
+
+
 def test_fake_provider_returns_structured_output_without_network():
     provider = FakeProvider({"judge": {"ok": True, "text": "ok"}})
     set_provider_override(provider)
@@ -203,6 +222,91 @@ def test_timeout_is_classified_without_network(monkeypatch):
             TinyOut,
             ExecutionPolicy(provider="openai", model="m", max_retries=0, timeout_seconds=1),
         )
+
+
+def test_openrouter_timeout_is_classified_without_network(monkeypatch):
+    from app.llm import openrouter_provider as mod
+
+    class Completions:
+        def create(self, **kwargs):
+            raise TimeoutError("timed out")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = type("C", (), {"completions": Completions()})()
+
+    monkeypatch.setattr(mod, "OpenAI", lambda *a, **k: Client())
+    provider = object.__new__(OpenRouterProvider)
+    provider._api_key = "sk-or-test"
+    provider._base_url = "https://openrouter.ai/api/v1"
+    provider._timeout = 1
+    provider._http_referer = "http://localhost"
+    provider._app_title = "Valinor"
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    with pytest.raises(LLMTimeout):
+        provider.generate_structured(
+            "judge",
+            "s",
+            {},
+            TinyOut,
+            ExecutionPolicy(
+                provider="openrouter",
+                model="anthropic/claude-sonnet-4",
+                max_retries=0,
+                timeout_seconds=1,
+            ),
+        )
+
+
+def test_openrouter_embeddings_use_the_same_api(monkeypatch):
+    from app.llm import openrouter_provider as mod
+
+    captured = {}
+
+    class Embeddings:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type(
+                "R",
+                (),
+                {
+                    "data": [
+                        type("D", (), {"embedding": [0.1, 0.2, 0.3]})(),
+                    ]
+                },
+            )()
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.embeddings = Embeddings()
+
+    monkeypatch.setattr(mod, "OpenAI", lambda *a, **k: Client())
+    provider = object.__new__(OpenRouterProvider)
+    provider._api_key = "sk-or-test"
+    provider._base_url = "https://openrouter.ai/api/v1"
+    provider._timeout = 1
+    provider._http_referer = "http://localhost"
+    provider._app_title = "Valinor"
+    vector = provider.generate_embedding("texto", "text-embedding-3-small")
+    assert vector == [0.1, 0.2, 0.3]
+    assert captured["model"] == "openai/text-embedding-3-small"
+
+
+def test_execution_policy_defaults_to_openrouter_catalog():
+    from app.llm.models import DEFAULT_OPENROUTER_MODELS
+    from app.llm.registry import execution_policy_for
+
+    get_settings.cache_clear()
+    try:
+        judge = execution_policy_for("judge")
+        reviewer = execution_policy_for("reviewer")
+        assert judge.provider == "openrouter"
+        assert reviewer.provider == "openrouter"
+        assert judge.model == DEFAULT_OPENROUTER_MODELS["judge"]
+        assert reviewer.model == DEFAULT_OPENROUTER_MODELS["reviewer"]
+        assert judge.model != reviewer.model
+    finally:
+        get_settings.cache_clear()
 
 
 def test_logs_do_not_contain_secrets(caplog):

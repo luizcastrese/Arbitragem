@@ -12,6 +12,7 @@ from app.llm.errors import (
     LLMUnavailable,
 )
 from app.llm.fake_provider import FakeProvider
+from app.llm.models import normalize_openrouter_model
 from app.llm.openai_provider import OpenAIProvider
 from app.llm.openrouter_provider import OpenRouterProvider
 from app.llm.schemas import ExecutionPolicy, LLMProvider, StructuredGenerationResult
@@ -73,6 +74,8 @@ def build_provider(name: str) -> LLMProvider:
             api_key=settings.openrouter_api_key,
             base_url=settings.openrouter_base_url,
             timeout_seconds=settings.llm_request_timeout_seconds,
+            http_referer=settings.public_base_url,
+            app_title="Valinor",
         )
     raise LLMPolicyError(f"provider não suportado: {name}")
 
@@ -89,8 +92,10 @@ def execution_policy_for(agent: str) -> ExecutionPolicy:
     }
     provider, model = mapping.get(
         agent,
-        (settings.llm_default_provider, settings.openai_model),
+        (settings.llm_default_provider, settings.default_llm_model),
     )
+    if provider == "openrouter":
+        model = normalize_openrouter_model(model)
     fallback = None
     explicit = settings.llm_explicit_fallback
     if explicit:

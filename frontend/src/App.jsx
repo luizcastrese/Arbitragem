@@ -36,6 +36,12 @@ import {
 const API_BASE = import.meta.env.VITE_API_BASE
   || (window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin)
 
+function llmReady(system) {
+  if (!system) return false
+  if (typeof system.llm_enabled === 'boolean') return system.llm_enabled
+  return Boolean(system.openrouter_enabled || system.openai_enabled)
+}
+
 function formatApiDetail(detail, fallback = 'Erro inesperado') {
   if (typeof detail === 'string' && detail.trim()) return detail
   if (Array.isArray(detail)) {
@@ -534,9 +540,9 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <span className={`system-status ${system?.openai_enabled ? 'online' : 'demo'}`}>
+            <span className={`system-status ${llmReady(system) ? 'online' : 'demo'}`}>
               <span />
-              {system?.openai_enabled ? 'Chave de IA configurada' : 'Modo demonstração'}
+              {llmReady(system) ? 'Chave de IA configurada' : 'Modo demonstração'}
             </span>
             {user ? (
               <div className="account-menu-wrap">
@@ -661,13 +667,13 @@ export default function App() {
           </div>
         )}
 
-        {!system?.openai_enabled && (
+        {!llmReady(system) && (
           <div className="demo-notice">
             <Info size={19} />
             <div>
               <strong>Você está no modo demonstração</strong>
               <span>
-                Sem uma chave de IA, o agente julgador não profere decisão de mérito
+                Sem uma chave OpenRouter, o agente julgador não profere decisão de mérito
                 e o caso permanece inconclusivo.
               </span>
             </div>

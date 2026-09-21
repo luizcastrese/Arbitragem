@@ -176,3 +176,72 @@ def test_production_rejects_same_judge_and_reviewer_when_llm_enabled(monkeypatch
             get_settings()
     finally:
         get_settings.cache_clear()
+
+
+def test_defaults_use_openrouter_with_distinct_model_families(monkeypatch):
+    from app.llm.models import families_are_independent, model_vendor
+
+    monkeypatch.delenv("LLM_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.delenv("JUDGE_PROVIDER", raising=False)
+    monkeypatch.delenv("REVIEWER_PROVIDER", raising=False)
+    monkeypatch.delenv("JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("REVIEWER_MODEL", raising=False)
+    monkeypatch.delenv("APPEAL_MODEL", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm_default_provider == "openrouter"
+        assert settings.judge_provider == "openrouter"
+        assert settings.reviewer_provider == "openrouter"
+        assert settings.appeal_provider == "openrouter"
+        assert settings.embedding_provider == "openrouter"
+        assert "/" in settings.judge_model
+        assert families_are_independent(settings.judge_model, settings.reviewer_model)
+        assert families_are_independent(settings.judge_model, settings.appeal_model)
+        assert model_vendor(settings.embedding_model) == "openai"
+        assert settings.model_independence_satisfied is True
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_rejects_same_openrouter_family_when_llm_enabled(monkeypatch):
+    import pytest
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-not-a-real-key")
+    monkeypatch.setenv("JUDGE_PROVIDER", "openrouter")
+    monkeypatch.setenv("REVIEWER_PROVIDER", "openrouter")
+    monkeypatch.setenv("JUDGE_MODEL", "anthropic/claude-sonnet-4")
+    monkeypatch.setenv("REVIEWER_MODEL", "anthropic/claude-3.7-sonnet")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="famílias distintas"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_accepts_openrouter_defaults_when_key_is_set(monkeypatch):
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-not-a-real-key")
+    monkeypatch.delenv("JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("REVIEWER_MODEL", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm_enabled is True
+        assert settings.openrouter_enabled is True
+        assert settings.model_independence_satisfied is True
+    finally:
+        get_settings.cache_clear()
+
+
+def test_bare_openai_model_ids_are_prefixed_for_openrouter(monkeypatch):
+    monkeypatch.setenv("LLM_DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("JUDGE_PROVIDER", "openrouter")
+    monkeypatch.setenv("JUDGE_MODEL", "gpt-4.1-mini")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().judge_model == "openai/gpt-4.1-mini"
+    finally:
+        get_settings.cache_clear()

@@ -13,7 +13,8 @@ import pytest
 
 # Armazenamento de documentos em memória, sem tocar o disco.
 os.environ["DOCUMENT_STORAGE_BACKEND"] = "memory"
-# Sem chave: os agentes seguem pelo caminho de contingência.
+# Sem chave OpenRouter: os agentes seguem pelo caminho de contingência.
+os.environ.setdefault("OPENROUTER_API_KEY", "")
 os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("PLATFORM_SIGNING_SECRET", "test-signing-secret")
 # Modo local: os testes usam tokens por papel além das contas.

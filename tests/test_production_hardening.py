@@ -109,6 +109,7 @@ def test_health_reports_operational_signals(client):
     assert body["status"] == "ok"
     assert body["database"] == "ok"
     assert "llm_enabled" in body
+    assert "openrouter_enabled" in body
     assert "email_configured" in body
     assert "attestation_enabled" in body
 

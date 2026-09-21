@@ -9,6 +9,12 @@ from app.llm.errors import (
     LLMUnavailable,
 )
 from app.llm.fake_provider import FakeProvider
+from app.llm.models import (
+    DEFAULT_OPENROUTER_MODELS,
+    families_are_independent,
+    model_vendor,
+    normalize_openrouter_model,
+)
 from app.llm.registry import (
     execution_policy_for,
     generate_embedding,
@@ -27,6 +33,10 @@ __all__ = [
     "LLMTransientError",
     "LLMUnavailable",
     "FakeProvider",
+    "DEFAULT_OPENROUTER_MODELS",
+    "families_are_independent",
+    "model_vendor",
+    "normalize_openrouter_model",
     "ExecutionPolicy",
     "StructuredGenerationResult",
     "execution_policy_for",

@@ -19,10 +19,15 @@ from app.llm.registry import (
 from app.llm.schemas import ExecutionPolicy, StructuredGenerationResult
 
 
-def openai_configured() -> bool:
+def llm_configured() -> bool:
     from app.core.config import get_settings
 
-    return get_settings().openai_enabled or get_settings().openrouter_enabled
+    return get_settings().llm_enabled
+
+
+def openai_configured() -> bool:
+    """Compatibilidade: qualquer provedor de modelo habilitado conta."""
+    return llm_configured()
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ não devem produzi-lo.
 # determinístico, sem chave, sem rede e sem custo
 python -m evals.runner
 
-# contra o modelo de verdade (exige OPENAI_API_KEY)
+# contra o modelo de verdade (exige OPENROUTER_API_KEY)
 python -m evals.runner --live --min-pass-rate 0.8
 
 # um cenário só
@@ -41,7 +41,7 @@ mede aí é o *pipeline*: procedência registrada, comportamento em contingênci
 formato da saída — e as próprias métricas, que precisam acusar problema nos
 controles negativos.
 
-No **modo live**, o agente chama a OpenAI com o prompt e o contexto do cenário.
+No **modo live**, o agente chama a OpenRouter com o prompt e o contexto do cenário.
 O que se mede aí é o *modelo*. Cenários marcados com `offline_only` — os
 controles negativos e as simulações de falha — são pulados.
 

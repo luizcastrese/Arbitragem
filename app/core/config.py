@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 
 from app.core.client_ip import parse_trusted_proxies
 from app.core.encryption import load_key as load_document_encryption_key
+from app.llm.models import (
+    DEFAULT_OPENROUTER_MODELS,
+    families_are_independent,
+    normalize_openrouter_model,
+)
 
 
 load_dotenv()
@@ -36,6 +41,7 @@ class Settings:
     database_url: str
     openai_api_key: str
     openai_model: str
+    default_llm_model: str
     embedding_model: str
     platform_signing_secret: str
     platform_ed25519_private_key: str
@@ -109,9 +115,32 @@ class Settings:
     def openrouter_enabled(self) -> bool:
         return bool(self.openrouter_api_key)
 
+    def provider_configured(self, name: str) -> bool:
+        if name == "fake":
+            return True
+        if name == "openai":
+            return self.openai_enabled
+        if name == "openrouter":
+            return self.openrouter_enabled
+        return False
+
     @property
     def llm_enabled(self) -> bool:
-        return self.openai_enabled or self.openrouter_enabled
+        return any(
+            self.provider_configured(provider)
+            for provider in {
+                self.llm_default_provider,
+                self.conciliator_provider,
+                self.organizer_provider,
+                self.judge_provider,
+                self.reviewer_provider,
+                self.appeal_provider,
+            }
+        )
+
+    @property
+    def embeddings_enabled(self) -> bool:
+        return self.provider_configured(self.embedding_provider)
 
     @property
     def allow_role_tokens(self) -> bool:
@@ -158,10 +187,14 @@ class Settings:
 
     @property
     def model_independence_satisfied(self) -> bool:
-        return (self.judge_provider, self.judge_model) != (
+        if (self.judge_provider, self.judge_model) == (
             self.reviewer_provider,
             self.reviewer_model,
-        )
+        ):
+            return False
+        if self.judge_provider == "openrouter" and self.reviewer_provider == "openrouter":
+            return families_are_independent(self.judge_model, self.reviewer_model)
+        return True
 
     @property
     def demo_non_decisional(self) -> bool:
@@ -208,6 +241,7 @@ class Settings:
             },
             "fallback": self.llm_explicit_fallback,
             "openai_enabled_at_lock": self.llm_enabled,
+            "openrouter_enabled_at_lock": self.openrouter_enabled,
             "model_independence_satisfied": self.model_independence_satisfied,
             "demo_non_decisional": self.demo_non_decisional,
             "user_configurable_private_instructions": False,
@@ -292,10 +326,11 @@ def validate_runtime_policy(settings: Settings) -> None:
         and not settings.model_independence_satisfied
     ):
         raise RuntimeError(
-            "Em produção o julgador e o revisor devem usar modelos distintos "
-            "(preferencialmente provedores ou famílias diferentes). "
-            "Configure JUDGE_MODEL e REVIEWER_MODEL (e/ou os providers) com "
-            "valores diferentes, ou a instância entra em modo de demonstração "
+            "Em produção o julgador e o revisor devem usar modelos de "
+            "famílias distintas via OpenRouter (por exemplo Anthropic no "
+            "julgador e OpenAI no revisor). Configure JUDGE_MODEL e "
+            "REVIEWER_MODEL com slugs `fornecedor/modelo` de laboratórios "
+            "diferentes, ou a instância entra em modo de demonstração "
             "não decisório apenas fora de produção."
         )
 
@@ -334,21 +369,55 @@ def get_settings() -> Settings:
         True if is_production else _env_flag("EMAIL_VERIFICATION_REQUIRED", False)
     )
 
-    default_model = _env_or("OPENAI_MODEL", "gpt-5-mini")
-    default_provider = _env_or("LLM_DEFAULT_PROVIDER", "openai")
+    default_provider = _env_or("LLM_DEFAULT_PROVIDER", "openrouter")
+    shared_model = os.getenv("OPENROUTER_MODEL") or os.getenv("OPENAI_MODEL") or ""
+    shared_model = shared_model.strip()
+    if default_provider == "openrouter":
+        default_model = normalize_openrouter_model(
+            shared_model or DEFAULT_OPENROUTER_MODELS["default"]
+        )
+    else:
+        default_model = shared_model or "gpt-4.1-mini"
     allowed_providers = _split_csv(
-        os.getenv("LLM_ALLOWED_PROVIDERS", "openai,openrouter,fake")
+        os.getenv("LLM_ALLOWED_PROVIDERS", "openrouter,openai,fake")
     )
     allowed_models = _split_csv(os.getenv("LLM_ALLOWED_MODELS", ""))
+
+    def _agent_provider(name: str) -> str:
+        return _env_or(name, default_provider)
+
+    def _agent_model(name: str, agent: str) -> str:
+        explicit = os.getenv(name)
+        if explicit and explicit.strip():
+            model = explicit.strip()
+        elif default_provider == "openrouter":
+            model = DEFAULT_OPENROUTER_MODELS[agent]
+        else:
+            model = default_model
+        provider = _agent_provider(name.replace("_MODEL", "_PROVIDER"))
+        if provider == "openrouter":
+            return normalize_openrouter_model(model)
+        return model
+
+    def _embedding_model() -> str:
+        explicit = (
+            os.getenv("EMBEDDING_MODEL") or os.getenv("OPENAI_EMBEDDING_MODEL") or ""
+        ).strip()
+        provider = _agent_provider("EMBEDDING_PROVIDER")
+        if explicit:
+            if provider == "openrouter":
+                return normalize_openrouter_model(explicit)
+            return explicit
+        if provider == "openrouter":
+            return DEFAULT_OPENROUTER_MODELS["embedding"]
+        return "text-embedding-3-small"
 
     settings = Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite:///./data/arbitragem.db"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_model=default_model,
-        embedding_model=_env_or(
-            "EMBEDDING_MODEL",
-            _env_or("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-        ),
+        default_llm_model=default_model,
+        embedding_model=_embedding_model(),
         platform_signing_secret=signing_secret,
         platform_ed25519_private_key=os.getenv(
             "PLATFORM_ED25519_PRIVATE_KEY", ""
@@ -410,17 +479,17 @@ def get_settings() -> Settings:
         llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
         llm_allowed_providers=allowed_providers,
         llm_allowed_models=allowed_models,
-        conciliator_provider=_env_or("CONCILIATOR_PROVIDER", default_provider),
-        conciliator_model=_env_or("CONCILIATOR_MODEL", default_model),
-        organizer_provider=_env_or("ORGANIZER_PROVIDER", default_provider),
-        organizer_model=_env_or("ORGANIZER_MODEL", default_model),
-        judge_provider=_env_or("JUDGE_PROVIDER", default_provider),
-        judge_model=_env_or("JUDGE_MODEL", default_model),
-        reviewer_provider=_env_or("REVIEWER_PROVIDER", default_provider),
-        reviewer_model=_env_or("REVIEWER_MODEL", default_model),
-        appeal_provider=_env_or("APPEAL_PROVIDER", default_provider),
-        appeal_model=_env_or("APPEAL_MODEL", default_model),
-        embedding_provider=_env_or("EMBEDDING_PROVIDER", default_provider),
+        conciliator_provider=_agent_provider("CONCILIATOR_PROVIDER"),
+        conciliator_model=_agent_model("CONCILIATOR_MODEL", "conciliator"),
+        organizer_provider=_agent_provider("ORGANIZER_PROVIDER"),
+        organizer_model=_agent_model("ORGANIZER_MODEL", "organizer"),
+        judge_provider=_agent_provider("JUDGE_PROVIDER"),
+        judge_model=_agent_model("JUDGE_MODEL", "judge"),
+        reviewer_provider=_agent_provider("REVIEWER_PROVIDER"),
+        reviewer_model=_agent_model("REVIEWER_MODEL", "reviewer"),
+        appeal_provider=_agent_provider("APPEAL_PROVIDER"),
+        appeal_model=_agent_model("APPEAL_MODEL", "appeal"),
+        embedding_provider=_agent_provider("EMBEDDING_PROVIDER"),
         decision_stability_enabled=_env_flag("DECISION_STABILITY_ENABLED", False),
         decision_stability_runs=max(2, int(os.getenv("DECISION_STABILITY_RUNS", "2"))),
         decision_stability_threshold=float(
@@ -432,7 +501,11 @@ def get_settings() -> Settings:
             os.getenv("CASE_VALUE_LIMIT_MINOR_UNITS", "500000000")
         ),
         llm_fallback_provider=os.getenv("LLM_FALLBACK_PROVIDER", "").strip(),
-        llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", "").strip(),
+        llm_fallback_model=(
+            normalize_openrouter_model(os.getenv("LLM_FALLBACK_MODEL", "").strip())
+            if os.getenv("LLM_FALLBACK_PROVIDER", "").strip() == "openrouter"
+            else os.getenv("LLM_FALLBACK_MODEL", "").strip()
+        ),
         expose_api_docs=_env_flag("EXPOSE_API_DOCS", not is_production),
     )
     validate_runtime_policy(settings)

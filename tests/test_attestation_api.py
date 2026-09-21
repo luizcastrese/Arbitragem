@@ -1,4 +1,4 @@
-"""Testes de API do enforcement: em modo seguro (sem OpenAI) a decisão é
+"""Testes de API do enforcement: em modo seguro (sem OpenRouter) a decisão é
 inconclusiva e a auditoria reprova — nenhuma attestation pode ser emitida."""
 
 import os

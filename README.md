@@ -44,11 +44,12 @@ saída em sentença arbitral ou estatal.
 - contraditório documentado: disponibilização, ciência, resposta ou renúncia e
   admissão antes do uso pela IA;
 - hashing SHA-256 e chunking com sobreposição;
-- embeddings OpenAI opcionais;
+- embeddings OpenRouter opcionais;
 - recuperação vetorial com fallback lexical;
-- agentes conciliador, organizador, julgador e revisor;
+- agentes conciliador, organizador, julgador e revisor, cada um em uma
+  família de modelo distinta via OpenRouter;
 - rodadas de composição com respostas separadas da empresa e do cliente;
-- Structured Outputs pela Responses API;
+- Structured Outputs via OpenRouter (Chat Completions + JSON schema);
 - prompts versionados e endereçados por hash, fixados no manifesto travado, com
   o modelo efetivamente usado e eventual divergência de prompt registrados em
   cada etapa;
@@ -192,17 +193,17 @@ Variáveis do arquivo `.env`:
 
 | Variável | Uso |
 |---|---|
-| `OPENAI_API_KEY` | Ativa o provedor OpenAI (deprecated como único caminho) |
-| `OPENAI_MODEL` | **Deprecated.** Default dos agentes se `*_MODEL` não for definido |
+| `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | Provedor único de modelos. Sem a chave, o sistema fica em modo seguro inconclusivo |
+| `LLM_DEFAULT_PROVIDER` | Padrão `openrouter`. `openai` permanece só como override explícito |
+| `CONCILIATOR_PROVIDER` / `CONCILIATOR_MODEL` | Política do conciliador (padrão `google/gemini-2.5-flash`) |
+| `ORGANIZER_PROVIDER` / `ORGANIZER_MODEL` | Política do organizador (padrão `openai/gpt-4.1-mini`) |
+| `JUDGE_PROVIDER` / `JUDGE_MODEL` | Política do julgador (padrão `anthropic/claude-sonnet-4`) |
+| `REVIEWER_PROVIDER` / `REVIEWER_MODEL` | Política do revisor; em produção deve ser de outra família (padrão `openai/gpt-4.1`) |
+| `APPEAL_PROVIDER` / `APPEAL_MODEL` | Política do recurso automático (padrão `google/gemini-2.5-pro`) |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | Embeddings via OpenRouter (padrão `openai/text-embedding-3-small`) |
+| `OPENAI_API_KEY` | Override legado do adapter OpenAI direto; não é o caminho padrão |
+| `OPENAI_MODEL` | **Deprecated.** Só ainda lido se um agente não tiver `*_MODEL` e o provedor não for OpenRouter |
 | `OPENAI_EMBEDDING_MODEL` | **Deprecated.** Use `EMBEDDING_MODEL` |
-| `LLM_DEFAULT_PROVIDER` | `openai` ou `openrouter` |
-| `CONCILIATOR_PROVIDER` / `CONCILIATOR_MODEL` | Política do conciliador |
-| `ORGANIZER_PROVIDER` / `ORGANIZER_MODEL` | Política do organizador |
-| `JUDGE_PROVIDER` / `JUDGE_MODEL` | Política do julgador |
-| `REVIEWER_PROVIDER` / `REVIEWER_MODEL` | Política do revisor (deve diferir do julgador em produção) |
-| `APPEAL_PROVIDER` / `APPEAL_MODEL` | Política do recurso automático |
-| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | Embeddings |
-| `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | Provedor OpenRouter |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | Timeout explícito |
 | `LLM_MAX_RETRIES` | Retries só para erros transitórios |
 | `LLM_ALLOWED_PROVIDERS` / `LLM_ALLOWED_MODELS` | Allowlists |
@@ -262,9 +263,13 @@ python -m app.core.attestation
 python -m app.core.nostr_anchor
 ```
 
-Sem `OPENAI_API_KEY`, o sistema continua executável. Ele organiza o material
+Sem `OPENROUTER_API_KEY`, o sistema continua executável. Ele organiza o material
 com recuperação lexical, mas não profere decisão de mérito: o resultado fica
 explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
+
+Os agentes não concentram a decisão em um único laboratório: conciliação,
+organização, julgamento, auditoria e recurso usam slugs OpenRouter de famílias
+distintas. Em produção, julgador e revisor da mesma família derrubam o boot.
 
 ## Operação
 
@@ -464,8 +469,8 @@ executar pelo menos uma restauração de backup de verdade
 (`docs/runbook-operacao.md`) e montar monitoramento. Com mais de uma réplica,
 migrar o rate limiting e a fila de etapas para backends compartilhados.
 
-## Referências OpenAI
+## Referências OpenRouter
 
-- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-- [Embeddings](https://developers.openai.com/api/docs/guides/embeddings)
-- [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini)
+- [OpenRouter API](https://openrouter.ai/docs/api-reference/overview)
+- [Structured Outputs](https://openrouter.ai/docs/features/structured-outputs)
+- [Models](https://openrouter.ai/models)
