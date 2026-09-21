@@ -26,6 +26,7 @@ from tests.test_api import (
     CASE_CREDENTIALS,
     actor_headers,
     prepare_locked_case,
+    steward_headers,
 )
 
 
@@ -63,20 +64,20 @@ def _through_review(client):
     case_id, document, _ = prepare_locked_case(client)
     assert client.post(
         f"/cases/{case_id}/conciliation?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 200
     assert client.post(
         f"/cases/{case_id}/organize?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 200
     decision = client.post(
         f"/cases/{case_id}/decide?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert decision.status_code == 200
     review = client.post(
         f"/cases/{case_id}/review?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert review.status_code == 200
     return case_id, decision.json(), review.json()
@@ -104,17 +105,17 @@ def test_decide_is_idempotent_and_does_not_loop(client):
     case_id, first, _ = _through_review(client)
     second = client.post(
         f"/cases/{case_id}/decide?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     third = client.post(
         f"/cases/{case_id}/review?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     assert first["decision"] == second["decision"]
     assert canonical_hash(first) == canonical_hash(second)
     review_again = client.post(
         f"/cases/{case_id}/review?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     assert third == review_again
 

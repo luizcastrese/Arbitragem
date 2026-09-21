@@ -104,8 +104,9 @@ caso
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
 uma parte, disponibilizado à contraparte, reconhecido como recebido e respondido
-ou expressamente dispensado. O gestor só pode admitir o material depois desse
-percurso, e o lock é bloqueado enquanto houver pendência.
+ou expressamente dispensado. O gestor é uma IA: admite o material depois desse
+percurso, e só trava o conjunto quando as duas partes declararam encerrada a
+própria apresentação. Uma parte não conduz a etapa da outra.
 
 O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
 participação voluntária, acesso a todo material, oportunidade de resposta,
@@ -124,8 +125,12 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
   às propostas; deve compreender e aceitar o procedimento;
 - **empresa reclamada:** apresenta defesa e documentos, formula contrapropostas
   e acompanha exposição, acordos e decisões de forma consistente;
-- **as próprias partes:** administram convites, prazos e o avanço do rito; uma
-  não pode registrar manifestações nem aceite de acordo em nome da outra;
+- **gestor:** uma IA do procedimento. Admite material, trava o conjunto e avança
+  composição, organização, decisão e auditoria. Não fala por nenhuma parte e não
+  julga o mérito;
+- **as próprias partes:** aceitam o rito, apresentam material, respondem ao
+  contraditório e às propostas, e declaram quando a sua apresentação encerrou;
+  uma não registra manifestação nem aceite de acordo em nome da outra;
 - **representantes e advogados:** podem apoiar qualquer parte na preparação e
   manifestação dentro do caso.
 

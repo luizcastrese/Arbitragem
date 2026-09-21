@@ -28,6 +28,13 @@ class Case(Base):
     claimant_terms_sha256 = Column(String, nullable=True)
     respondent_terms_version = Column(String, nullable=True)
     respondent_terms_sha256 = Column(String, nullable=True)
+    # Cada parte declara que encerrou a própria apresentação. O gestor só
+    # trava o conjunto depois das duas declarações.
+    claimant_submission_ready = Column(Boolean, nullable=False, default=False)
+    respondent_submission_ready = Column(Boolean, nullable=False, default=False)
+    claimant_submission_ready_at = Column(String, nullable=True)
+    respondent_submission_ready_at = Column(String, nullable=True)
+    steward_json = Column(Text, nullable=True)
     claimant_token_hash = Column(String, nullable=True)
     respondent_token_hash = Column(String, nullable=True)
     manager_token_hash = Column(String, nullable=True)

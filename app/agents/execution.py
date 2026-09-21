@@ -117,6 +117,7 @@ def _requested_model_for(agent: str) -> str:
         "judge": settings.judge_model,
         "reviewer": settings.reviewer_model,
         "appeal": settings.appeal_model,
+        "steward": settings.steward_model,
     }.get(agent, settings.default_llm_model)
 
 
@@ -128,4 +129,5 @@ def _requested_provider_for(agent: str) -> str:
         "judge": settings.judge_provider,
         "reviewer": settings.reviewer_provider,
         "appeal": settings.appeal_provider,
+        "steward": settings.steward_provider,
     }.get(agent, settings.llm_default_provider)

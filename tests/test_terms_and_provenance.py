@@ -86,6 +86,27 @@ def actor_headers(case_id, party):
     return {"X-Actor-Token": CASE_CREDENTIALS[case_id][party]}
 
 
+def steward_headers():
+    from app.domain.steward import steward_actuator_token
+
+    return {"X-Actor-Token": steward_actuator_token()}
+
+
+def declare_ready(client, case_id):
+    response = None
+    for party in ("claimant", "respondent"):
+        response = client.post(
+            f"/cases/{case_id}/submission-ready",
+            json={"party": party, "ready": True},
+            headers={
+                **actor_headers(case_id, party),
+                "X-Steward-Run-Models": "0",
+            },
+        )
+        assert response.status_code == 200, response.text
+    return response
+
+
 def add_document(client, case_id):
     response = client.post(
         f"/cases/{case_id}/documents/text",
@@ -108,17 +129,12 @@ def complete_contradictory(client, case_id, document_id):
         json={"party": "respondent"},
         headers=actor_headers(case_id, "respondent"),
     )
-    client.post(
+    responded = client.post(
         f"/cases/{case_id}/documents/{document_id}/respond",
         json={"party": "respondent", "response_status": "waived"},
         headers=actor_headers(case_id, "respondent"),
     )
-    admitted = client.post(
-        f"/cases/{case_id}/documents/{document_id}/admit",
-        json={"party": "manager"},
-        headers=actor_headers(case_id, "manager"),
-    )
-    assert admitted.status_code == 200, admitted.text
+    assert responded.status_code == 200, responded.text
 
 
 def accept_terms(client, case_id, version=None):
@@ -201,9 +217,10 @@ def test_locked_manifest_carries_the_accepted_terms(client):
     document = add_document(client, case["id"])
     complete_contradictory(client, case["id"], document["id"])
     accept_terms(client, case["id"])
+    declare_ready(client, case["id"])
 
     manifest = client.post(
-        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager")
+        f"/cases/{case['id']}/lock", headers=steward_headers()
     ).json()["manifest"]
 
     current = terms_module.current_terms()
@@ -233,9 +250,18 @@ def test_lock_is_blocked_when_the_accepted_text_no_longer_reproduces(
         sha256="0" * 64,
     )
     monkeypatch.setattr(main, "get_terms", lambda version=None: adulterated)
+    for party in ("claimant", "respondent"):
+        client.post(
+            f"/cases/{case['id']}/submission-ready",
+            json={"party": party, "ready": True},
+            headers={
+                **actor_headers(case["id"], party),
+                "X-Steward-Run-Models": "0",
+            },
+        )
 
     response = client.post(
-        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager")
+        f"/cases/{case['id']}/lock", headers=steward_headers()
     )
     assert response.status_code == 409
     assert "mudou depois do aceite" in response.json()["detail"]
@@ -253,6 +279,7 @@ def test_every_agent_registers_a_versioned_prompt():
         "organizer",
         "reviewer",
         "selector",
+        "steward",
     }
     for agent, reference in policy.items():
         assert reference["version"]
@@ -271,9 +298,10 @@ def test_locked_manifest_pins_the_prompt_policy(client):
     document = add_document(client, case["id"])
     complete_contradictory(client, case["id"], document["id"])
     accept_terms(client, case["id"])
+    declare_ready(client, case["id"])
 
     manifest = client.post(
-        f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager")
+        f"/cases/{case['id']}/lock", headers=steward_headers()
     ).json()["manifest"]
 
     prompts = manifest["model_policy"]["prompts"]
@@ -286,12 +314,13 @@ def test_stage_execution_records_prompt_and_model(client):
     document = add_document(client, case["id"])
     complete_contradictory(client, case["id"], document["id"])
     accept_terms(client, case["id"])
-    client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager"))
+    declare_ready(client, case["id"])
+    client.post(f"/cases/{case['id']}/lock", headers=steward_headers())
 
     conciliation = client.post(
         f"/cases/{case['id']}/conciliation?wait=120",
         json={"claimant_response": "", "respondent_response": "", "new_information": ""},
-        headers=actor_headers(case["id"], "manager"),
+        headers=steward_headers(),
     ).json()
 
     execution = conciliation["execution"]
@@ -333,7 +362,8 @@ def test_drift_is_annotated_on_the_executed_stage(client, monkeypatch):
     document = add_document(client, case["id"])
     complete_contradictory(client, case["id"], document["id"])
     accept_terms(client, case["id"])
-    client.post(f"/cases/{case['id']}/lock", headers=actor_headers(case["id"], "manager"))
+    declare_ready(client, case["id"])
+    client.post(f"/cases/{case['id']}/lock", headers=steward_headers())
 
     monkeypatch.setattr(
         main,
@@ -350,7 +380,7 @@ def test_drift_is_annotated_on_the_executed_stage(client, monkeypatch):
     conciliation = client.post(
         f"/cases/{case['id']}/conciliation?wait=120",
         json={"claimant_response": "", "respondent_response": "", "new_information": ""},
-        headers=actor_headers(case["id"], "manager"),
+        headers=steward_headers(),
     ).json()
 
     assert conciliation["execution"]["prompt_drift"]["locked_version"] == "0.9.0"
