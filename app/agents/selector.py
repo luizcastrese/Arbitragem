@@ -100,11 +100,13 @@ def select_models(
         return ranked
 
     choices = result.data.get("choices") or []
-    proposed = {
-        item["agent"]: item["model"]
-        for item in choices
-        if isinstance(item, dict) and item.get("agent") and item.get("model")
-    }
+    proposed = {}
+    for item in choices:
+        if isinstance(item, dict) and item.get("agent") and item.get("model"):
+            proposed[item["agent"]] = {
+                "model": item["model"],
+                "reason": item.get("reason") or "",
+            }
 
     selection = validate_selection(proposed, catalog, ranked.shortlists, pins=pins)
     selection.selector_execution = openai_execution(PROMPT, result)

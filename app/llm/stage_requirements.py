@@ -88,13 +88,13 @@ STAGE_REQUIREMENTS: dict[str, StageRequirement] = {
         agent="appeal",
         summary=(
             "Recurso automático: reexame com inteligência alta e família "
-            "distinta da do julgador original."
+            "distinta da do julgador e da do revisor."
         ),
         primary_benchmark="intelligence",
         weight_intelligence=0.85,
         weight_cost=0.15,
         min_context=100_000,
-        independent_from=("judge",),
+        independent_from=("judge", "reviewer"),
     ),
     "embedding": StageRequirement(
         agent="embedding",
