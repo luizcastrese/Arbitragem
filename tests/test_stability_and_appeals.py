@@ -301,10 +301,17 @@ def test_approved_review_does_not_decide_unstable_case():
     assert decision["outcome"] == "inconclusive"
 
 
-def test_reconstruct_once_requires_independent_judge_policy():
+def test_reconstruct_once_requires_independent_judge_policy(monkeypatch):
     import pytest
+    from app.core.config import get_settings
     from app.domain.procedure import reconstruct_once
 
+    monkeypatch.setenv("LLM_DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("JUDGE_PROVIDER", "openrouter")
+    monkeypatch.setenv("APPEAL_PROVIDER", "openrouter")
+    monkeypatch.setenv("JUDGE_MODEL", "anthropic/claude-sonnet-4")
+    monkeypatch.setenv("APPEAL_MODEL", "anthropic/claude-sonnet-4")
+    get_settings.cache_clear()
     engine, db = _sqlite_session()
     try:
         case, case_data = _appeal_case(db, {"outcome": "claimant", "decision": "x"})
@@ -313,6 +320,7 @@ def test_reconstruct_once_requires_independent_judge_policy():
     finally:
         db.close()
         engine.dispose()
+        get_settings.cache_clear()
 
 
 def test_claim_case_stage_rejects_concurrent_worker():
