@@ -80,7 +80,24 @@ def build_provider(name: str) -> LLMProvider:
     raise LLMPolicyError(f"provider não suportado: {name}")
 
 
-def execution_policy_for(agent: str) -> ExecutionPolicy:
+def _locked_pair(model_policy: Optional[dict], agent: str):
+    if not isinstance(model_policy, dict):
+        return None
+    block = model_policy.get(agent)
+    if not isinstance(block, dict):
+        nested = model_policy.get("model_policy")
+        if isinstance(nested, dict):
+            block = nested.get(agent)
+    if not isinstance(block, dict):
+        return None
+    provider = block.get("provider")
+    model = block.get("model")
+    if not provider or not model:
+        return None
+    return str(provider), str(model)
+
+
+def execution_policy_for(agent: str, model_policy: Optional[dict] = None) -> ExecutionPolicy:
     settings = _settings()
     mapping = {
         "conciliator": (settings.conciliator_provider, settings.conciliator_model),
@@ -89,11 +106,16 @@ def execution_policy_for(agent: str) -> ExecutionPolicy:
         "reviewer": (settings.reviewer_provider, settings.reviewer_model),
         "appeal": (settings.appeal_provider, settings.appeal_model),
         "embedding": (settings.embedding_provider, settings.embedding_model),
+        "selector": (settings.selector_provider, settings.selector_model),
     }
-    provider, model = mapping.get(
-        agent,
-        (settings.llm_default_provider, settings.default_llm_model),
-    )
+    locked = _locked_pair(model_policy, agent)
+    if locked:
+        provider, model = locked
+    else:
+        provider, model = mapping.get(
+            agent,
+            (settings.llm_default_provider, settings.default_llm_model),
+        )
     if provider == "openrouter":
         model = normalize_openrouter_model(model)
     fallback = None

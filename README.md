@@ -197,10 +197,12 @@ Variáveis do arquivo `.env`:
 | `LLM_DEFAULT_PROVIDER` | Padrão `openrouter`. `openai` permanece só como override explícito |
 | `CONCILIATOR_PROVIDER` / `CONCILIATOR_MODEL` | Política do conciliador (padrão `google/gemini-2.5-flash`) |
 | `ORGANIZER_PROVIDER` / `ORGANIZER_MODEL` | Política do organizador (padrão `openai/gpt-4.1-mini`) |
-| `JUDGE_PROVIDER` / `JUDGE_MODEL` | Política do julgador (padrão `anthropic/claude-sonnet-4`) |
-| `REVIEWER_PROVIDER` / `REVIEWER_MODEL` | Política do revisor; em produção deve ser de outra família (padrão `openai/gpt-4.1`) |
-| `APPEAL_PROVIDER` / `APPEAL_MODEL` | Política do recurso automático (padrão `google/gemini-2.5-pro`) |
-| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | Embeddings via OpenRouter (padrão `openai/text-embedding-3-small`) |
+| `JUDGE_PROVIDER` / `JUDGE_MODEL` | Política do julgador. Vazio: o seletor escolhe pelo benchmark de inteligência |
+| `REVIEWER_PROVIDER` / `REVIEWER_MODEL` | Política do revisor; em produção deve ser de outra família |
+| `APPEAL_PROVIDER` / `APPEAL_MODEL` | Política do recurso automático |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | Embeddings via OpenRouter |
+| `SELECTOR_PROVIDER` / `SELECTOR_MODEL` | Agente que escolhe os modelos na trava do manifesto |
+| `MODEL_SELECTOR_ENABLED` | Liga o seletor (padrão `true`). Sem chave, cai no ranking determinístico |
 | `OPENAI_API_KEY` | Override legado do adapter OpenAI direto; não é o caminho padrão |
 | `OPENAI_MODEL` | **Deprecated.** Só ainda lido se um agente não tiver `*_MODEL` e o provedor não for OpenRouter |
 | `OPENAI_EMBEDDING_MODEL` | **Deprecated.** Use `EMBEDDING_MODEL` |
@@ -267,9 +269,14 @@ Sem `OPENROUTER_API_KEY`, o sistema continua executável. Ele organiza o materia
 com recuperação lexical, mas não profere decisão de mérito: o resultado fica
 explicitamente inconclusivo. Nenhum percentual ou pagamento é inventado.
 
-Os agentes não concentram a decisão em um único laboratório: conciliação,
-organização, julgamento, auditoria e recurso usam slugs OpenRouter de famílias
-distintas. Em produção, julgador e revisor da mesma família derrubam o boot.
+Os agentes não concentram a decisão em um único laboratório. Na trava do
+manifesto, um **agente seletor** consulta os benchmarks da OpenRouter
+(Artificial Analysis) e escolhe o modelo de cada etapa conforme a necessidade:
+conciliação prefere custo e velocidade, o julgador prioriza inteligência, o
+revisor e o recurso precisam ser de famílias distintas da do julgador. Sem
+chave, o mesmo critério roda de forma determinística sobre um catálogo local.
+A escolha fica congelada no manifesto. Em produção, julgador e revisor da
+mesma família derrubam o boot.
 
 ## Operação
 

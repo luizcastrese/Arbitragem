@@ -25,7 +25,7 @@ def _prompt_policy() -> Dict:
     A importação é local de propósito: registrar um prompt é efeito de importar
     o agente, e o manifesto também é gerado fora da API (testes e avaliações).
     """
-    from app.agents import appeal, conciliator, judge, organizer, reviewer  # noqa: F401
+    from app.agents import appeal, conciliator, judge, organizer, reviewer, selector  # noqa: F401
     from app.core.prompt_registry import prompt_policy
 
     return prompt_policy()
@@ -231,10 +231,27 @@ def lock_case_manifest(case: Dict) -> Dict:
         raise ValueError(f"Framework desconhecido: {framework_id}") from exc
     framework = framework_obj.lock_summary()
 
+    from app.llm.models import families_are_independent
+    from app.llm.selection import select_stage_models
+
+    selection = select_stage_models()
+    overlay = selection.as_policy_overlay()
     model_policy = {
         **settings.agent_model_policy(),
+        **overlay,
         "prompts": _prompt_policy(),
+        "selection": selection.as_record(),
     }
+    judge_model = (overlay.get("judge") or model_policy.get("judge") or {}).get("model")
+    reviewer_model = (overlay.get("reviewer") or model_policy.get("reviewer") or {}).get(
+        "model"
+    )
+    model_policy["model_independence_satisfied"] = bool(
+        judge_model
+        and reviewer_model
+        and families_are_independent(str(judge_model), str(reviewer_model))
+    )
+    model_policy["demo_non_decisional"] = not model_policy["model_independence_satisfied"]
 
     allowed_agents = [
         "conciliator",
