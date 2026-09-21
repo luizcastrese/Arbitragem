@@ -291,7 +291,26 @@ def reviewer_payload(
     }
 
 
-def alternate_judge_available() -> bool:
+def alternate_judge_available(case_data: Optional[Dict[str, Any]] = None) -> bool:
+    policy = None
+    if case_data:
+        policy = (case_data.get("locked_manifest") or {}).get("model_policy")
+    if (
+        isinstance(policy, dict)
+        and isinstance(policy.get("appeal"), dict)
+        and isinstance(policy.get("judge"), dict)
+        and policy["appeal"].get("model")
+        and policy["judge"].get("model")
+    ):
+        appeal_model = str(policy["appeal"]["model"])
+        judge_model = str(policy["judge"]["model"])
+        appeal_provider = str(policy["appeal"].get("provider") or "openrouter")
+        judge_provider = str(policy["judge"].get("provider") or "openrouter")
+        if (appeal_provider, appeal_model) == (judge_provider, judge_model):
+            return False
+        if appeal_provider == "openrouter" and judge_provider == "openrouter":
+            return families_are_independent(appeal_model, judge_model)
+        return True
     settings = get_settings()
     if (settings.appeal_provider, settings.appeal_model) == (
         settings.judge_provider,
@@ -343,7 +362,7 @@ def reconstruct_once(
     Usa a política do recurso (`appeal`) quando ela difere da do julgador.
     Sem política independente, não regenera com o mesmo modelo.
     """
-    if not alternate_judge_available():
+    if not alternate_judge_available(case_data):
         raise RuntimeError("reconstruction requires an independent judge policy")
     append_audit(
         db,
@@ -454,7 +473,10 @@ def run_appeal(
             or []
         ),
     }
-    policy = execution_policy_for("appeal")
+    policy = execution_policy_for(
+        "appeal",
+        model_policy=case_data.get("locked_manifest"),
+    )
     try:
         result = generate_structured(
             task="appeal",

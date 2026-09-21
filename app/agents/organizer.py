@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -89,7 +89,11 @@ def _fallback_organization(
     }
 
 
-def organize_case(documents: List[Dict], chunks: List[Dict]) -> Dict:
+def organize_case(
+    documents: List[Dict],
+    chunks: List[Dict],
+    manifest: Optional[Dict] = None,
+) -> Dict:
     retrieved_context = {
         query: _safe_retrieve(query=query, chunks=chunks, limit=3)
         for query in ORGANIZATION_QUERIES
@@ -111,6 +115,7 @@ def organize_case(documents: List[Dict], chunks: List[Dict]) -> Dict:
             for document in documents
         ],
         "retrieved_context": retrieved_context,
+        "manifest": manifest or {},
     }
 
     try:

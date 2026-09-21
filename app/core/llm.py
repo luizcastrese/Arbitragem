@@ -44,6 +44,7 @@ class LLMResult:
     response_id: Optional[str] = None
     usage: Dict[str, int] = field(default_factory=dict)
     provider: str = ""
+    requested_model: str = ""
     fallback_used: bool = False
     fallback_reason: Optional[str] = None
     attempts: int = 1
@@ -68,6 +69,7 @@ def _result_from_structured(result: StructuredGenerationResult) -> LLMResult:
         response_id=result.provider_response_id,
         usage=usage,
         provider=result.effective_provider,
+        requested_model=result.requested_model,
         fallback_used=result.fallback_used,
         fallback_reason=result.fallback_reason,
         attempts=result.attempts,
@@ -83,8 +85,16 @@ def call_openai_structured(
     response_model: Type[BaseModel],
     model: Optional[str] = None,
     agent: str = "generic",
+    model_policy: Optional[Dict[str, Any]] = None,
 ) -> LLMResult:
-    policy = execution_policy_for(agent)
+    locked_policy = model_policy
+    if locked_policy is None and isinstance(user_payload, dict):
+        locked_policy = (
+            user_payload.get("model_policy")
+            or user_payload.get("manifest")
+            or user_payload.get("locked_manifest")
+        )
+    policy = execution_policy_for(agent, model_policy=locked_policy)
     if model:
         policy = ExecutionPolicy(
             provider=policy.provider,
