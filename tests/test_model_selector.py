@@ -17,6 +17,7 @@ def test_snapshot_ranking_assigns_distinct_families_to_decision_stages():
     appeal = result.assignments["appeal"].model
     assert families_are_independent(judge, reviewer)
     assert families_are_independent(judge, appeal)
+    assert families_are_independent(reviewer, appeal)
     assert result.assignments["embedding"].model.startswith("openai/text-embedding")
     assert model_vendor(result.assignments["conciliator"].model)
     for agent in STAGE_REQUIREMENTS:
@@ -151,6 +152,78 @@ def test_selector_agent_records_execution_when_llm_is_scripted(monkeypatch):
     finally:
         set_provider_override(None)
         get_settings.cache_clear()
+
+
+def test_changing_judge_to_reviewer_family_reassigns_the_others():
+    catalog = snapshot_catalog()
+    ranked = pick_from_rank(catalog, pins={})
+    reviewer_model = ranked.assignments["reviewer"].model
+    repaired = validate_selection(
+        {"judge": reviewer_model},
+        catalog,
+        ranked.shortlists,
+        pins={},
+    )
+    assert repaired.assignments["judge"].model == reviewer_model
+    assert families_are_independent(
+        repaired.assignments["judge"].model,
+        repaired.assignments["reviewer"].model,
+    )
+    assert families_are_independent(
+        repaired.assignments["judge"].model,
+        repaired.assignments["appeal"].model,
+    )
+    assert families_are_independent(
+        repaired.assignments["reviewer"].model,
+        repaired.assignments["appeal"].model,
+    )
+
+
+def test_selector_reason_is_kept_when_the_choice_is_valid():
+    catalog = snapshot_catalog()
+    ranked = pick_from_rank(catalog, pins={})
+    judge = ranked.assignments["judge"].model
+    repaired = validate_selection(
+        {"judge": {"model": judge, "reason": "maior índice de inteligência da shortlist"}},
+        catalog,
+        ranked.shortlists,
+        pins={},
+    )
+    assert repaired.assignments["judge"].source == "selector_agent"
+    assert repaired.assignments["judge"].reason == "maior índice de inteligência da shortlist"
+
+
+def test_live_catalog_keeps_snapshot_score_when_api_omits_it(monkeypatch):
+    from app.llm.catalog import fetch_live_catalog
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    get_settings.cache_clear()
+
+    def fake_get(url, api_key, timeout):
+        if "/models" in url:
+            return {
+                "data": [
+                    {
+                        "id": "anthropic/claude-sonnet-4",
+                        "context_length": 200000,
+                        "pricing": {"prompt": "0.000003"},
+                        "architecture": {"output_modalities": ["text"]},
+                        "supported_parameters": ["response_format"],
+                    }
+                ]
+            }
+        return {"data": []}
+
+    monkeypatch.setattr("app.llm.catalog._http_get_json", fake_get)
+    try:
+        catalog = fetch_live_catalog()
+    finally:
+        get_settings.cache_clear()
+    model = catalog.by_id("anthropic/claude-sonnet-4")
+    assert model is not None
+    assert model.intelligence == 72.0
+    assert model.prompt_price == 3.0
+    assert catalog.by_id("openai/text-embedding-3-small") is not None
 
 
 def test_locked_manifest_records_selector_assignment():

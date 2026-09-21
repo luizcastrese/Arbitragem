@@ -11,10 +11,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.llm.catalog import CatalogModel, ModelCatalog, load_catalog
-from app.llm.models import families_are_independent, model_vendor, normalize_openrouter_model
+from app.llm.models import model_vendor, normalize_openrouter_model
 from app.llm.stage_requirements import (
     STAGE_REQUIREMENTS,
-    STAGES,
     StageRequirement,
     requirement_list,
 )
@@ -259,13 +258,51 @@ def pick_from_rank(
     )
 
 
+def _best_other_family(
+    shortlist: Sequence[RankedCandidate],
+    forbidden_vendors: Sequence[str],
+) -> Optional[RankedCandidate]:
+    blocked = {vendor for vendor in forbidden_vendors if vendor and vendor != "unknown"}
+    for candidate in shortlist:
+        if candidate.model.vendor not in blocked:
+            return candidate
+    return None
+
+
+def _replace_if_same_family(
+    assignments: Dict[str, StageAssignment],
+    shortlists: Dict[str, List[RankedCandidate]],
+    agent: str,
+    forbidden_vendors: Sequence[str],
+    pins: Dict[str, str],
+    note: str,
+) -> None:
+    current = assignments.get(agent)
+    if current is None or current.pinned or agent in pins:
+        return
+    blocked = {vendor for vendor in forbidden_vendors if vendor and vendor != "unknown"}
+    if model_vendor(current.model) not in blocked:
+        return
+    alternative = _best_other_family(shortlists.get(agent) or [], blocked)
+    if alternative is None or alternative.model.id == current.model:
+        return
+    replacement = _assignment_from_candidate(
+        agent, alternative, STAGE_REQUIREMENTS[agent], source="catalog_rank"
+    )
+    replacement.reason = note
+    assignments[agent] = replacement
+
+
 def validate_selection(
-    proposed: Dict[str, str],
+    proposed: Dict[str, Any],
     catalog: ModelCatalog,
     shortlists: Dict[str, List[RankedCandidate]],
     pins: Optional[Dict[str, str]] = None,
 ) -> SelectionResult:
-    """Aceita escolhas do agente só se estiverem na shortlist e respeitarem independência."""
+    """Aceita escolhas do agente só se estiverem na shortlist e respeitarem independência.
+
+    `proposed` mapeia agente → slug, ou agente → {"model", "reason"}.
+    """
     pins = pins if pins is not None else _operator_pins()
     fallback = pick_from_rank(catalog, pins=pins)
     allowed = {
@@ -274,47 +311,60 @@ def validate_selection(
     }
     assignments = dict(fallback.assignments)
 
-    for agent, model_id in proposed.items():
-        if agent not in STAGE_REQUIREMENTS:
+    for agent, raw in proposed.items():
+        if agent not in STAGE_REQUIREMENTS or agent in pins:
             continue
-        if agent in pins:
-            continue
+        if isinstance(raw, dict):
+            model_id = raw.get("model") or ""
+            reason = raw.get("reason") or ""
+        else:
+            model_id = str(raw or "")
+            reason = ""
         slug = normalize_openrouter_model(model_id)
         if slug not in allowed.get(agent, set()):
             continue
-        need = STAGE_REQUIREMENTS[agent]
         found = next(
             (item for item in fallback.shortlists.get(agent, []) if item.model.id == slug),
             None,
         )
         if found is None:
             continue
-        assignments[agent] = _assignment_from_candidate(
-            agent, found, need, source="selector_agent"
+        chosen = _assignment_from_candidate(
+            agent, found, STAGE_REQUIREMENTS[agent], source="selector_agent"
         )
+        if reason:
+            chosen.reason = reason
+        assignments[agent] = chosen
 
     judge = assignments.get("judge")
+    judge_vendor = model_vendor(judge.model) if judge else ""
+    if judge_vendor:
+        _replace_if_same_family(
+            assignments,
+            fallback.shortlists,
+            "reviewer",
+            (judge_vendor,),
+            pins,
+            "o seletor repetiu a família do julgador; aplicada outra família da shortlist",
+        )
     reviewer = assignments.get("reviewer")
-    if (
-        judge
-        and reviewer
-        and not families_are_independent(judge.model, reviewer.model)
-    ):
-        assignments["reviewer"] = fallback.assignments["reviewer"]
-        assignments["reviewer"].reason = (
-            "o seletor repetiu a família do julgador; aplicada a escolha "
-            "independente do ranking"
+    forbidden = [
+        vendor
+        for vendor in (
+            judge_vendor,
+            model_vendor(reviewer.model) if reviewer else "",
         )
-        assignments["reviewer"].source = "catalog_rank"
-
-    appeal = assignments.get("appeal")
-    if judge and appeal and not families_are_independent(judge.model, appeal.model):
-        assignments["appeal"] = fallback.assignments["appeal"]
-        assignments["appeal"].reason = (
-            "o seletor repetiu a família do julgador no recurso; aplicada a "
-            "escolha independente do ranking"
+        if vendor
+    ]
+    if forbidden:
+        _replace_if_same_family(
+            assignments,
+            fallback.shortlists,
+            "appeal",
+            forbidden,
+            pins,
+            "o seletor repetiu a família do julgador ou do revisor; aplicada outra família da shortlist",
         )
-        assignments["appeal"].source = "catalog_rank"
 
     fallback.assignments = assignments
     fallback.method = "selector_agent"

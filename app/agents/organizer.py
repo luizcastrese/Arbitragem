@@ -115,7 +115,7 @@ def organize_case(
             for document in documents
         ],
         "retrieved_context": retrieved_context,
-        "manifest": manifest or {},
+        "model_policy": (manifest or {}).get("model_policy") or {},
     }
 
     try:

@@ -302,7 +302,30 @@ def fetch_live_catalog(timeout: float = 8.0) -> ModelCatalog:
             live.append(parsed)
     if live:
         by_id = {item.id: item for item in catalog.models}
-        by_id.update({item.id: item for item in live})
+        for item in live:
+            previous = by_id.get(item.id)
+            if previous is None:
+                by_id[item.id] = item
+                continue
+            # A listagem ao vivo frequentemente omite o índice. Não apague
+            # a nota que o snapshot já tinha.
+            by_id[item.id] = replace(
+                item,
+                intelligence=(
+                    item.intelligence
+                    if item.intelligence is not None
+                    else previous.intelligence
+                ),
+                coding=item.coding if item.coding is not None else previous.coding,
+                prompt_price=(
+                    item.prompt_price
+                    if item.prompt_price is not None
+                    else previous.prompt_price
+                ),
+                context_length=item.context_length or previous.context_length,
+                structured=item.structured or previous.structured,
+                embedding=item.embedding or previous.embedding,
+            )
         catalog = ModelCatalog(
             models=list(by_id.values()),
             source="openrouter",
