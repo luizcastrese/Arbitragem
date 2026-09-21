@@ -33,7 +33,9 @@ def openai_execution(prompt: PromptVersion, result: LLMResult) -> Dict:
         "fallback_reason": result.fallback_reason,
         "execution_id": uuid4().hex,
     }
-    execution["model_requested"] = _requested_model_for(prompt.agent)
+    execution["model_requested"] = (
+        getattr(result, "requested_model", None) or _requested_model_for(prompt.agent)
+    )
     if result.usage:
         execution["usage"] = result.usage
     if result.latency_ms is not None:

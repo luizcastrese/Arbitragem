@@ -24,9 +24,10 @@ monitoramento.
 - [ ] Usar S3 privado ou confirmar que o volume `document_data` está montado e
       incluído no backup.
 - [ ] Preencher `DATA_CONTROLLER_NAME` e `PRIVACY_CONTACT_EMAIL`.
-- [ ] Preencher `OPENROUTER_API_KEY` e conferir que `JUDGE_MODEL` e
-      `REVIEWER_MODEL` são slugs de famílias distintas (`anthropic/...` vs
-      `openai/...`). Sem isso o boot de produção recusa a instância.
+- [ ] Preencher `OPENROUTER_API_KEY` e deixar os `*_MODEL` vazios para o
+      agente seletor escolher nas famílias distintas, ou fixar slugs
+      `fornecedor/modelo` com julgador e revisor de laboratórios diferentes.
+      Sem isso o boot de produção recusa a instância.
 
 ## 2. Domínio, HTTPS e proxy
 

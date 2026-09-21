@@ -36,6 +36,7 @@ from app.agents.execution import with_drift
 from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
+from app.agents.selector import PROMPT as _SELECTOR_PROMPT  # noqa: F401
 from app.core.attestation import (
     AttestationError,
     build_decision_attestation,
@@ -2196,6 +2197,7 @@ def organize_case(
             organizer_organize_case(
                 documents=job_data["documents"],
                 chunks=job_data["chunks"],
+                manifest=job_data.get("locked_manifest"),
             ),
         )
         save_stage(

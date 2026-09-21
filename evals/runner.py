@@ -6,7 +6,7 @@ Dois modos:
   cenário. Roda sem chave, sem rede e sem custo, e é determinístico — serve de
   teste de regressão do pipeline (procedência, contingência, formato) e dos
   próprios controles de qualidade;
-- **live** (`--live`): chama a OpenAI de verdade com o prompt e o contexto do
+- **live** (`--live`): chama a OpenRouter de verdade com o prompt e o contexto do
   cenário. Mede o modelo, não o pipeline. Cenários marcados como
   `offline_only` (controles negativos com saída deliberadamente ruim) são
   pulados.

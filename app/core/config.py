@@ -94,6 +94,9 @@ class Settings:
     appeal_provider: str
     appeal_model: str
     embedding_provider: str
+    selector_provider: str
+    selector_model: str
+    model_selector_enabled: bool
     decision_stability_enabled: bool
     decision_stability_runs: int
     decision_stability_threshold: float
@@ -135,6 +138,7 @@ class Settings:
                 self.judge_provider,
                 self.reviewer_provider,
                 self.appeal_provider,
+                self.selector_provider,
             }
         )
 
@@ -238,6 +242,11 @@ class Settings:
             "embedding": {
                 "provider": self.embedding_provider,
                 "model": self.embedding_model,
+            },
+            "selector": {
+                "provider": self.selector_provider,
+                "model": self.selector_model,
+                "enabled": self.model_selector_enabled,
             },
             "fallback": self.llm_explicit_fallback,
             "openai_enabled_at_lock": self.llm_enabled,
@@ -490,6 +499,9 @@ def get_settings() -> Settings:
         appeal_provider=_agent_provider("APPEAL_PROVIDER"),
         appeal_model=_agent_model("APPEAL_MODEL", "appeal"),
         embedding_provider=_agent_provider("EMBEDDING_PROVIDER"),
+        selector_provider=_agent_provider("SELECTOR_PROVIDER"),
+        selector_model=_agent_model("SELECTOR_MODEL", "selector"),
+        model_selector_enabled=_env_flag("MODEL_SELECTOR_ENABLED", True),
         decision_stability_enabled=_env_flag("DECISION_STABILITY_ENABLED", False),
         decision_stability_runs=max(2, int(os.getenv("DECISION_STABILITY_RUNS", "2"))),
         decision_stability_threshold=float(
