@@ -186,6 +186,20 @@ def case_to_dict(
             },
             "complete": case.claimant_consent and case.respondent_consent,
         },
+        "submission": {
+            "claimant": {
+                "ready": bool(case.claimant_submission_ready),
+                "ready_at": case.claimant_submission_ready_at,
+            },
+            "respondent": {
+                "ready": bool(case.respondent_submission_ready),
+                "ready_at": case.respondent_submission_ready_at,
+            },
+            "complete": bool(
+                case.claimant_submission_ready and case.respondent_submission_ready
+            ),
+        },
+        "steward": _json_load(case.steward_json),
         "contradictory": {
             "complete": bool(documents) and not pending_documents,
             "pending_document_ids": pending_documents,
@@ -539,6 +553,66 @@ def record_consent(
     return get_case(db, case.id)
 
 
+def record_submission_ready(
+    db: Session,
+    case: Case,
+    party: str,
+    ready: bool,
+) -> Case:
+    """A parte declara que encerrou (ou reabriu) a própria apresentação.
+
+    Não trava o caso. Quem trava é o gestor, quando as duas declarações e o
+    contraditório existem.
+    """
+    current = bool(getattr(case, f"{party}_submission_ready"))
+    if current == ready:
+        return case
+    now = datetime.now(timezone.utc).isoformat() if ready else None
+    setattr(case, f"{party}_submission_ready", ready)
+    setattr(case, f"{party}_submission_ready_at", now)
+    append_audit(
+        db,
+        case,
+        "submission_ready" if ready else "submission_reopened",
+        {"party": party, "ready": ready},
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_steward_state(
+    db: Session,
+    case: Case,
+    decision: Dict[str, Any],
+    state: str,
+) -> Case:
+    """Grava a última condução do gestor. Não é uma etapa do mérito."""
+    stage_by_action = {
+        "conciliate": "conciliation",
+        "organize": "organize",
+        "decide": "decide",
+        "review": "review",
+    }
+    payload: Dict[str, Any] = {
+        "action": decision.get("action"),
+        "reason": decision.get("reason"),
+        "waiting_on": decision.get("waiting_on") or [],
+        "document_ids": decision.get("document_ids") or [],
+        "allowed_actions": decision.get("allowed_actions") or [],
+        "state": state,
+        "actor": "steward",
+        "execution": decision.get("execution") or {},
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    stage = stage_by_action.get(str(decision.get("action")))
+    if state == "processing" and stage:
+        payload["stage"] = stage
+        payload["poll"] = f"/cases/{case.id}/stage/{stage}"
+    case.steward_json = _json_dump(payload)
+    db.commit()
+    return get_case(db, case.id)
+
+
 def acknowledge_document(
     db: Session,
     case: Case,
@@ -601,7 +675,11 @@ def admit_document(
         db,
         case,
         "evidence_admitted",
-        {"document_id": document.id, "sha256": document.sha256},
+        {
+            "document_id": document.id,
+            "sha256": document.sha256,
+            "actor": "steward",
+        },
     )
     db.commit()
     db.refresh(document)

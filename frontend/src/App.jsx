@@ -410,6 +410,25 @@ export default function App() {
   // As etapas que chamam modelos respondem 202 e seguem em segundo plano: uma
   // decisão pode levar minutos e nenhum gateway segura a conexão até lá. O
   // cliente acompanha pelo endpoint de polling que veio na resposta.
+  async function settleCase(caseId) {
+    const deadline = Date.now() + 15 * 60 * 1000
+    let delay = 800
+    let previous = ''
+    while (Date.now() < deadline) {
+      const current = await request(`/cases/${caseId}`)
+      const busy = String(current.status || '').startsWith('processing')
+        || current.steward?.state === 'processing'
+      const signature = `${current.status}|${current.steward?.state}|${current.steward?.action}`
+      if (!busy && signature === previous) return current
+      previous = busy ? '' : signature
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      delay = Math.min(Math.round(delay * 1.4), 5000)
+    }
+    throw new Error(
+      'O gestor ainda está conduzindo o procedimento. Recarregue o caso em alguns minutos.'
+    )
+  }
+
   async function waitForStage(pollPath) {
     const deadline = Date.now() + 15 * 60 * 1000
     let delay = 800
@@ -442,7 +461,10 @@ export default function App() {
         result = await waitForStage(result.poll)
       }
       if (caseData?.id) await loadCases(caseData.id)
-      setStatus('Pronto. Você pode seguir para a próxima etapa.')
+      const stewardBusy = result?.steward?.state === 'processing'
+        || String(result?.status || '').startsWith('processing')
+      if (stewardBusy && caseData?.id) await settleCase(caseData.id)
+      setStatus('Pronto. O gestor segue com o que for da conta dele.')
       return result
     } catch (err) {
       setError(err.message)
@@ -905,7 +927,7 @@ function AudienceValue() {
       <div className="role-strip">
         <div>
           <BriefcaseBusiness size={20} />
-          <span><strong>Gestor do procedimento</strong> organiza acesso, prazos e documentos; não decide o mérito.</span>
+          <span><strong>Gestor do procedimento</strong> é uma IA: admite, trava e avança o rito sem decidir o mérito nem falar por uma parte.</span>
         </div>
         <div>
           <MessagesSquare size={20} />
@@ -942,12 +964,12 @@ function AudienceValue() {
             ]}
           />
           <Journey
-            title="Gestor do procedimento"
+            title="Gestor, uma IA"
             steps={[
-              'Confere cadastro, consentimento, acesso e prazos.',
-              'Garante que os dois lados possam incluir seu material.',
-              'Opera as etapas e registra eventos sem escolher o vencedor.',
-              'Disponibiliza acordo, decisão e trilha final às partes.'
+              'É uma IA, não um vazio preenchido por uma das partes.',
+              'Admite o material quando o contraditório fecha.',
+              'Trava o conjunto só depois que as duas apresentações encerram.',
+              'Abre a composição e, sem acordo, leva o caso à decisão e à auditoria.'
             ]}
           />
         </div>
@@ -1193,10 +1215,7 @@ function CaseWorkspace({
   const displayedStage = unavailable ? 2 : currentStage
   const roles = {
     claimant: userHasRole(caseData, user, 'claimant'),
-    respondent: userHasRole(caseData, user, 'respondent'),
-    // A condução é das partes. O nome legado evita espalhar uma mudança
-    // estrutural pelos cartões enquanto os casos antigos ainda são lidos.
-    manager: userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
+    respondent: userHasRole(caseData, user, 'respondent')
   }
 
   return (
@@ -1748,83 +1767,51 @@ function NextAction({
           <div className="lock-explanation">
             <LockKeyhole size={20} />
             <div>
-              <strong>Quando terminar de adicionar documentos</strong>
+              <strong>Quando a sua parte não tiver mais nada a apresentar</strong>
               <span>
-                Fixe o conjunto documental. Depois disso, nenhum arquivo poderá ser
-                incluído ou alterado, preservando a integridade do processo.
+                O gestor é uma IA. Ele trava o conjunto quando as duas partes
+                declaram a apresentação encerrada e o contraditório fecha.
+                Nenhuma das partes aperta esse botão pela outra.
               </span>
             </div>
-            <button
-              className="button primary"
-              disabled={
-                busy
-                || !roles.manager
-                || !caseData.documents.length
-                || !caseData.consent?.complete
-                || !caseData.contradictory?.complete
-              }
-              onClick={() => run(
-                'Protegendo documentos e regras do processo...',
-                () => request(`/cases/${caseData.id}/lock`, {
-                  method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
-                })
-              )}
-            >
-              Fixar documentos e continuar <ArrowRight size={17} />
-            </button>
+            {['claimant', 'respondent'].filter((party) => roles[party]).map((party) => {
+              const ready = Boolean(caseData.submission?.[party]?.ready)
+              return (
+                <button
+                  key={party}
+                  className="button primary"
+                  disabled={busy}
+                  onClick={() => run(
+                    ready
+                      ? 'Reabrindo a sua apresentação...'
+                      : 'Registrando que a sua apresentação encerrou...',
+                    () => request(`/cases/${caseData.id}/submission-ready`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', ...actorHeaders() },
+                      body: JSON.stringify({ party, ready: !ready })
+                    })
+                  )}
+                >
+                  {ready ? 'Ainda vou incluir material' : 'Concluí minha apresentação'}
+                  <ArrowRight size={17} />
+                </button>
+              )
+            })}
           </div>
-          {(!caseData.consent?.complete || !caseData.contradictory?.complete) && (
-            <div className="blocking-note">
-              <AlertTriangle size={17} />
-              <span>
-                {!caseData.consent?.complete
-                  ? 'A adesão das duas partes ainda está pendente. '
-                  : ''}
-                {!caseData.contradictory?.complete
-                  ? 'Todos os materiais precisam de ciência, resposta ou renúncia e admissão antes da trava.'
-                  : ''}
-              </span>
-            </div>
-          )}
+          <div className="blocking-note">
+            <AlertTriangle size={17} />
+            <span>
+              Cliente: {caseData.submission?.claimant?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
+              {' '}Empresa: {caseData.submission?.respondent?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
+              {' '}{!caseData.consent?.complete ? 'A adesão das duas partes ainda está pendente. ' : ''}
+              {!caseData.contradictory?.complete
+                ? 'Cada material precisa de ciência e resposta antes de o gestor travar.'
+                : 'O gestor admite o material sozinho, depois da resposta.'}
+            </span>
+          </div>
         </>
       ) : (
-        <button
-          className="button primary action-cta"
-          disabled={busy || !roles.manager}
-          onClick={() => {
-            if (caseData.status === 'locked') {
-              return run(
-                'Buscando interesses convergentes e possibilidades de composição...',
-                () => request(`/cases/${caseData.id}/conciliation`, {
-                  method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
-                })
-              )
-            }
-            if (caseData.status === 'organized') {
-              return run(
-                'A IA está julgando o caso e fundamentando a decisão...',
-                () => request(`/cases/${caseData.id}/decide`, {
-                  method: 'POST',
-                  headers: actorHeaders(caseData.id, 'manager')
-                })
-              )
-            }
-            return run(
-              'A segunda IA está auditando a decisão...',
-              () => request(`/cases/${caseData.id}/review`, {
-                method: 'POST',
-                headers: actorHeaders(caseData.id, 'manager')
-              })
-            )
-          }}
-        >
-          {caseData.status === 'locked' && 'Avaliar conciliação ou mediação'}
-          {caseData.status === 'organized' && 'Proferir decisão'}
-          {caseData.status === 'decided' && 'Auditar decisão'}
-          <ArrowRight size={18} />
-        </button>
+        <StewardNote caseData={caseData} />
       )}
     </section>
   )
@@ -1928,6 +1915,92 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
   )
 }
 
+function StewardNote({ caseData }) {
+  const steward = caseData.steward
+  if (!steward?.reason) return null
+  return (
+    <div className="blocking-note">
+      <ShieldCheck size={17} />
+      <span>
+        Gestor: {steward.reason}
+        {steward.state === 'processing' ? ' A etapa está em andamento.' : ''}
+        {steward.state === 'waiting' ? ' A próxima palavra é de uma parte.' : ''}
+      </span>
+    </div>
+  )
+}
+
+function PartyPosition({
+  party,
+  caseData,
+  latest,
+  busy,
+  run,
+  request,
+  actorHeaders,
+  draft,
+  setDraft
+}) {
+  const recorded = latest.party_positions?.[party]
+  const label = party === 'claimant' ? 'cliente reclamante' : 'empresa reclamada'
+  if (recorded) {
+    return (
+      <p className="consent-note">
+        Posição do {label} registrada
+        {recorded.waived ? ' (nada a acrescentar).' : '.'}
+      </p>
+    )
+  }
+  return (
+    <div className="evidence-response">
+      <label className="mini-field">
+        <span>Posição do {label} nesta rodada</span>
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="O que aceita, recusa ou o fato novo que o gestor deve considerar."
+        />
+      </label>
+      <div>
+        <button
+          className="button secondary compact"
+          disabled={busy || !draft.trim()}
+          onClick={() => run(
+            'Enviando a sua posição ao gestor...',
+            () => request(
+              `/cases/${caseData.id}/conciliation/${latest.round_number || 1}/position`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...actorHeaders() },
+                body: JSON.stringify({ party, text: draft, waived: false })
+              }
+            )
+          )}
+        >
+          Enviar minha posição
+        </button>
+        <button
+          className="button ghost compact"
+          disabled={busy}
+          onClick={() => run(
+            'Registrando que você não tem nada a acrescentar...',
+            () => request(
+              `/cases/${caseData.id}/conciliation/${latest.round_number || 1}/position`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...actorHeaders() },
+                body: JSON.stringify({ party, text: '', waived: true })
+              }
+            )
+          )}
+        >
+          Nada a acrescentar
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ConciliationActions({
   caseData,
   busy,
@@ -1936,18 +2009,12 @@ function ConciliationActions({
   actorHeaders,
   claimantResponse,
   respondentResponse,
-  conciliationUpdate,
   setClaimantResponse,
   setRespondentResponse,
-  setConciliationUpdate,
   roles
 }) {
   const rounds = caseData.conciliation_rounds || []
   const latest = rounds[rounds.length - 1] || caseData.conciliation || {}
-  const canAdvance = latest.continue_recommended
-    || claimantResponse.trim()
-    || respondentResponse.trim()
-    || conciliationUpdate.trim()
   const agreement = latest.agreement || { responses: {} }
 
   function answerAgreement(party, accepted) {
@@ -1959,30 +2026,6 @@ function ConciliationActions({
         body: JSON.stringify({ party, accepted })
       })
     )
-  }
-
-  async function generateNextRound() {
-    const result = await run(
-      `Preparando a rodada ${rounds.length + 1} com base nas respostas das partes...`,
-      () => request(`/cases/${caseData.id}/conciliation`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...actorHeaders(caseData.id, 'manager')
-        },
-        body: JSON.stringify({
-          advance: true,
-          claimant_response: claimantResponse,
-          respondent_response: respondentResponse,
-          new_information: conciliationUpdate
-        })
-      })
-    )
-    if (result) {
-      setClaimantResponse('')
-      setRespondentResponse('')
-      setConciliationUpdate('')
-    }
   }
 
   return (
@@ -2001,35 +2044,20 @@ function ConciliationActions({
         </p>
       </div>
 
-      <div className="party-response-grid">
-        <label className="mini-field">
-          <span>Resposta do cliente reclamante</span>
-          <textarea
-            disabled={!roles.claimant}
-            value={claimantResponse}
-            onChange={(event) => setClaimantResponse(event.target.value)}
-            placeholder="O que aceita, rejeita ou gostaria de alterar?"
-          />
-        </label>
-        <label className="mini-field">
-          <span>Resposta da empresa reclamada</span>
-          <textarea
-            disabled={!roles.respondent}
-            value={respondentResponse}
-            onChange={(event) => setRespondentResponse(event.target.value)}
-            placeholder="Qual concessão, condição ou contraproposta a empresa apresenta?"
-          />
-        </label>
-        <label className="mini-field full">
-          <span>Fatos novos ou orientação para a próxima rodada</span>
-          <textarea
-            disabled={!roles.manager}
-            value={conciliationUpdate}
-            onChange={(event) => setConciliationUpdate(event.target.value)}
-            placeholder="Ex.: novo prazo possível, pagamento já realizado ou interesse em manter a relação."
-          />
-        </label>
-      </div>
+      {['claimant', 'respondent'].map((party) => roles[party] && (
+        <PartyPosition
+          key={party}
+          party={party}
+          caseData={caseData}
+          latest={latest}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+          draft={party === 'claimant' ? claimantResponse : respondentResponse}
+          setDraft={party === 'claimant' ? setClaimantResponse : setRespondentResponse}
+        />
+      ))}
 
       <div className="conciliation-buttons">
         {['claimant', 'respondent'].map((party) => roles[party] && (
@@ -2045,31 +2073,12 @@ function ConciliationActions({
               : 'Aceitar esta proposta'}
           </button>
         ))}
-        <button
-          className="button secondary"
-          disabled={busy || !roles.manager || !canAdvance}
-          onClick={generateNextRound}
-        >
-          <Handshake size={17} /> Gerar rodada {rounds.length + 1}
-        </button>
-        <button
-          className="button primary"
-          disabled={busy || !roles.manager}
-          onClick={() => run(
-            'Encerrando a fase consensual e organizando o caso...',
-            () => request(`/cases/${caseData.id}/organize`, {
-              method: 'POST',
-              headers: actorHeaders(caseData.id, 'manager')
-            })
-          )}
-        >
-          Seguir para julgamento <ArrowRight size={17} />
-        </button>
       </div>
+      <StewardNote caseData={caseData} />
       <small className="consent-note">
         {agreement.complete
           ? 'Acordo formado: as duas partes aceitaram a mesma proposta.'
-          : 'Nenhuma proposta é aceita automaticamente. O acordo só se forma com o aceite separado das duas partes.'}
+          : 'O acordo só se forma com o aceite separado das duas partes. O gestor, não uma delas, decide se abre outra rodada ou segue ao julgamento.'}
       </small>
     </div>
   )
@@ -2306,28 +2315,9 @@ function DocumentEvidenceItem({
               </div>
             )}
 
-            {!locked
-              && roles.manager
-              && document.response_status !== 'pending'
-              && !document.admitted
-              && (
-                <button
-                  className="button primary compact"
-                  disabled={busy}
-                  onClick={() => run(
-                    'Admitindo o material após o contraditório...',
-                    () => request(
-                      `/cases/${caseData.id}/documents/${document.id}/admit`,
-                      {
-                        method: 'POST',
-                        headers: actorHeaders(caseData.id, 'manager')
-                      }
-                    )
-                  )}
-                >
-                  Admitir para a decisão
-                </button>
-              )}
+            {!locked && document.response_status !== 'pending' && !document.admitted && (
+              <p className="consent-note">O gestor admite este material. Nenhuma parte faz isso pela outra.</p>
+            )}
 
             {document.response_text && (
               <div className="recorded-response">

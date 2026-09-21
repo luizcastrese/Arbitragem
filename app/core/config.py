@@ -96,6 +96,8 @@ class Settings:
     embedding_provider: str
     selector_provider: str
     selector_model: str
+    steward_provider: str
+    steward_model: str
     model_selector_enabled: bool
     decision_stability_enabled: bool
     decision_stability_runs: int
@@ -139,6 +141,7 @@ class Settings:
                 self.reviewer_provider,
                 self.appeal_provider,
                 self.selector_provider,
+                self.steward_provider,
             }
         )
 
@@ -242,6 +245,10 @@ class Settings:
             "embedding": {
                 "provider": self.embedding_provider,
                 "model": self.embedding_model,
+            },
+            "steward": {
+                "provider": self.steward_provider,
+                "model": self.steward_model,
             },
             "selector": {
                 "provider": self.selector_provider,
@@ -501,6 +508,8 @@ def get_settings() -> Settings:
         embedding_provider=_agent_provider("EMBEDDING_PROVIDER"),
         selector_provider=_agent_provider("SELECTOR_PROVIDER"),
         selector_model=_agent_model("SELECTOR_MODEL", "selector"),
+        steward_provider=_agent_provider("STEWARD_PROVIDER"),
+        steward_model=_agent_model("STEWARD_MODEL", "steward"),
         model_selector_enabled=_env_flag("MODEL_SELECTOR_ENABLED", True),
         decision_stability_enabled=_env_flag("DECISION_STABILITY_ENABLED", False),
         decision_stability_runs=max(2, int(os.getenv("DECISION_STABILITY_RUNS", "2"))),

@@ -74,6 +74,27 @@ def actor_headers(case_id, party):
     return {"X-Actor-Token": CASE_CREDENTIALS[case_id][party]}
 
 
+def steward_headers():
+    """Credencial do gestor IA, não de uma parte."""
+    from app.domain.steward import steward_actuator_token
+
+    return {"X-Actor-Token": steward_actuator_token()}
+
+
+def declare_submissions_ready(client, case_id):
+    """As duas partes encerram a apresentação. O gestor trava, sem abrir modelo."""
+    paused = {"X-Steward-Run-Models": "0"}
+    response = None
+    for party in ("claimant", "respondent"):
+        response = client.post(
+            f"/cases/{case_id}/submission-ready",
+            json={"party": party, "ready": True},
+            headers={**actor_headers(case_id, party), **paused},
+        )
+        assert response.status_code == 200, response.text
+    return response.json()
+
+
 def register_user(client, name, email):
     response = client.post(
         "/auth/register",
@@ -137,12 +158,12 @@ def complete_contradictory(client, case_id, document_id):
         headers=actor_headers(case_id, "respondent"),
     )
     assert response.status_code == 200
-    admission = client.post(
-        f"/cases/{case_id}/documents/{document_id}/admit",
-        headers=actor_headers(case_id, "manager"),
+    body = response.json()
+    admitted = next(
+        item for item in body["documents"] if item["id"] == document_id
     )
-    assert admission.status_code == 200
-    return admission.json()
+    assert admitted["admitted"] is True
+    return body
 
 
 def prepare_locked_case(client):
@@ -150,11 +171,12 @@ def prepare_locked_case(client):
     accept_procedure(client, case_id)
     document = add_contract(client, case_id)["document"]
     complete_contradictory(client, case_id, document["id"])
+    declare_submissions_ready(client, case_id)
     locked = client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
-    assert locked.status_code == 200
+    assert locked.status_code == 200, locked.text
     return case_id, document, locked
 
 
@@ -169,10 +191,11 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
     assert document["submitted_by"] == "claimant"
     assert document["disclosed_at"]
     complete_contradictory(client, case_id, document["id"])
+    declare_submissions_ready(client, case_id)
 
     locked = client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert locked.status_code == 200
     assert locked.json()["manifest"]["platform_signature"]
@@ -186,7 +209,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
 
     conciliation = client.post(
         f"/cases/{case_id}/conciliation?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert conciliation.status_code == 200
     assert conciliation.json()["convergence"] == "undetermined"
@@ -197,7 +220,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
 
     second_round = client.post(
         f"/cases/{case_id}/conciliation?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
         json={
             "advance": True,
             "claimant_response": "Aceita discutir novo prazo.",
@@ -210,14 +233,14 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
 
     organized = client.post(
         f"/cases/{case_id}/organize?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert organized.status_code == 200
     assert organized.json()["execution"]["mode"] == "safe_fallback"
 
     decision = client.post(
         f"/cases/{case_id}/decide?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert decision.status_code == 200
     assert decision.json()["outcome"] == "inconclusive"
@@ -228,7 +251,7 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
 
     review = client.post(
         f"/cases/{case_id}/review?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert review.status_code == 200
     assert review.json()["approved"] is False
@@ -251,8 +274,12 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "evidence_disclosed",
         "notice_acknowledged",
         "response_submitted",
+        "steward_conducted",
         "evidence_admitted",
+        "submission_ready",
+        "submission_ready",
         "manifest_locked",
+        "steward_conducted",
         "conciliation_screened",
         "conciliation_round_generated",
         "case_organized",
@@ -393,7 +420,7 @@ def test_documents_are_immutable_after_manifest_lock(client):
     )
     admission = client.post(
         f"/cases/{case_id}/documents/{document['id']}/admit",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert acknowledgement.status_code == 409
     assert replacement_response.status_code == 409
@@ -405,34 +432,35 @@ def test_stages_are_idempotent(client):
     accept_procedure(client, case_id)
     document = add_contract(client, case_id)["document"]
     complete_contradictory(client, case_id, document["id"])
+    declare_submissions_ready(client, case_id)
 
     first_lock = client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     second_lock = client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert first_lock.json()["manifest"] == second_lock.json()["manifest"]
 
     first_conciliation = client.post(
         f"/cases/{case_id}/conciliation?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     second_conciliation = client.post(
         f"/cases/{case_id}/conciliation?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     assert first_conciliation == second_conciliation
 
     first_organization = client.post(
         f"/cases/{case_id}/organize?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     second_organization = client.post(
         f"/cases/{case_id}/organize?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).json()
     assert first_organization == second_organization
 
@@ -468,32 +496,41 @@ def test_invalid_transition_and_payload_are_rejected(client):
     case_id = create_case(client)["id"]
     assert client.post(
         f"/cases/{case_id}/decide?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 409
     assert client.post(
         f"/cases/{case_id}/conciliation?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 409
 
     add_contract(client, case_id)
     assert client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 409
     accept_procedure(client, case_id)
     assert client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 409
     document_id = client.get(f"/cases/{case_id}").json()["documents"][0]["id"]
     complete_contradictory(client, case_id, document_id)
     assert client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=actor_headers(case_id, "claimant"),
+    ).status_code == 403
+    assert client.post(
+        f"/cases/{case_id}/lock",
+        headers=steward_headers(),
+    ).status_code == 409
+    declare_submissions_ready(client, case_id)
+    assert client.post(
+        f"/cases/{case_id}/lock",
+        headers=steward_headers(),
     ).status_code == 200
     assert client.post(
         f"/cases/{case_id}/organize?wait=120",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 409
 
     invalid = client.post(
@@ -536,5 +573,32 @@ def test_decision_cannot_start_with_pending_contradictory(client):
     assert case["contradictory"]["pending_document_ids"]
     assert client.post(
         f"/cases/{case_id}/lock",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     ).status_code == 409
+
+
+def test_steward_not_a_party_opens_conciliation(client):
+    case_id = create_case(client)["id"]
+    accept_procedure(client, case_id)
+    document = add_contract(client, case_id)["document"]
+    complete_contradictory(client, case_id, document["id"])
+    assert client.get(f"/cases/{case_id}").json()["manifest_locked"] is False
+
+    opened = None
+    for party in ("claimant", "respondent"):
+        opened = client.post(
+            f"/cases/{case_id}/submission-ready?wait=120",
+            json={"party": party, "ready": True},
+            headers=actor_headers(case_id, party),
+        )
+        assert opened.status_code == 200, opened.text
+
+    body = opened.json()
+    assert body["manifest_locked"] is True
+    assert body["conciliation"]["round_number"] == 1
+    assert body["steward"]["actor"] == "steward"
+    assert body["steward"]["action"] == "wait"
+    assert client.post(
+        f"/cases/{case_id}/organize?wait=30",
+        headers=actor_headers(case_id, "claimant"),
+    ).status_code == 403

@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 import secrets
+import threading
 import time
 from typing import Dict, List, Optional
 import uuid
@@ -37,6 +38,7 @@ from app.agents.judge import decide_case as judge_decide_case
 from app.agents.organizer import organize_case as organizer_organize_case
 from app.agents.reviewer import review_decision
 from app.agents.selector import PROMPT as _SELECTOR_PROMPT  # noqa: F401
+from app.agents.steward import PROMPT as _STEWARD_PROMPT  # noqa: F401
 from app.core.attestation import (
     AttestationError,
     build_decision_attestation,
@@ -128,10 +130,12 @@ from app.db.repository import (
     persist_appeal,
     persist_attestation_record,
     record_consent,
+    record_submission_ready,
     register_contest,
     revert_contest,
     respond_to_document as persist_response,
     save_stage,
+    save_steward_state,
     save_nostr_anchor,
     append_audit,
 )
@@ -146,6 +150,7 @@ from app.domain.concurrency import (
 from app.domain.jobs import COMPLETED, FAILED, RUNNING, StageRunner
 from app.domain.frameworks import list_frameworks
 from app.domain.legacy import public_decision_view
+from app.domain.steward import decide_steward_action, steward_actuator_token
 from app.domain.procedure import (
     generate_and_verify_decision,
     maybe_run_stability,
@@ -168,6 +173,7 @@ from app.schemas import (
     AddDocumentRequest,
     AgreementResponseRequest,
     AttestationVerifyRequest,
+    ConciliationPositionRequest,
     ConciliationRoundRequest,
     ConsentRequest,
     ContestRequest,
@@ -179,6 +185,7 @@ from app.schemas import (
     PasswordResetConfirmRequest,
     PasswordResetRequest,
     RegisterRequest,
+    SubmissionReadyRequest,
     VerifyEmailRequest,
 )
 
@@ -549,11 +556,53 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
     )
 
 
-def _require_procedure_party(db: Session, case, token: str) -> str:
-    """Autoriza a condução do rito por qualquer uma das duas partes.
+_STEWARD_CHAIN: set[str] = set()
+_STEWARD_CHAIN_LOCK = threading.Lock()
 
-    O papel de gestor continua aceito apenas como compatibilidade para casos
-    antigos. Casos novos e a interface usam as credenciais das próprias partes.
+
+def _arm_steward_chain(case_id: str) -> None:
+    with _STEWARD_CHAIN_LOCK:
+        _STEWARD_CHAIN.add(case_id)
+
+
+def _take_steward_chain(case_id: str) -> bool:
+    with _STEWARD_CHAIN_LOCK:
+        if case_id not in _STEWARD_CHAIN:
+            return False
+        _STEWARD_CHAIN.remove(case_id)
+        return True
+
+
+def _require_steward_actuator(token: str) -> None:
+    """O atuador das etapas é o processo do gestor, não a sessão de uma parte."""
+    expected = steward_actuator_token()
+    if not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "O gestor do procedimento é a IA da Valinor. "
+                "As partes não conduzem esta etapa."
+            ),
+        )
+
+
+def _model_stages_enabled(header: str) -> bool:
+    """Em produção o gestor sempre segue para a etapa de modelo.
+
+    Fora de produção, `X-Steward-Run-Models: 0` pausa essa sequência para
+    que um teste observe o caso travado antes da composição. A sessão de
+    uma parte não escolhe o mérito: só impede o agendamento.
+    """
+    if get_settings().is_production:
+        return True
+    return (header or "1").strip() != "0"
+
+
+def _require_procedure_party(db: Session, case, token: str) -> str:
+    """Autoriza convite e prazo por qualquer uma das duas partes.
+
+    O papel de gestor humano não conduz mais o rito. O token legado só
+    permanece para casos antigos nestes atos de coordenação entre as partes.
     """
     for party in ("claimant", "respondent"):
         try:
@@ -571,6 +620,190 @@ def _require_procedure_party(db: Session, case, token: str) -> str:
     raise HTTPException(
         status_code=403,
         detail="Somente as partes do caso podem conduzir o procedimento",
+    )
+
+
+def _continue_steward(job_db: Session, case_id: str) -> None:
+    """Encadeia a próxima etapa quando foi o gestor que abriu a atual.
+
+    Uma falha aqui não desfaz a etapa que acabou de ser gravada: o caso
+    ficaria preso se a recuperação da etapa anterior rodasse de novo.
+    """
+    if not _take_steward_chain(case_id):
+        return
+    try:
+        case = get_case(job_db, case_id)
+        if case is not None:
+            _conduct_steward(job_db, case, wait=0, run_model_stages=True)
+    except Exception:
+        logger.exception("steward_chain_failed case=%s", case_id)
+
+
+def _lock_manifest_now(db: Session, case):
+    """Trava o manifesto. Exige adesão, contraditório e as duas apresentações."""
+    if case.manifest_locked:
+        return case_to_dict(case)["locked_manifest"]
+    if not case.documents:
+        raise HTTPException(
+            status_code=400,
+            detail="Adicione ao menos um documento antes de travar o manifesto",
+        )
+    case_data = case_to_dict(case)
+    if not case_data["consent"]["complete"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Cliente e empresa precisam aceitar o procedimento antes da trava",
+        )
+    if not case_data["contradictory"]["complete"]:
+        pending = ", ".join(case_data["contradictory"]["pending_document_ids"])
+        raise HTTPException(
+            status_code=409,
+            detail=f"Contraditório pendente nos materiais: {pending}",
+        )
+    if not case_data["submission"]["complete"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cada parte precisa declarar que encerrou a apresentação "
+                "antes da trava"
+            ),
+        )
+    _assert_consent_terms_reproducible(case_data)
+
+    try:
+        claimed = claim_case_stage(db, case, "lock")
+    except StageBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        case = get_case(db, case.id)
+        if case.manifest_locked:
+            return case_to_dict(case)["locked_manifest"]
+        raise HTTPException(status_code=409, detail="Trava do manifesto já em andamento")
+
+    try:
+        manifest = lock_case_manifest(case_to_dict(case))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    persist_manifest(db, case, manifest)
+    return manifest
+
+
+def _invoke_steward_stage(action: str, case, case_data: Dict, wait: float, db: Session):
+    token = steward_actuator_token()
+    if action == "conciliate":
+        rounds = case_data.get("conciliation_rounds") or []
+        latest = rounds[-1] if rounds else {}
+        positions = latest.get("party_positions") or {}
+        payload = ConciliationRoundRequest(
+            advance=bool(rounds),
+            claimant_response=str((positions.get("claimant") or {}).get("text") or ""),
+            respondent_response=str((positions.get("respondent") or {}).get("text") or ""),
+        )
+        return assess_case_conciliation(
+            case.id,
+            payload,
+            wait,
+            token,
+            db,
+        )
+    if action == "organize":
+        return organize_case(case.id, wait, token, db)
+    if action == "decide":
+        return decide_case(case.id, wait, token, "", db)
+    if action == "review":
+        return review_case(case.id, wait, token, "", db)
+    raise HTTPException(status_code=500, detail=f"Ação de gestor desconhecida: {action}")
+
+
+def _conduct_steward(
+    db: Session,
+    case,
+    *,
+    wait: float = 0,
+    run_model_stages: bool = True,
+    depth: int = 0,
+) -> None:
+    """Uma passada do gestor. Atos formais se encadeiam; etapa de modelo, uma."""
+    if depth > 6:
+        return
+    case = get_case(db, case.id)
+    if case is None:
+        return
+    case_data = case_to_dict(case)
+    decision = decide_steward_action(case_data)
+    action = decision["action"]
+
+    if action == "admit":
+        append_audit(
+            db,
+            case,
+            "steward_conducted",
+            {
+                "action": "admit",
+                "reason": decision.get("reason"),
+                "document_ids": decision.get("document_ids") or [],
+                "actor": "steward",
+            },
+        )
+        db.commit()
+        for document_id in decision.get("document_ids") or []:
+            document = get_document(db, case.id, document_id)
+            if document is not None and not document.admitted:
+                persist_admission(db, case, document)
+                case = get_case(db, case.id)
+        save_steward_state(db, case, decision, "done")
+        _conduct_steward(
+            db,
+            case,
+            wait=wait,
+            run_model_stages=run_model_stages,
+            depth=depth + 1,
+        )
+        return
+
+    if action == "lock":
+        _lock_manifest_now(db, case)
+        case = get_case(db, case.id)
+        append_audit(
+            db,
+            case,
+            "steward_conducted",
+            {
+                "action": "lock",
+                "reason": decision.get("reason"),
+                "actor": "steward",
+            },
+        )
+        db.commit()
+        save_steward_state(db, case, decision, "done")
+        _conduct_steward(
+            db,
+            case,
+            wait=wait,
+            run_model_stages=run_model_stages,
+            depth=depth + 1,
+        )
+        return
+
+    if action in {"conciliate", "organize", "decide", "review"}:
+        state = "processing" if run_model_stages else "paused"
+        save_steward_state(db, case, decision, state)
+        if not run_model_stages:
+            return
+        _arm_steward_chain(case.id)
+        try:
+            _invoke_steward_stage(action, case, case_data, wait, db)
+        except HTTPException:
+            _take_steward_chain(case.id)
+            raise
+        db.expire_all()
+        return
+
+    save_steward_state(
+        db,
+        case,
+        decision,
+        "waiting" if action == "wait" else "hold",
     )
 
 
@@ -781,6 +1014,7 @@ def root():
                 "decisão por IA fundamentada apenas no registro admitido",
                 "auditoria automática independente, verificador determinístico e recurso automático",
                 "o sistema pode se abster; não há julgador humano interno",
+                "o gestor do procedimento é uma IA e não uma das partes",
             ],
         },
         "warnings": [
@@ -1089,8 +1323,7 @@ def create_case(
         manager_token_hash=_hash_token(credentials["manager"]),
     )
     if user:
-        # Quem abre o caso o conduz como parte reclamante; não existe um
-        # terceiro gestor com poderes processuais sobre as duas partes.
+        # Quem abre o caso entra como parte reclamante. O gestor é a IA.
         add_member(db, case.id, user.id, "claimant")
         db.expire_all()
         case = get_case(db, case.id)
@@ -1511,6 +1744,7 @@ def add_text_document(
         payload.material_type,
         payload.purpose,
     )
+    _reopen_submission_if_ready(db, case_id, payload.submitted_by)
     return {"message": "Documento adicionado", "document": document}
 
 
@@ -1558,11 +1792,21 @@ async def upload_pdf(
         original_filename=filename,
         original_media_type="application/pdf",
     )
+    _reopen_submission_if_ready(db, case_id, submitted_by)
     return {
         "message": "PDF processado",
         "document": document,
         "text_preview": extracted_text[:1000],
     }
+
+
+def _reopen_submission_if_ready(db: Session, case_id: str, party: str) -> None:
+    """Material novo reabre a apresentação de quem o enviou."""
+    case = get_case(db, case_id)
+    if case is None or case.manifest_locked:
+        return
+    if getattr(case, f"{party}_submission_ready", False):
+        record_submission_ready(db, case, party, False)
 
 
 def _document_or_404(db: Session, case_id: str, document_id: str):
@@ -1654,6 +1898,40 @@ def respond_to_evidence(
         payload.response_status,
         payload.response_text,
     )
+    _conduct_steward(db, get_case(db, case_id), wait=0, run_model_stages=True)
+    db.expire_all()
+    return case_to_dict(
+        get_case(db, case_id),
+        include_content=False,
+        include_embeddings=False,
+    )
+
+
+@app.post("/cases/{case_id}/submission-ready")
+def declare_submission_ready(
+    case_id: str,
+    payload: SubmissionReadyRequest,
+    wait: float = Query(0, ge=0, le=MAX_STAGE_WAIT_SECONDS),
+    x_actor_token: str = Header(default=""),
+    x_steward_run_models: str = Header(default="1"),
+    db: Session = Depends(get_db),
+):
+    """A parte encerra ou reabre a própria apresentação. O gestor conduz."""
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, payload.party)
+    if case.manifest_locked:
+        raise HTTPException(
+            status_code=409,
+            detail="A apresentação não pode ser reaberta depois da trava",
+        )
+    record_submission_ready(db, case, payload.party, payload.ready)
+    _conduct_steward(
+        db,
+        get_case(db, case_id),
+        wait=wait,
+        run_model_stages=_model_stages_enabled(x_steward_run_models),
+    )
+    db.expire_all()
     return case_to_dict(
         get_case(db, case_id),
         include_content=False,
@@ -1670,7 +1948,7 @@ def admit_evidence(
 ):
     case = _case_or_404(db, case_id)
     _assert_evidence_mutable(case)
-    _require_procedure_party(db, case, x_actor_token)
+    _require_steward_actuator(x_actor_token)
     document = _document_or_404(db, case_id, document_id)
     if not document.acknowledged_at:
         raise HTTPException(status_code=409, detail="A contraparte ainda não confirmou ciência")
@@ -1798,50 +2076,16 @@ def lock_manifest(
     x_actor_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    """Atuador do gestor. A parte não trava o caso; declara a apresentação."""
     case = _case_or_404(db, case_id)
-    _require_procedure_party(db, case, x_actor_token)
+    _require_steward_actuator(x_actor_token)
     if case.manifest_locked:
+        _take_steward_chain(case_id)
         return {
             "message": "Manifesto já estava travado",
             "manifest": case_to_dict(case)["locked_manifest"],
         }
-    if not case.documents:
-        raise HTTPException(
-            status_code=400,
-            detail="Adicione ao menos um documento antes de travar o manifesto",
-        )
-    case_data = case_to_dict(case)
-    if not case_data["consent"]["complete"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Cliente e empresa precisam aceitar o procedimento antes da trava",
-        )
-    if not case_data["contradictory"]["complete"]:
-        pending = ", ".join(case_data["contradictory"]["pending_document_ids"])
-        raise HTTPException(
-            status_code=409,
-            detail=f"Contraditório pendente nos materiais: {pending}",
-        )
-    _assert_consent_terms_reproducible(case_data)
-
-    try:
-        claimed = claim_case_stage(db, case, "lock")
-    except StageBusy as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not claimed:
-        case = get_case(db, case_id)
-        if case.manifest_locked:
-            return {
-                "message": "Manifesto já estava travado",
-                "manifest": case_to_dict(case)["locked_manifest"],
-            }
-        raise HTTPException(status_code=409, detail="Trava do manifesto já em andamento")
-
-    try:
-        manifest = lock_case_manifest(case_to_dict(case))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    persist_manifest(db, case, manifest)
+    manifest = _lock_manifest_now(db, case)
     return {"message": "Manifesto travado", "manifest": manifest}
 
 
@@ -1937,11 +2181,7 @@ def assess_case_conciliation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    actor_party = _require_procedure_party(db, case, x_actor_token)
-    if actor_party == "claimant" and payload.respondent_response:
-        raise HTTPException(status_code=403, detail="Uma parte não pode responder pela outra")
-    if actor_party == "respondent" and payload.claimant_response:
-        raise HTTPException(status_code=403, detail="Uma parte não pode responder pela outra")
+    _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if not case.manifest_locked:
         raise HTTPException(
@@ -1950,6 +2190,7 @@ def assess_case_conciliation(
         )
     rounds = case_data["conciliation_rounds"]
     if rounds and not payload.advance:
+        _take_steward_chain(case_id)
         return rounds[-1]
     if case_data["organized"]:
         raise HTTPException(
@@ -2054,6 +2295,7 @@ def assess_case_conciliation(
                 "execution": conciliation.get("execution", {}),
             },
         )
+        _continue_steward(job_db, case_id)
         return conciliation
 
     return _run_stage(case_id, "conciliation", work, wait)
@@ -2134,7 +2376,78 @@ def respond_to_conciliation_agreement(
         },
     )
     db.commit()
+    if complete:
+        save_steward_state(
+            db,
+            get_case(db, case_id),
+            {
+                "action": "hold",
+                "reason": "As duas partes aceitaram a mesma proposta.",
+                "waiting_on": [],
+                "allowed_actions": ["hold"],
+            },
+            "hold",
+        )
     return selected["agreement"]
+
+
+@app.post("/cases/{case_id}/conciliation/{round_number}/position")
+def file_conciliation_position(
+    case_id: str,
+    round_number: int,
+    payload: ConciliationPositionRequest,
+    wait: float = Query(0, ge=0, le=MAX_STAGE_WAIT_SECONDS),
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Registra a posição de uma parte. O gestor decide o próximo passo."""
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, payload.party)
+    if case.organized_json or case.decision_json:
+        raise HTTPException(
+            status_code=409,
+            detail="A fase consensual já foi encerrada",
+        )
+    if payload.waived is False and not payload.text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Informe a posição ou renuncie a acrescentar algo nesta rodada",
+        )
+    rounds = case_to_dict(case)["conciliation_rounds"]
+    if round_number < 1 or round_number > len(rounds):
+        raise HTTPException(status_code=404, detail="Rodada de composição não encontrada")
+    index = round_number - 1
+    selected = dict(rounds[index])
+    positions = dict(selected.get("party_positions") or {})
+    positions[payload.party] = {
+        "text": "" if payload.waived else payload.text,
+        "waived": payload.waived,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    selected["party_positions"] = positions
+    rounds[index] = selected
+    case.conciliation_json = json.dumps(rounds, ensure_ascii=False)
+    append_audit(
+        db,
+        case,
+        "conciliation_position_recorded",
+        {
+            "round_number": round_number,
+            "party": payload.party,
+            "waived": payload.waived,
+        },
+    )
+    db.commit()
+    _conduct_steward(db, get_case(db, case_id), wait=wait, run_model_stages=True)
+    db.expire_all()
+    refreshed = case_to_dict(get_case(db, case_id), include_content=False)
+    latest = (refreshed.get("conciliation_rounds") or [selected])[-1]
+    return {
+        "position": positions[payload.party],
+        "round": latest,
+        "steward": refreshed.get("steward"),
+        "status": refreshed.get("status"),
+    }
 
 
 @app.post("/cases/{case_id}/organize")
@@ -2153,7 +2466,7 @@ def organize_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_procedure_party(db, case, x_actor_token)
+    _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if case_data.get("procedure_conclusion") == "agreement":
         raise HTTPException(
@@ -2171,6 +2484,7 @@ def organize_case(
             detail="Faça a triagem de conciliação ou mediação antes do julgamento",
         )
     if case_data["organized"]:
+        _take_steward_chain(case_id)
         return case_data["organized"]
     try:
         claimed = claim_case_stage(
@@ -2185,6 +2499,7 @@ def organize_case(
         case = get_case(db, case_id)
         organized = case_to_dict(case).get("organized")
         if organized:
+            _take_steward_chain(case_id)
             return organized
         raise HTTPException(status_code=409, detail="Organização já em andamento")
 
@@ -2209,6 +2524,7 @@ def organize_case(
             event_type="case_organized",
             event_payload={"execution": organized.get("execution", {})},
         )
+        _continue_steward(job_db, case_id)
         return organized
 
     return _run_stage(case_id, "organize", work, wait)
@@ -2231,7 +2547,7 @@ def decide_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_procedure_party(db, case, x_actor_token)
+    _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["organized"]:
         raise HTTPException(
@@ -2239,6 +2555,7 @@ def decide_case(
             detail="Organize o caso antes de proferir a decisão",
         )
     if case_data["decision"]:
+        _take_steward_chain(case_id)
         return case_data["decision"]
     try:
         claimed = claim_case_stage(
@@ -2253,6 +2570,7 @@ def decide_case(
         case = get_case(db, case_id)
         existing = case_to_dict(case).get("decision")
         if existing:
+            _take_steward_chain(case_id)
             return existing
         raise HTTPException(status_code=409, detail="Decisão já em processamento")
 
@@ -2327,6 +2645,7 @@ def decide_case(
                 "execution": decision.get("execution", {}),
             },
         )
+        _continue_steward(job_db, case_id)
         return public_decision_view(decision)
 
     return _run_stage(case_id, "decide", work, wait)
@@ -2349,7 +2668,7 @@ def review_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_procedure_party(db, case, x_actor_token)
+    _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["decision"]:
         raise HTTPException(
@@ -2357,6 +2676,7 @@ def review_case(
             detail="Profira a decisão antes da auditoria",
         )
     if case_data["review"]:
+        _take_steward_chain(case_id)
         return case_data["review"]
     try:
         claimed = claim_case_stage(
@@ -2371,6 +2691,7 @@ def review_case(
         case = get_case(db, case_id)
         existing = case_to_dict(case).get("review")
         if existing:
+            _take_steward_chain(case_id)
             return existing
         raise HTTPException(status_code=409, detail="Auditoria já em processamento")
 
@@ -2460,6 +2781,7 @@ def review_case(
                 "execution": review.get("execution", {}),
             },
         )
+        _continue_steward(job_db, case_id)
         return review
 
     return _run_stage(case_id, "review", work, wait)
@@ -2494,7 +2816,7 @@ def issue_attestation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
-    _require_procedure_party(db, case, x_actor_token)
+    _require_steward_actuator(x_actor_token)
     settings_now = get_settings()
     if not settings_now.attestation_enabled:
         raise HTTPException(

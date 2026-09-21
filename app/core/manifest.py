@@ -25,7 +25,15 @@ def _prompt_policy() -> Dict:
     A importação é local de propósito: registrar um prompt é efeito de importar
     o agente, e o manifesto também é gerado fora da API (testes e avaliações).
     """
-    from app.agents import appeal, conciliator, judge, organizer, reviewer, selector  # noqa: F401
+    from app.agents import (  # noqa: F401
+        appeal,
+        conciliator,
+        judge,
+        organizer,
+        reviewer,
+        selector,
+        steward,
+    )
     from app.core.prompt_registry import prompt_policy
 
     return prompt_policy()

@@ -164,6 +164,37 @@ class AgreementResponseRequest(BaseModel):
         return value
 
 
+class SubmissionReadyRequest(BaseModel):
+    """A parte encerra ou reabre a própria apresentação. Não conduz o rito."""
+
+    party: str
+    ready: bool = True
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
+class ConciliationPositionRequest(BaseModel):
+    """Posição de uma parte numa rodada. O gestor decide se há outra rodada."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    party: str
+    text: str = Field(default="", max_length=10_000)
+    waived: bool = False
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
 class ContestRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

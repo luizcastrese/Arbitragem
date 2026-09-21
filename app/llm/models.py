@@ -21,6 +21,7 @@ DEFAULT_OPENROUTER_MODELS: Dict[str, str] = {
     "appeal": "google/gemini-2.5-pro",
     "embedding": "openai/text-embedding-3-small",
     "selector": "google/gemini-2.5-flash",
+    "steward": "google/gemini-2.5-flash",
 }
 
 _OPENAI_PREFIXES = (

@@ -63,6 +63,12 @@ def _headers(case_id, party):
     return {"X-Actor-Token": CASE_CREDENTIALS[case_id][party]}
 
 
+def _steward_headers():
+    from app.domain.steward import steward_actuator_token
+
+    return {"X-Actor-Token": steward_actuator_token()}
+
+
 def _reviewed_safe_case(client):
     response = client.post(
         "/cases",
@@ -119,40 +125,45 @@ def _reviewed_safe_case(client):
         ).status_code
         == 200
     )
+    for party in ("claimant", "respondent"):
+        assert (
+            client.post(
+                f"/cases/{case_id}/submission-ready",
+                json={"party": party, "ready": True},
+                headers={
+                    **_headers(case_id, party),
+                    "X-Steward-Run-Models": "0",
+                },
+            ).status_code
+            == 200
+        )
     assert (
         client.post(
-            f"/cases/{case_id}/documents/{document['id']}/admit",
-            headers=_headers(case_id, "manager"),
+            f"/cases/{case_id}/lock", headers=_steward_headers()
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/lock", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/conciliation?wait=120", headers=_steward_headers()
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/conciliation?wait=120", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/organize?wait=120", headers=_steward_headers()
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/organize?wait=120", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/decide?wait=120", headers=_steward_headers()
         ).status_code
         == 200
     )
     assert (
         client.post(
-            f"/cases/{case_id}/decide?wait=120", headers=_headers(case_id, "manager")
-        ).status_code
-        == 200
-    )
-    assert (
-        client.post(
-            f"/cases/{case_id}/review?wait=120", headers=_headers(case_id, "manager")
+            f"/cases/{case_id}/review?wait=120", headers=_steward_headers()
         ).status_code
         == 200
     )
@@ -171,7 +182,7 @@ def test_signing_key_is_published(client):
 def test_safe_mode_case_never_yields_attestation(client):
     case_id = _reviewed_safe_case(client)
     response = client.post(
-        f"/cases/{case_id}/attestation", headers=_headers(case_id, "manager")
+        f"/cases/{case_id}/attestation", headers=_steward_headers()
     )
     assert response.status_code == 409
     assert (
@@ -197,7 +208,7 @@ def test_contest_requires_attestation_and_party_credential(client):
     response = client.post(
         f"/cases/{case_id}/contest?wait=120",
         json={"reason": "Tentativa indevida de contestação."},
-        headers=_headers(case_id, "manager"),
+        headers=_steward_headers(),
     )
     assert response.status_code == 403
 

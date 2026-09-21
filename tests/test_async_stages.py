@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.models import Base, Case
 from app.db.session import get_db
 from app.main import app, stage_runner
-from tests.test_api import CASE_CREDENTIALS, actor_headers, prepare_locked_case
+from tests.test_api import CASE_CREDENTIALS, prepare_locked_case, steward_headers
 
 
 @pytest.fixture()
@@ -93,7 +93,7 @@ def test_etapa_responde_202_e_conclui_em_segundo_plano(client):
 
     response = client.post(
         f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
 
     assert response.status_code == 202
@@ -112,7 +112,7 @@ def test_wait_devolve_o_resultado_na_propria_resposta(client):
 
     response = client.post(
         f"/cases/{case_id}/conciliation?wait=60",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
 
     assert response.status_code == 200
@@ -158,7 +158,7 @@ def test_fluxo_assincrono_completo_ate_a_revisao(client):
     for stage in ("conciliation", "organize", "decide", "review"):
         accepted = client.post(
             f"/cases/{case_id}/{stage}",
-            headers=actor_headers(case_id, "manager"),
+            headers=steward_headers(),
         )
         assert accepted.status_code == 202, accepted.text
         done = poll_until_done(client, case_id, stage)
@@ -175,7 +175,7 @@ def test_polling_reflete_o_banco_mesmo_sem_registro_em_memoria(client):
     case_id, _document, _ = prepare_locked_case(client)
     client.post(
         f"/cases/{case_id}/conciliation?wait=60",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
 
     stage_runner.reset()
@@ -197,7 +197,7 @@ def test_etapa_que_falha_devolve_o_caso_ao_estado_anterior(
         assert (
             client.post(
                 f"/cases/{case_id}/{stage}?wait=60",
-                headers=actor_headers(case_id, "manager"),
+                headers=steward_headers(),
             ).status_code
             == 200
         )
@@ -209,7 +209,7 @@ def test_etapa_que_falha_devolve_o_caso_ao_estado_anterior(
 
     accepted = client.post(
         f"/cases/{case_id}/decide",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert accepted.status_code == 202
 
@@ -229,7 +229,7 @@ def test_etapa_que_falha_devolve_o_caso_ao_estado_anterior(
     monkeypatch.undo()
     retry = client.post(
         f"/cases/{case_id}/decide?wait=60",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert retry.status_code == 200
     assert retry.json()["outcome"] == "inconclusive"
@@ -242,7 +242,7 @@ def test_falha_com_wait_vira_500_com_o_motivo(client, monkeypatch):
     for stage in ("conciliation", "organize"):
         client.post(
             f"/cases/{case_id}/{stage}?wait=60",
-            headers=actor_headers(case_id, "manager"),
+            headers=steward_headers(),
         )
 
     def explode(*_args, **_kwargs):
@@ -252,7 +252,7 @@ def test_falha_com_wait_vira_500_com_o_motivo(client, monkeypatch):
 
     response = client.post(
         f"/cases/{case_id}/decide?wait=60",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert response.status_code == 500
     assert "provedor fora do ar" in response.json()["detail"]
@@ -275,13 +275,13 @@ def test_rodada_de_composicao_simultanea_e_recusada(client, monkeypatch):
 
     primeira = client.post(
         f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert primeira.status_code == 202
 
     segunda = client.post(
         f"/cases/{case_id}/conciliation",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
         json={"advance": True, "new_information": "outra tentativa"},
     )
     assert segunda.status_code == 409
@@ -435,6 +435,6 @@ def test_wait_acima_do_teto_e_recusado(client):
     case_id, _document, _ = prepare_locked_case(client)
     response = client.post(
         f"/cases/{case_id}/conciliation?wait=100000",
-        headers=actor_headers(case_id, "manager"),
+        headers=steward_headers(),
     )
     assert response.status_code == 422
