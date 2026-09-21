@@ -38,6 +38,7 @@ from app.domain.models import AppealResult
 from app.domain.provenance import build_provenance, verification_result_hash
 from app.domain.stability import compare_decisions, neutralize_party_order
 from app.llm.errors import LLMCallError, LLMUnavailable
+from app.llm.models import families_are_independent
 from app.llm.registry import execution_policy_for, generate_structured
 
 logger = logging.getLogger("valinor.procedure")
@@ -292,9 +293,14 @@ def reviewer_payload(
 
 def alternate_judge_available() -> bool:
     settings = get_settings()
-    appeal = (settings.appeal_provider, settings.appeal_model)
-    judge = (settings.judge_provider, settings.judge_model)
-    return appeal != judge
+    if (settings.appeal_provider, settings.appeal_model) == (
+        settings.judge_provider,
+        settings.judge_model,
+    ):
+        return False
+    if settings.appeal_provider == "openrouter" and settings.judge_provider == "openrouter":
+        return families_are_independent(settings.appeal_model, settings.judge_model)
+    return True
 
 
 def run_automatic_review(

@@ -725,7 +725,7 @@ def _process_document(
             "embedding": None,
             "embedding_error": False,
         }
-        if settings.openai_enabled:
+        if settings.embeddings_enabled:
             try:
                 record["embedding"] = build_embedding(chunk)
             except Exception:
@@ -768,6 +768,8 @@ def root():
         "ui": "/ui/",
         "privacy_policy": "/privacy",
         "openai_enabled": settings.openai_enabled,
+        "openrouter_enabled": settings.openrouter_enabled,
+        "llm_enabled": settings.llm_enabled,
         "auth_required": settings.auth_required,
         "procedure_terms": {
             "version": "2026-07-12",
@@ -784,8 +786,8 @@ def root():
             warning
             for warning in [
                 (
-                    "OPENAI_API_KEY ausente: agentes usarão modo seguro inconclusivo."
-                    if not settings.openai_enabled
+                    "OPENROUTER_API_KEY ausente: agentes usarão modo seguro inconclusivo."
+                    if not settings.llm_enabled
                     else None
                 ),
                 (
@@ -819,6 +821,7 @@ def health(db: Session = Depends(get_db)):
         "status": "ok",
         "database": "ok",
         "openai_enabled": settings.openai_enabled,
+        "openrouter_enabled": settings.openrouter_enabled,
         "llm_enabled": settings.llm_enabled,
         "email_configured": settings.email_enabled,
         "attestation_enabled": settings.attestation_enabled,
@@ -1350,8 +1353,8 @@ def get_current_privacy_policy():
                 {
                     provider
                     for provider, enabled in (
-                        ("openai", settings_now.openai_enabled),
                         ("openrouter", settings_now.openrouter_enabled),
+                        ("openai", settings_now.openai_enabled),
                     )
                     if enabled
                 }

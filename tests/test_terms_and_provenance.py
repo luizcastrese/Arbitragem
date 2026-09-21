@@ -288,7 +288,7 @@ def test_stage_execution_records_prompt_and_model(client):
     ).json()
 
     execution = conciliation["execution"]
-    # Sem OPENAI_API_KEY o caminho é o de contingência: mesmo aí a procedência
+    # Sem OPENROUTER_API_KEY o caminho é o de contingência: mesmo aí a procedência
     # do prompt precisa estar registrada.
     assert execution["mode"] == "safe_fallback"
     assert execution["prompt"] == get_prompt("conciliator").as_reference()

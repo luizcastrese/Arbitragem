@@ -125,9 +125,9 @@ def run_scenario(scenario: Dict, live: bool = False) -> ScenarioResult:
             [],
             skipped="controle negativo: só faz sentido com saída gravada",
         )
-    if live and not get_settings().openai_enabled:
+    if live and not get_settings().llm_enabled:
         return ScenarioResult(
-            scenario["id"], agent, [], skipped="OPENAI_API_KEY não configurada"
+            scenario["id"], agent, [], skipped="OPENROUTER_API_KEY não configurada"
         )
 
     if live:

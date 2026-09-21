@@ -140,6 +140,8 @@ def test_root_does_not_promise_human_review(client):
     principles = " ".join(body["procedure_terms"]["principles"])
     assert "revisão humana" not in principles
     assert "autônom" in principles or "abster" in principles
+    assert "llm_enabled" in body
+    assert "openrouter_enabled" in body
 
 
 def test_locked_manifest_records_independence_and_framework(client):

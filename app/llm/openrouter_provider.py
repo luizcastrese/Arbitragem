@@ -1,6 +1,8 @@
 """OpenRouter: Chat Completions + JSON schema, validação Pydantic local.
 
 Não usa Responses API. O adapter declara essa incompatibilidade de propósito.
+Embeddings passam pela mesma API (`/embeddings`), para não depender de um
+segundo laboratório direto.
 """
 
 from __future__ import annotations
@@ -8,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Type
+from typing import Any, Dict, Optional, Type
 
 from openai import OpenAI
 from pydantic import BaseModel
@@ -21,9 +23,11 @@ from app.llm.errors import (
     LLMTransientError,
     LLMUnavailable,
 )
+from app.llm.models import normalize_openrouter_model
 from app.llm.schemas import ExecutionPolicy, LLMProvider, StructuredGenerationResult
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_APP_TITLE = "Valinor"
 
 
 class OpenRouterProvider(LLMProvider):
@@ -34,18 +38,26 @@ class OpenRouterProvider(LLMProvider):
         api_key: str,
         base_url: str = DEFAULT_OPENROUTER_BASE_URL,
         timeout_seconds: float = 60.0,
+        http_referer: Optional[str] = None,
+        app_title: str = DEFAULT_APP_TITLE,
     ):
         if not api_key:
             raise LLMUnavailable("OPENROUTER_API_KEY is not configured")
         self._api_key = api_key
         self._base_url = (base_url or DEFAULT_OPENROUTER_BASE_URL).rstrip("/")
         self._timeout = timeout_seconds
+        self._http_referer = (http_referer or "").strip()
+        self._app_title = (app_title or DEFAULT_APP_TITLE).strip() or DEFAULT_APP_TITLE
 
     def _client(self, timeout: float) -> OpenAI:
+        headers = {"X-Title": self._app_title}
+        if self._http_referer:
+            headers["HTTP-Referer"] = self._http_referer
         return OpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
             timeout=timeout,
+            default_headers=headers,
         )
 
     def generate_structured(
@@ -62,13 +74,14 @@ class OpenRouterProvider(LLMProvider):
         timeout = execution_policy.timeout_seconds or self._timeout
         max_retries = max(0, execution_policy.max_retries)
         schema = response_model.model_json_schema()
+        model = normalize_openrouter_model(execution_policy.model)
 
         while attempts <= max_retries:
             attempts += 1
             t0 = time.perf_counter()
             try:
                 response = self._client(timeout).chat.completions.create(
-                    model=execution_policy.model,
+                    model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {
@@ -98,7 +111,7 @@ class OpenRouterProvider(LLMProvider):
                 if is_transient(exc) and attempts <= max_retries:
                     log_call(
                         provider=self.name,
-                        model=execution_policy.model,
+                        model=model,
                         task=task,
                         attempts=attempts,
                         latency_ms=latency,
@@ -108,7 +121,7 @@ class OpenRouterProvider(LLMProvider):
                     continue
                 log_call(
                     provider=self.name,
-                    model=execution_policy.model,
+                    model=model,
                     task=task,
                     attempts=attempts,
                     latency_ms=latency,
@@ -125,7 +138,7 @@ class OpenRouterProvider(LLMProvider):
             usage = getattr(response, "usage", None)
             log_call(
                 provider=self.name,
-                model=getattr(response, "model", None) or execution_policy.model,
+                model=getattr(response, "model", None) or model,
                 task=task,
                 attempts=attempts,
                 latency_ms=latency,
@@ -135,7 +148,7 @@ class OpenRouterProvider(LLMProvider):
                 requested_provider=self.name,
                 requested_model=execution_policy.model,
                 effective_provider=self.name,
-                effective_model=getattr(response, "model", None) or execution_policy.model,
+                effective_model=getattr(response, "model", None) or model,
                 provider_response_id=getattr(response, "id", None),
                 prompt_tokens=getattr(usage, "prompt_tokens", None),
                 completion_tokens=getattr(usage, "completion_tokens", None),
@@ -151,4 +164,23 @@ class OpenRouterProvider(LLMProvider):
         )
 
     def generate_embedding(self, text: str, model: str) -> list:
-        raise LLMCallError("OpenRouter adapter does not provide embeddings")
+        slug = normalize_openrouter_model(model)
+        try:
+            response = self._client(self._timeout).embeddings.create(
+                model=slug,
+                input=text,
+                encoding_format="float",
+            )
+        except LLMUnavailable:
+            raise
+        except Exception as exc:
+            if getattr(exc, "code", None) == "insufficient_quota":
+                raise LLMQuotaExceeded("OpenRouter quota exceeded") from exc
+            if "timeout" in type(exc).__name__.lower():
+                raise LLMTimeout("OpenRouter embedding timed out") from exc
+            if is_transient(exc):
+                raise LLMTransientError(type(exc).__name__) from exc
+            raise LLMCallError(
+                f"OpenRouter embedding failed: {type(exc).__name__}"
+            ) from exc
+        return response.data[0].embedding
