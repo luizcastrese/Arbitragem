@@ -17,9 +17,10 @@
   --gold: #e4c275;
   --gold-deep: #c89b3c;
   --gold-soft: #f0dca8;
-  --gold-ink: #8a7340;
+  --gold-ink: #7a6320;
   --gold-text: #9a751f;
   --gold-veil: rgba(228, 194, 117, .16);
+  --focus: #6b5115;
   --ground: #f4f2e9;
   --surface: #fdfbf4;
   --cream: #fffdf6;
@@ -45,7 +46,7 @@ h1, h2, h3, p { margin-top: 0; }
 ::selection { color: var(--green-950); background: var(--gold-soft); }
 
 :focus-visible {
-  outline: 2px solid var(--gold-deep);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -622,7 +623,7 @@ input, textarea, select {
 input { min-height: 46px; padding: 0 13px; }
 select { min-height: 46px; padding: 0 12px; }
 textarea { min-height: 135px; padding: 13px; resize: vertical; line-height: 1.5; }
-input:focus, textarea:focus, select:focus { background: var(--cream); border-color: var(--gold-deep); box-shadow: 0 0 0 4px var(--gold-veil); }
+input:focus, textarea:focus, select:focus { background: var(--cream); border-color: var(--focus); box-shadow: 0 0 0 4px var(--gold-veil); }
 .form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; padding-top: 4px; }
 
 .case-heading {
