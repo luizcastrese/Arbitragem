@@ -2,6 +2,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.tax_id import InvalidTaxId, normalize_tax_id
+
 
 class RegisterRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -107,6 +109,9 @@ class ConsentRequest(BaseModel):
     # Versão dos termos efetivamente exibida à parte. Ausente significa "a
     # versão vigente"; uma versão desconhecida é recusada pelo servidor.
     terms_version: Optional[str] = Field(default=None, max_length=40)
+    # CPF ou CNPJ da própria parte. Qualifica a parte no auto da decisão;
+    # ausente, o auto registra que a qualificação não foi informada.
+    tax_id: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("party")
     @classmethod
@@ -114,6 +119,14 @@ class ConsentRequest(BaseModel):
         if value not in {"claimant", "respondent"}:
             raise ValueError("party must be claimant or respondent")
         return value
+
+    @field_validator("tax_id")
+    @classmethod
+    def tax_id_must_be_valid(cls, value: Optional[str]) -> Optional[str]:
+        try:
+            return normalize_tax_id(value)
+        except InvalidTaxId as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class EvidenceActionRequest(BaseModel):
@@ -241,4 +254,9 @@ class ContestRequest(BaseModel):
 
 class AttestationVerifyRequest(BaseModel):
     attestation: dict
+    public_key_b64: str = ""
+
+
+class DecisionRecordVerifyRequest(BaseModel):
+    record: dict
     public_key_b64: str = ""

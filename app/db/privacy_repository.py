@@ -136,6 +136,12 @@ def export_user_data(db: Session, user: User) -> Dict[str, Any]:
                 "roles": roles,
                 "created_at": _iso(case.created_at),
                 "procedure_conclusion": case.procedure_conclusion,
+                # CPF/CNPJ que a própria conta declarou na adesão.
+                "declared_tax_ids": {
+                    role: getattr(case, f"{role}_tax_id", None)
+                    for role in roles
+                    if role in ("claimant", "respondent")
+                },
                 "documents_submitted": [
                     {
                         "id": document.id,

@@ -44,7 +44,6 @@ def _audit_chain(length=3):
 def _approved_case_data():
     return {
         "id": "case-123",
-        "escrow_id": "escrow-abc",
         "locked_manifest": {
             "manifest_hash": "f" * 64,
             "platform_version": "0.5.0",

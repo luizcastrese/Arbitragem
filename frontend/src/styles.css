@@ -273,7 +273,7 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .how-steps {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   margin: 20px 0 0;
   padding: 0;
@@ -1218,4 +1218,38 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .auth-form .mini-field:first-child, .auth-actions, .deadline-form .button { grid-column: auto; }
   .operations-card .card-title-row { align-items: flex-start; flex-direction: column; }
   .conclusion-facts, .human-review-note { grid-column: 1; }
+}
+
+/* Auto da decisão: o documento final do procedimento. */
+.record-card {
+  padding: 22px;
+  display: grid;
+  gap: 15px;
+  background: linear-gradient(135deg, #fbfefa, #edf7eb);
+  border: 1px solid #c9dec5;
+  border-radius: 17px;
+  box-shadow: var(--shadow-card);
+}
+.record-heading { display: flex; gap: 15px; align-items: flex-start; }
+.record-heading h3 { margin: 5px 0 6px; font-size: 19px; }
+.record-heading p { margin: 0; color: var(--muted); line-height: 1.55; }
+.record-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.record-card .blocking-note { margin: 0; }
+.record-card code { font-size: 11px; overflow-wrap: anywhere; }
+.consent-action { display: flex; align-items: center; gap: 8px; }
+.tax-id-input {
+  width: 150px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid #d7dfd5;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .record-heading { flex-direction: column; }
+  .record-actions { flex-direction: column; }
+  .consent-party { flex-direction: column; align-items: stretch; }
+  .consent-action { flex-direction: column; align-items: stretch; }
+  .tax-id-input { width: 100%; }
 }

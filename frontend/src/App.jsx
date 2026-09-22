@@ -558,7 +558,7 @@ export default function App() {
             <span className="brand-mark"><Scale size={20} /></span>
             <div>
               <strong>Valinor</strong>
-              <small>Auditoria decisória por IA</small>
+              <small>Decisão prévia ao Judiciário</small>
             </div>
           </div>
           <div className="topbar-actions">
@@ -600,15 +600,16 @@ export default function App() {
       <main className="page">
         <section className="intro">
           <div>
-            <span className="eyebrow">Resolução de disputas conduzida por IA</span>
+            <span className="eyebrow">Antes do processo, uma decisão fundamentada</span>
             <h1>Resolva a disputa em dias — não em anos de processo.</h1>
             <p>
-              O Valinor é uma alternativa ao litígio para conflitos documentais entre empresa e cliente.
-              As duas partes apresentam suas provas, a IA busca um acordo e, se não houver,
-              profere uma decisão fundamentada — verificada de forma determinística,
-              auditada por um segundo modelo e, se contestada, reexaminada por recurso
-              automático. O sistema pode se abster. O resultado não é sentença judicial
-              nem arbitral.
+              A Valinor é uma etapa voluntária, anterior ao Judiciário, para conflitos documentais
+              entre empresa e cliente. As duas partes apresentam suas provas, a IA busca um acordo
+              e, se não houver, profere uma decisão fundamentada — verificada de forma determinística,
+              auditada por um segundo modelo e, se contestada, reexaminada por recurso automático.
+              A decisão não obriga ninguém: o que sai do procedimento é o auto da decisão, um
+              documento assinado que a parte pode levar a um advogado ou ao Judiciário.
+              Não é sentença judicial nem arbitral.
             </p>
           </div>
           <div className="trust-note">
@@ -838,14 +839,18 @@ function HowItWorks() {
     },
     {
       title: 'Sem acordo, decisão fundamentada',
-      text: 'A IA decide citando provas verificáveis; um segundo modelo audita. O sistema pode se abster. Hashes comprovam integridade, não a verdade material.'
+      text: 'A IA decide citando provas verificáveis; um segundo modelo audita. O sistema pode se abster. A decisão não obriga as partes.'
+    },
+    {
+      title: 'Auto da decisão',
+      text: 'Todo caso termina num documento assinado com partes qualificadas, provas, acordo ou decisão. Serve de base para quem quiser ir ao Judiciário.'
     }
   ]
   return (
     <section className="how-it-works">
       <div className="value-heading">
         <span className="section-label">Como funciona</span>
-        <h2>Quatro etapas, as mesmas regras para os dois lados.</h2>
+        <h2>Cinco etapas, as mesmas regras para os dois lados.</h2>
       </div>
       <ol className="how-steps">
         {steps.map((step, index) => (
@@ -951,7 +956,7 @@ function AudienceValue() {
               'Convida o cliente com explicação clara do procedimento.',
               'Apresenta defesa, documentos e limites possíveis para acordo.',
               'Responde a cada rodada com aceite, recusa ou contraproposta.',
-              'Recebe a decisão e a auditoria para cumprimento e controle interno.'
+              'Recebe o auto da decisão, decide se cumpre e guarda a trilha para o jurídico.'
             ]}
           />
           <Journey
@@ -960,7 +965,7 @@ function AudienceValue() {
               'Conhece as regras e decide se aceita participar.',
               'Apresenta fatos, documentos, pedido e resultado esperado.',
               'Avalia cada proposta e informa o que aceita ou deseja alterar.',
-              'Recebe decisão explicada, provas citadas e resultado da auditoria.'
+              'Recebe o auto da decisão, que pode usar como base para ir ao Judiciário.'
             ]}
           />
           <Journey
@@ -969,7 +974,7 @@ function AudienceValue() {
               'É uma IA, não um vazio preenchido por uma das partes.',
               'Admite o material quando o contraditório fecha.',
               'Trava o conjunto só depois que as duas apresentações encerram.',
-              'Abre a composição e, sem acordo, leva o caso à decisão e à auditoria.'
+              'Abre a composição e, sem acordo, leva o caso à decisão, à auditoria e ao auto.'
             ]}
           />
         </div>
@@ -1244,6 +1249,7 @@ function CaseWorkspace({
       {caseData.status !== 'reviewed'
         && caseData.status !== 'attested'
         && caseData.status !== 'contested'
+        && caseData.status !== 'agreement'
         && !String(caseData.status || '').startsWith('processing') && (
         <NextAction
           caseData={caseData}
@@ -1302,6 +1308,10 @@ function CaseWorkspace({
         user={user}
       />
 
+      {caseData.decision_record && (
+        <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
+      )}
+
       {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
@@ -1316,6 +1326,75 @@ function CaseWorkspace({
         setOpen={setShowTechnical}
       />
     </>
+  )
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function DecisionRecordCard({ caseData, busy, run }) {
+  const record = caseData.decision_record
+  const kind = record.outcome?.kind
+  const title = kind === 'agreement'
+    ? 'Termo de acordo'
+    : kind === 'decision'
+      ? 'Decisão proferida'
+      : 'Encerrado sem decisão de mérito'
+  const baseName = `auto-valinor-${caseData.id.slice(0, 8)}-${record.record_number}`
+
+  async function downloadDocx() {
+    await run('Gerando o auto em Word...', async () => {
+      const response = await fetch(`${API_BASE}/cases/${caseData.id}/decision-record.docx`, {
+        credentials: 'include'
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(formatApiDetail(data.detail, 'Não foi possível gerar o auto'))
+      }
+      saveBlob(await response.blob(), `${baseName}.docx`)
+    })
+  }
+
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(record, null, 2)], { type: 'application/json' })
+    saveBlob(blob, `${baseName}.json`)
+  }
+
+  return (
+    <section className="record-card">
+      <div className="record-heading">
+        <span className="action-icon"><FileCheck2 size={22} /></span>
+        <div>
+          <span className="section-label">Documento final · Auto nº {record.record_number}</span>
+          <h3>Auto da decisão: {title}</h3>
+          <p>{record.outcome?.summary}</p>
+        </div>
+      </div>
+      <div className="record-actions">
+        <button className="button primary" onClick={downloadDocx} disabled={busy}>
+          <Download size={16} /> Baixar o auto (Word)
+        </button>
+        <button className="button secondary" onClick={downloadJson} disabled={busy}>
+          <FileText size={16} /> Baixar o auto assinado (JSON)
+        </button>
+      </div>
+      <div className="blocking-note">
+        <Scale size={17} />
+        <span>
+          A decisão não obriga as partes. Este auto registra o procedimento, o
+          desfecho e a fundamentação, e pode servir de base para uma ação
+          judicial ou reclamação. Hash {String(record.record_hash || '').slice(0, 16)}… ·
+          assinatura {record.signature_algorithm}. A versão JSON é a que se confere
+          em <code>/decision-records/verify</code>.
+        </span>
+      </div>
+    </section>
   )
 }
 
@@ -1651,6 +1730,9 @@ function NextAction({
     }
   }[caseData.status]
 
+  // Estado sem próxima ação de parte (ex.: desfecho): só a nota do gestor.
+  if (!actionContent) return <StewardNote caseData={caseData} />
+
   return (
     <section className="next-action">
       <div className="next-action-heading">
@@ -1820,6 +1902,7 @@ function NextAction({
 function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms, privacy }) {
   const [showTerms, setShowTerms] = useState(false)
   const [showPrivacy, setShowPrivacy] = useState(false)
+  const [taxIds, setTaxIds] = useState({ claimant: '', respondent: '' })
   const entries = [
     {
       party: 'claimant',
@@ -1854,11 +1937,21 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
             {entry.consent?.accepted ? (
               <em><Check size={14} /> Aceitou</em>
             ) : roles[entry.party] ? (
+              <span className="consent-action">
+              <input
+                className="tax-id-input"
+                value={taxIds[entry.party]}
+                onChange={(event) => setTaxIds({ ...taxIds, [entry.party]: event.target.value })}
+                placeholder={entry.party === 'claimant' ? 'Seu CPF ou CNPJ' : 'CNPJ da empresa'}
+                aria-label={`CPF ou CNPJ de ${entry.name}`}
+                maxLength={20}
+              />
               <button
                 className="button secondary compact"
                 // Sem o texto carregado não há o que aceitar: o aceite grava o
-                // hash do que foi exibido, não uma versão suposta.
-                disabled={busy || !terms}
+                // hash do que foi exibido, não uma versão suposta. O CPF/CNPJ
+                // qualifica a parte no auto da decisão.
+                disabled={busy || !terms || !taxIds[entry.party].trim()}
                 title={terms ? undefined : 'Carregando os termos...'}
                 onClick={() => run(
                   `Registrando a adesão de ${entry.name}...`,
@@ -1873,13 +1966,15 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
                       accepted: true,
                       // Aceita-se a versão que esta tela exibiu, não a que o
                       // servidor considerar vigente no momento do clique.
-                      terms_version: terms.version
+                      terms_version: terms.version,
+                      tax_id: taxIds[entry.party]
                     })
                   })
                 )}
               >
                 Registrar aceite
               </button>
+              </span>
             ) : (
               <em><Clock3 size={14} /> Aguardando a parte</em>
             )}
@@ -1888,7 +1983,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>participação voluntária; acesso a todo material; oportunidade de resposta; composição somente por acordo; decisão autônoma por IA; auditoria automática; recurso automático; o sistema pode se abster e o resultado não é sentença judicial ou arbitral.</span>
+        <span>procedimento voluntário e prévio ao Judiciário, que não é arbitragem; acesso a todo material; oportunidade de resposta; composição somente por acordo; sem acordo, decisão por IA que não obriga as partes; auditoria e recurso automáticos; o sistema pode se abster; ao final, um auto da decisão assinado, com CPF/CNPJ das partes, que pode servir de base a uma ação judicial.</span>
         <button className="link-button" onClick={() => setShowTerms(!showTerms)}>
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>

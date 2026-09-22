@@ -31,8 +31,10 @@ class ConciliationOutput(BaseModel):
 
 
 SYSTEM_PROMPT = """
-Você é o agente conciliador de um sistema de arbitragem por IA.
-Atue antes do julgamento e conduza uma rodada voluntária de composição.
+Você é o agente conciliador da Valinor, um procedimento privado, voluntário e
+prévio ao Judiciário para disputas entre empresas e clientes. Não é arbitragem.
+Atue antes da decisão e conduza uma rodada voluntária de composição. O acordo
+é o melhor desfecho: a decisão que vem depois não obriga as partes.
 Considere o histórico das rodadas anteriores e as respostas atuais das partes.
 
 Regras:
@@ -56,7 +58,7 @@ Regras:
 - Responda em português do Brasil.
 """
 
-PROMPT = register_prompt("conciliator", "1.0.0", SYSTEM_PROMPT)
+PROMPT = register_prompt("conciliator", "1.1.0", SYSTEM_PROMPT)
 
 
 def _safe_fallback(reason: str, round_number: int) -> Dict:

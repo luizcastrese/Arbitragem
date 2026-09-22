@@ -134,6 +134,7 @@ from app.db.repository import (
     register_contest,
     revert_contest,
     respond_to_document as persist_response,
+    save_decision_record,
     save_stage,
     save_steward_state,
     save_nostr_anchor,
@@ -148,6 +149,14 @@ from app.domain.concurrency import (
     release_processing,
 )
 from app.domain.jobs import COMPLETED, FAILED, RUNNING, StageRunner
+from app.reports.decision_record import (
+    DecisionRecordNotReady,
+    build_decision_record,
+    outcome_kind,
+    record_basis,
+    verify_record,
+)
+from app.reports.decision_record_docx import build_decision_record_docx
 from app.domain.frameworks import list_frameworks
 from app.domain.legacy import public_decision_view
 from app.domain.steward import decide_steward_action, steward_actuator_token
@@ -173,6 +182,7 @@ from app.schemas import (
     AddDocumentRequest,
     AgreementResponseRequest,
     AttestationVerifyRequest,
+    DecisionRecordVerifyRequest,
     ConciliationPositionRequest,
     ConciliationRoundRequest,
     ConsentRequest,
@@ -269,11 +279,11 @@ app = FastAPI(
     title="Valinor",
     version="0.6.0",
     description=(
-        "Procedimento autônomo, auditável e multi-modelo de resolução privada "
-        "de disputas documentais B2B. O sistema não depende de revisão humana "
-        "interna para concluir um procedimento e nunca é obrigado a declarar um "
-        "vencedor. O resultado não constitui automaticamente sentença judicial "
-        "ou arbitral."
+        "Procedimento privado, voluntário e prévio ao Judiciário para disputas "
+        "entre empresas e clientes. A IA busca o acordo e, sem ele, profere uma "
+        "decisão fundamentada que não obriga as partes. A saída é o auto da "
+        "decisão: documento assinado e verificável que pode servir de base a "
+        "uma ação judicial. O resultado não é sentença judicial nem arbitral."
     ),
     lifespan=lifespan,
     docs_url="/docs" if settings.expose_api_docs else None,
@@ -637,6 +647,42 @@ def _continue_steward(job_db: Session, case_id: str) -> None:
             _conduct_steward(job_db, case, wait=0, run_model_stages=True)
     except Exception:
         logger.exception("steward_chain_failed case=%s", case_id)
+
+
+def _issue_decision_record(db: Session, case_id: str):
+    """Emite o auto quando o procedimento chega a um desfecho.
+
+    Idempotente: só cria nova versão se o que o auto registra mudou (recurso,
+    attestation, qualificação). Uma falha aqui não desfaz a etapa que a
+    precedeu; o auto pode ser emitido de novo por `POST /decision-record`.
+    """
+    case = get_case(db, case_id)
+    if case is None:
+        return None
+    case_data = case_to_dict(case, include_content=False, include_embeddings=False)
+    if outcome_kind(case_data) is None:
+        return None
+    current = case_data.get("decision_record")
+    basis_hash = canonical_hash(record_basis(case_data))
+    if current and (current.get("integrity") or {}).get("basis_hash") == basis_hash:
+        return current
+    events = case_data["audit_log"]
+    record = build_decision_record(
+        case_data,
+        audit_chain_head=events[-1]["event_hash"] if events else "",
+        audit_chain_length=len(events),
+        previous=current,
+    )
+    save_decision_record(db, case, record)
+    return record
+
+
+def _issue_decision_record_safely(db: Session, case_id: str) -> None:
+    try:
+        _issue_decision_record(db, case_id)
+    except Exception:
+        db.rollback()
+        logger.exception("decision_record_failed case=%s", case_id)
 
 
 def _lock_manifest_now(db: Session, case):
@@ -1720,6 +1766,7 @@ def set_case_consent(
         accepted=payload.accepted,
         terms_version=terms.version,
         terms_sha256=terms.sha256,
+        tax_id=payload.tax_id,
     )
     return case_to_dict(updated, include_content=False, include_embeddings=False)[
         "consent"
@@ -2388,6 +2435,7 @@ def respond_to_conciliation_agreement(
             },
             "hold",
         )
+        _issue_decision_record_safely(db, case_id)
     return selected["agreement"]
 
 
@@ -2781,6 +2829,7 @@ def review_case(
                 "execution": review.get("execution", {}),
             },
         )
+        _issue_decision_record_safely(job_db, case_id)
         _continue_steward(job_db, case_id)
         return review
 
@@ -2927,6 +2976,8 @@ def issue_attestation(
     if anchor:
         save_nostr_anchor(db, case, anchor)
 
+    # O auto passa a registrar a attestation e o prazo de recurso.
+    _issue_decision_record_safely(db, case_id)
     return attestation
 
 
@@ -3121,6 +3172,7 @@ def contest_case(
             contest_payload,
         )
         job_db.commit()
+        _issue_decision_record_safely(job_db, case_id)
         refreshed = case_to_dict(get_case(job_db, case_id))
         return {
             **refreshed["contest"],
@@ -3269,6 +3321,83 @@ def get_appeals(
 @app.get("/frameworks")
 def get_frameworks():
     return [item.lock_summary() for item in list_frameworks()]
+
+
+@app.post("/cases/{case_id}/decision-record")
+def issue_decision_record(
+    case_id: str,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Emite (ou devolve) o auto vigente. Qualquer parte ou o gestor pode
+    pedir: a emissão é determinística a partir do registro do caso."""
+    case = _case_or_404(db, case_id)
+    try:
+        _require_steward_actuator(x_actor_token)
+    except HTTPException:
+        _require_procedure_party(db, case, x_actor_token)
+    try:
+        record = _issue_decision_record(db, case_id)
+    except DecisionRecordNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if record is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O procedimento ainda não terminou: o auto só é emitido depois "
+                "do acordo ou da auditoria da decisão"
+            ),
+        )
+    return record
+
+
+@app.get("/cases/{case_id}/decision-record")
+def get_decision_record(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    record = case_to_dict(case, include_content=False, include_embeddings=False)[
+        "decision_record"
+    ]
+    if not record:
+        raise HTTPException(status_code=404, detail="Auto da decisão ainda não emitido")
+    return record
+
+
+@app.get("/cases/{case_id}/decision-record.docx")
+def get_decision_record_docx(
+    case_id: str,
+    x_session_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    case = _case_or_404(db, case_id)
+    _require_case_view(db, case, x_session_token)
+    record = case_to_dict(case, include_content=False, include_embeddings=False)[
+        "decision_record"
+    ]
+    if not record:
+        raise HTTPException(status_code=404, detail="Auto da decisão ainda não emitido")
+    output = build_decision_record_docx(record)
+    filename = f"auto-valinor-{case.id[:8]}-{record.get('record_number')}.docx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/decision-records/verify")
+def verify_decision_record_endpoint(payload: DecisionRecordVerifyRequest):
+    """Qualquer pessoa confere se um auto é íntegro e foi assinado pela
+    plataforma. Autos Ed25519 também podem ser conferidos offline com a chave
+    publicada em /.well-known/valinor-signing-key."""
+    valid, checks = verify_record(
+        payload.record, public_key_b64=payload.public_key_b64 or None
+    )
+    return {"valid": valid, **checks}
 
 
 @app.get("/cases/{case_id}/report")

@@ -285,7 +285,20 @@ def test_complete_safe_flow_is_persistent_and_auditable(client):
         "case_organized",
         "decision_generated",
         "review_generated",
+        "decision_record_issued",
     ]
+
+    # O desfecho gera o auto da decisão: sem mérito, mas com o motivo.
+    record = client.get(f"/cases/{case_id}/decision-record").json()
+    assert record["record_type"] == "auto_da_decisao"
+    assert record["record_number"] == 1
+    assert record["outcome"]["kind"] == "no_merit_decision"
+    assert record["outcome"]["binding"] is False
+    assert "provedor de IA indisponível" in record["outcome"]["summary"]
+    assert record["integrity"]["manifest_hash"] == locked.json()["manifest"]["manifest_hash"]
+    assert record["parties"]["claimant"]["name"] == "Empresa Alfa"
+    assert "não obriga as partes" in record["legal_notice"]
+    assert client.post("/decision-records/verify", json={"record": record}).json()["valid"] is True
 
     report = client.get(f"/cases/{case_id}/report").json()
     assert report["status"] == "reviewed"

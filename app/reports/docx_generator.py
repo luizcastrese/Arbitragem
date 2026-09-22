@@ -239,7 +239,7 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
     _configure_styles(document)
     _configure_page(document)
 
-    _add_label(document, "Relatório final do procedimento")
+    _add_label(document, "Relatório técnico do procedimento")
     title = document.add_heading(case.get("title") or "Caso sem título", 0)
     _remove_paragraph_border(title)
     subtitle = document.add_paragraph(style="Subtitle")
@@ -409,7 +409,7 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
     _add_callout(
         document,
         "Limite jurídico",
-        "O sistema profere uma decisão computacional conforme o procedimento configurado. A saída não constitui, por si só, sentença arbitral ou decisão estatal; eventual eficácia jurídica depende da estrutura contratual adotada, do consentimento válido e da legislação aplicável.",
+        "O sistema profere uma decisão computacional conforme o procedimento configurado. A decisão não obriga as partes e não constitui sentença arbitral ou decisão estatal. Este relatório é técnico; o documento final do procedimento é o auto da decisão.",
         warning=True,
     )
 

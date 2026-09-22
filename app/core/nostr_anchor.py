@@ -8,7 +8,7 @@ verificáveis, de forma independente do servidor da Valinor ficar no ar.
 
 Sem NOSTR_PRIVATE_KEY_HEX e NOSTR_RELAYS configurados, a publicação é
 pulada. Falha de rede ou de relay nunca derruba a emissão da attestation —
-é uma camada complementar, não uma dependência crítica do fluxo de escrow.
+é uma camada complementar, não uma dependência crítica do procedimento.
 """
 
 import asyncio
@@ -44,7 +44,6 @@ def build_anchor_payload(attestation: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "v": 1,
         "case_id": attestation.get("case_id"),
-        "escrow_id": attestation.get("escrow_id"),
         "attestation_hash": attestation.get("attestation_hash"),
         "signature": attestation.get("signature"),
         "signature_algorithm": attestation.get("signature_algorithm"),

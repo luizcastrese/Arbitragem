@@ -1,8 +1,14 @@
 # Valinor
 
-Plataforma de resolução e auditoria decisória por IA, criada para reduzir
-drasticamente o custo de disputas entre empresas e clientes sem sacrificar
-contraditório, transparência ou integridade.
+Procedimento privado, voluntário e prévio ao Judiciário para disputas entre
+empresas e clientes, criado para reduzir drasticamente o custo de resolvê-las
+sem sacrificar contraditório, transparência ou integridade. Não é arbitragem.
+
+A IA busca primeiro o acordo. Sem acordo, profere uma decisão fundamentada que
+**não obriga as partes**. Qualquer que seja o desfecho, a saída é o **auto da
+decisão**: documento final assinado e verificável, com as partes qualificadas,
+o percurso do procedimento, o acordo ou a fundamentação e o dispositivo, que a
+parte pode levar a um advogado ou usar como base de uma ação judicial.
 
 MVP operacional de uma infraestrutura de auditoria decisória de disputas
 documentais por IA.
@@ -21,9 +27,9 @@ auditoria avalia sustentação semântica. Nenhuma dessas camadas transforma a
 saída em sentença arbitral ou estatal.
 
 > Este projeto é experimental. Ele profere uma decisão dentro do procedimento
-> computacional configurado, mas essa saída não constitui, por si só, sentença
-> arbitral ou decisão estatal. Eventual eficácia jurídica depende da estrutura
-> contratual adotada e da legislação aplicável.
+> configurado, mas essa decisão não obriga as partes e não constitui sentença
+> arbitral ou decisão estatal. O auto da decisão é prova documental do
+> procedimento, a ser avaliada livremente pelo juízo competente.
 
 ## O que funciona
 
@@ -57,11 +63,17 @@ saída em sentença arbitral ou estatal.
   opcionalmente contra o modelo real;
 - manifesto imutável assinado com HMAC-SHA256;
 - verificação do manifesto e da cadeia de auditoria;
-- Decision Attestation assinada em Ed25519: artefato que um executor externo
-  (instituição de pagamento ou contrato inteligente) verifica offline com a
-  chave pública publicada em `/.well-known/valinor-signing-key`, emitido apenas
-  com a cadeia de auditoria íntegra e sujeito a uma janela de contestação em que
-  qualquer das partes pode barrar a execução;
+- **auto da decisão**: documento final emitido automaticamente no acordo ou
+  depois da auditoria da decisão, com qualificação das partes (CPF/CNPJ,
+  inclusive CNPJ alfanumérico), objeto, relatório do procedimento, termo de
+  acordo ou fundamentação e dispositivo, auditoria, recurso e dados de
+  autenticidade; baixável em Word e em JSON assinado (Ed25519 ou HMAC-SHA256),
+  verificável em `POST /decision-records/verify`; um recurso que corrige a
+  decisão emite novo auto encadeado ao anterior;
+- Decision Attestation assinada em Ed25519: declaração da decisão que qualquer
+  terceiro verifica offline com a chave pública publicada em
+  `/.well-known/valinor-signing-key`, emitida apenas com a cadeia de auditoria
+  íntegra; abre o prazo de recurso automático. Não há execução automática;
 - âncora pública opcional da attestation em relays Nostr (só hash, assinatura e
   identificadores — nunca o teor da decisão ou das partes), dando timestamp
   independente do servidor da Valinor; a âncora só é registrada quando algum
@@ -96,10 +108,10 @@ caso
   -> verificação determinística
   -> auditoria automática
   -> (opcional) teste de estabilidade
-  -> relatório
   -> attestation assinada (opcional)
   -> recurso automático
-  -> execução externa do escrow
+  -> auto da decisão (acordo, decisão ou encerramento sem mérito)
+  -> cada parte decide se cumpre ou se leva o auto ao Judiciário
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
@@ -109,9 +121,10 @@ percurso, e só trava o conjunto quando as duas partes declararam encerrada a
 própria apresentação. Uma parte não conduz a etapa da outra.
 
 O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
-participação voluntária, acesso a todo material, oportunidade de resposta,
-composição consensual, decisão fundamentada por IA, auditoria independente e
-auditoria automática, verificador determinístico e recurso automático. O texto vive em `app/terms/<versão>.md` e é
+natureza prévia ao Judiciário e não arbitral, participação voluntária,
+qualificação por CPF/CNPJ, acesso a todo material, oportunidade de resposta,
+composição consensual, decisão por IA que não obriga as partes, auditoria
+automática, verificador determinístico, recurso automático e auto da decisão. O texto vive em `app/terms/<versão>.md` e é
 servido por `GET /terms`; versões publicadas nunca são editadas, e o caso não
 pode ser travado se o aceite de alguma parte não puder mais ser reproduzido.
 
@@ -225,8 +238,8 @@ Variáveis do arquivo `.env`:
 | `POSTGRES_USER` | Usuário PostgreSQL do Compose |
 | `POSTGRES_PASSWORD` | Senha PostgreSQL do Compose |
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 e os links de download |
-| `PLATFORM_ED25519_PRIVATE_KEY` | Seed de 32 bytes (base64) que assina as Decision Attestations; vazia desabilita a emissão |
-| `CONTEST_WINDOW_DAYS` | Dias de contestação após a emissão da attestation, antes da execução externa |
+| `PLATFORM_ED25519_PRIVATE_KEY` | Seed de 32 bytes (base64) que assina as Decision Attestations e o auto da decisão; vazia desabilita as attestations e o auto passa a HMAC |
+| `CONTEST_WINDOW_DAYS` | Dias do prazo de recurso automático após a emissão da attestation |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
 | `AUTH_REQUIRED` | Exige conta e participação; padrão `true` e obrigatório em produção |
@@ -329,7 +342,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /cases/{id}/deadlines/{deadline_id}/complete` | Marcar o prazo como cumprido |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
-| `POST /cases/{id}/consent` | Registrar aceite individual da parte |
+| `POST /cases/{id}/consent` | Registrar aceite individual da parte, com o CPF/CNPJ dela |
 | `POST /cases/{id}/conciliation/{round}/agreement` | Aceitar ou recusar individualmente a proposta da rodada; o acordo exige os dois aceites |
 | `POST /cases/{id}/documents/text` | Adicionar texto |
 | `POST /cases/{id}/documents/pdf` | Adicionar PDF |
@@ -351,7 +364,11 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /cases/{id}/review` | Auditar decisão (assíncrono) |
 | `GET /cases/{id}/audit` | Verificar cadeia de auditoria |
 | `GET /cases/{id}/report` | Obter relatório consolidado |
-| `GET /cases/{id}/report.docx` | Baixar relatório final em Word |
+| `GET /cases/{id}/report.docx` | Baixar o relatório técnico em Word |
+| `POST /cases/{id}/decision-record` | Emitir (ou devolver) o auto da decisão vigente |
+| `GET /cases/{id}/decision-record` | Ler o auto da decisão assinado (JSON) |
+| `GET /cases/{id}/decision-record.docx` | Baixar o auto da decisão em Word |
+| `POST /decision-records/verify` | Verificar hash e assinatura de um auto |
 | `POST /cases/{id}/attestation` | Emitir a Decision Attestation assinada |
 | `GET /cases/{id}/attestation` | Ler a attestation emitida |
 | `GET /cases/{id}/attestation/nostr-anchor` | Ler a âncora pública da attestation |

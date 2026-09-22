@@ -45,8 +45,8 @@ def build_report(case: Dict) -> Dict:
         "audit_log": case.get("audit_log", []),
         "disclaimer": (
             "O sistema profere uma decisão computacional conforme o procedimento "
-            "configurado. Essa saída não constitui, por si só, sentença arbitral "
-            "ou decisão estatal; eventual eficácia jurídica depende da estrutura "
-            "contratual adotada e da legislação aplicável."
+            "configurado. Essa decisão não obriga as partes e não constitui "
+            "sentença arbitral ou decisão estatal. O documento final do "
+            "procedimento é o auto da decisão (GET /cases/{id}/decision-record)."
         ),
     }

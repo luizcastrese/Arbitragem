@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import build_audit_event
 from app.core.encryption import decrypt_chunk_text, encrypt_chunk_text
+from app.core.hashing import sha256_text
 from app.db.access_repository import deadline_to_dict, invitation_to_dict, notification_to_dict
 from app.db.models import (
     AttestationRecord,
@@ -177,12 +178,14 @@ def case_to_dict(
                 "accepted_at": case.claimant_consent_at,
                 "terms_version": case.claimant_terms_version,
                 "terms_sha256": case.claimant_terms_sha256,
+                "tax_id": case.claimant_tax_id,
             },
             "respondent": {
                 "accepted": case.respondent_consent,
                 "accepted_at": case.respondent_consent_at,
                 "terms_version": case.respondent_terms_version,
                 "terms_sha256": case.respondent_terms_sha256,
+                "tax_id": case.respondent_tax_id,
             },
             "complete": case.claimant_consent and case.respondent_consent,
         },
@@ -217,6 +220,11 @@ def case_to_dict(
         "review": _public_review(_json_load(case.review_json)),
         "attestation": _json_load(case.attestation_json),
         "nostr_anchor": _json_load(case.nostr_anchor_json),
+        "decision_record": (_json_load(case.decision_records_json) or [None])[-1],
+        "decision_records": [
+            _decision_record_summary(item)
+            for item in _json_load(case.decision_records_json) or []
+        ],
         "verification": _json_load(case.verification_json),
         "stability": _json_load(case.stability_json),
         "procedure_conclusion": case.procedure_conclusion,
@@ -234,7 +242,6 @@ def case_to_dict(
             }
             for item in case.attestation_records
         ],
-        "escrow_id": case.escrow_id,
         "contest": {
             "contested": bool(case.contested_at),
             "contested_at": case.contested_at,
@@ -261,6 +268,38 @@ def case_to_dict(
         "deadlines": [deadline_to_dict(item) for item in case.deadlines],
         "notifications": [notification_to_dict(item) for item in case.notifications],
     }
+
+
+def _decision_record_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "record_number": record.get("record_number"),
+        "record_hash": record.get("record_hash"),
+        "outcome_kind": (record.get("outcome") or {}).get("kind"),
+        "issued_at_utc": record.get("issued_at_utc"),
+        "supersedes_record_hash": record.get("supersedes_record_hash"),
+    }
+
+
+def save_decision_record(db: Session, case: Case, record: Dict[str, Any]) -> Case:
+    """Acrescenta uma versão do auto. Versões anteriores nunca são apagadas:
+    uma correção por recurso emite novo auto que aponta para o anterior."""
+    records = list(_json_load(case.decision_records_json) or [])
+    records.append(record)
+    case.decision_records_json = _json_dump(records)
+    append_audit(
+        db,
+        case,
+        "decision_record_issued",
+        {
+            "record_number": record.get("record_number"),
+            "record_hash": record.get("record_hash"),
+            "outcome_kind": (record.get("outcome") or {}).get("kind"),
+            "supersedes_record_hash": record.get("supersedes_record_hash"),
+            "signature_algorithm": record.get("signature_algorithm"),
+        },
+    )
+    db.commit()
+    return get_case(db, case.id)
 
 
 def audit_to_dict(event: AuditEvent) -> Dict[str, Any]:
@@ -530,24 +569,36 @@ def record_consent(
     accepted: bool,
     terms_version: str,
     terms_sha256: str,
+    tax_id: Optional[str] = None,
 ) -> Case:
     """Registra o aceite com a versão E o hash do texto exibido à parte. Sem o
-    hash não há como provar depois o que foi aceito."""
+    hash não há como provar depois o que foi aceito.
+
+    O CPF/CNPJ fica no caso para qualificar a parte no auto da decisão. A
+    trilha de auditoria guarda só o hash dele: basta para provar qual documento
+    foi declarado sem espalhar o número por cada evento.
+    """
     now = datetime.now(timezone.utc).isoformat()
     setattr(case, f"{party}_consent", accepted)
     setattr(case, f"{party}_consent_at", now if accepted else None)
     setattr(case, f"{party}_terms_version", terms_version if accepted else None)
     setattr(case, f"{party}_terms_sha256", terms_sha256 if accepted else None)
+    if accepted and tax_id:
+        setattr(case, f"{party}_tax_id", tax_id)
+    event_payload = {
+        "party": party,
+        "accepted": accepted,
+        "terms_version": terms_version,
+        "terms_sha256": terms_sha256,
+    }
+    declared_tax_id = getattr(case, f"{party}_tax_id") if accepted else None
+    if declared_tax_id:
+        event_payload["tax_id_sha256"] = sha256_text(declared_tax_id)
     append_audit(
         db,
         case,
         "consent_accepted" if accepted else "consent_withdrawn",
-        {
-            "party": party,
-            "accepted": accepted,
-            "terms_version": terms_version,
-            "terms_sha256": terms_sha256,
-        },
+        event_payload,
     )
     db.commit()
     return get_case(db, case.id)

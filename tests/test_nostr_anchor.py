@@ -48,7 +48,6 @@ def _audit_chain(length=3):
 def _approved_case_data():
     return {
         "id": "case-nostr-1",
-        "escrow_id": "escrow-nostr-1",
         "locked_manifest": {
             "manifest_hash": "f" * 64,
             "platform_version": "0.5.0",
@@ -117,7 +116,6 @@ def test_anchor_payload_never_contains_decision_content(attestation):
     assert set(payload.keys()) == {
         "v",
         "case_id",
-        "escrow_id",
         "attestation_hash",
         "signature",
         "signature_algorithm",

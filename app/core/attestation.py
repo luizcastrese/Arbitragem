@@ -1,6 +1,10 @@
-"""Decision Attestation: artefato assinado (Ed25519) que executores externos
-(instituição de pagamento ou contrato inteligente) consomem para liberar o
-escrow conforme a decisão do procedimento.
+"""Decision Attestation: declaração assinada (Ed25519) da decisão proferida.
+
+A decisão não obriga as partes e não há execução automática: a attestation
+existe para que qualquer terceiro — o advogado da parte, um juízo, um órgão de
+defesa do consumidor — confira offline que a decisão é aquela, que passou pela
+auditoria e que não foi alterada. Ela abre o prazo do recurso automático e é
+referenciada no auto da decisão.
 
 A attestation referencia o manifest_hash, o topo da cadeia de auditoria e os
 hashes da decisão e da revisão, tornando-a verificável offline com a chave
@@ -162,6 +166,32 @@ def _signature_matches(
         return False
 
 
+def match_signing_key(
+    signed_body: Dict[str, Any],
+    signature_b64: str,
+    public_key_b64: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
+    """Chave que confere a assinatura Ed25519 de `signed_body`, ou None.
+
+    Sem chave informada, tenta o conjunto da plataforma (ativa e aposentadas).
+    Serve às attestations e ao auto da decisão, que usam a mesma chave.
+    """
+    if public_key_b64:
+        candidates = [
+            {
+                "public_key_b64": public_key_b64,
+                "key_id": key_id_for(public_key_b64),
+                "status": "provided",
+            }
+        ]
+    else:
+        candidates = _verification_candidates()
+    for candidate in candidates:
+        if _signature_matches(candidate["public_key_b64"], signed_body, signature_b64):
+            return candidate
+    return None
+
+
 def verify_attestation(
     attestation: Dict[str, Any],
     public_key_b64: Optional[str] = None,
@@ -186,25 +216,7 @@ def verify_attestation(
     signed_body = {**unsigned, "attestation_hash": declared_hash}
     signature_b64 = attestation.get("signature", "") or ""
 
-    if public_key_b64:
-        candidates = [
-            {
-                "public_key_b64": public_key_b64,
-                "key_id": key_id_for(public_key_b64),
-                "status": "provided",
-            }
-        ]
-    else:
-        candidates = _verification_candidates()
-
-    matched: Optional[Dict[str, str]] = None
-    for candidate in candidates:
-        if _signature_matches(
-            candidate["public_key_b64"], signed_body, signature_b64
-        ):
-            matched = candidate
-            break
-
+    matched = match_signing_key(signed_body, signature_b64, public_key_b64)
     signature_valid = matched is not None
     return hash_valid and signature_valid, {
         "hash_valid": hash_valid,
@@ -292,7 +304,7 @@ def build_decision_attestation(
     audit_chain_length: int,
     private_key: Optional[Ed25519PrivateKey] = None,
 ) -> Dict[str, Any]:
-    """Monta e assina a attestation de execução para um caso decidido,
+    """Monta e assina a attestation da decisão de um caso decidido,
     auditado e aprovado. Levanta AttestationError se as pré-condições
     não forem atendidas.
     """
@@ -330,9 +342,8 @@ def build_decision_attestation(
         "attestation_schema_version": "2.0",
         "hash_algorithm": "sha256",
         "canonicalization_version": "1.0",
-        "attestation_type": "decision_execution",
+        "attestation_type": "decision_statement",
         "case_id": case_data.get("id"),
-        "escrow_id": case_data.get("escrow_id"),
         "manifest_hash": manifest.get("manifest_hash"),
         "audit_chain_head": audit_chain_head,
         "audit_chain_length": audit_chain_length,

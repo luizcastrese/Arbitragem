@@ -28,6 +28,10 @@ class Case(Base):
     claimant_terms_sha256 = Column(String, nullable=True)
     respondent_terms_version = Column(String, nullable=True)
     respondent_terms_sha256 = Column(String, nullable=True)
+    # CPF ou CNPJ informado pela própria parte na adesão; qualifica a parte
+    # no auto da decisão.
+    claimant_tax_id = Column(String, nullable=True)
+    respondent_tax_id = Column(String, nullable=True)
     # Cada parte declara que encerrou a própria apresentação. O gestor só
     # trava o conjunto depois das duas declarações.
     claimant_submission_ready = Column(Boolean, nullable=False, default=False)
@@ -46,6 +50,10 @@ class Case(Base):
     review_json = Column(Text, nullable=True)
     attestation_json = Column(Text, nullable=True)
     nostr_anchor_json = Column(Text, nullable=True)
+    # Versões emitidas do auto da decisão, da mais antiga para a vigente.
+    decision_records_json = Column(Text, nullable=True)
+    # Legado: a execução automática por escrow foi retirada. A coluna fica
+    # para não reescrever casos antigos; nada novo a preenche.
     escrow_id = Column(String, nullable=True)
     contested_at = Column(String, nullable=True)
     contested_by = Column(String, nullable=True)
