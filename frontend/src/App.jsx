@@ -24,7 +24,6 @@ import {
   Mail,
   Plus,
   RefreshCw,
-  Scale,
   Search,
   ShieldCheck,
   Sparkles,
@@ -35,6 +34,8 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE
   || (window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin)
+const UI_BASE = import.meta.env.BASE_URL || '/ui/'
+const uiAsset = (name) => `${UI_BASE}${name}`
 
 function llmReady(system) {
   if (!system) return false
@@ -555,7 +556,13 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <span className="brand-mark"><Scale size={20} /></span>
+            <img
+              className="brand-mark"
+              src={uiAsset('valinor-mark.png')}
+              alt=""
+              width="44"
+              height="44"
+            />
             <div>
               <strong>Valinor</strong>
               <small>Decisão prévia ao Judiciário</small>
@@ -611,14 +618,17 @@ export default function App() {
               documento assinado que a parte pode levar a um advogado ou ao Judiciário.
               Não é sentença judicial nem arbitral.
             </p>
-          </div>
-          <div className="trust-note">
-            <ShieldCheck size={22} />
-            <div>
-              <strong>Fração do custo, com garantias de processo</strong>
-              <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+            <div className="trust-note">
+              <ShieldCheck size={22} />
+              <div>
+                <strong>Fração do custo, com garantias de processo</strong>
+                <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+              </div>
             </div>
           </div>
+          <figure className="intro-art">
+            <img src={uiAsset('valinor-hero.webp')} alt="Valinor" />
+          </figure>
         </section>
 
         <HowItWorks />
@@ -1022,6 +1032,7 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose, terms, privacy, onO
   return (
     <section className="auth-panel">
       <div>
+        <img className="auth-logo" src={uiAsset('valinor-mark.png')} alt="Valinor" width="72" height="72" />
         <span className="section-label">Acesso protegido</span>
         <h2>{copy.title}</h2>
         <p>{copy.description}</p>
