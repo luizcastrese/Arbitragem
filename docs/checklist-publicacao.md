@@ -99,3 +99,7 @@ curl -fsS https://<domínio>/health
 O primeiro piloto deve ser fechado e de baixo volume. Amplie somente depois de
 observar entrega de e-mail, custo dos modelos, etapas inconclusivas, recursos e
 um ciclo completo de backup e restauração.
+
+Para instalar no Fly.io (uma réplica, Managed Postgres e volume de documentos),
+use [`docs/deploy-fly.md`](deploy-fly.md) e volte a este checklist para e-mail,
+backup, smoke test e operação.

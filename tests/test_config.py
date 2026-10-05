@@ -236,6 +236,36 @@ def test_production_accepts_openrouter_defaults_when_key_is_set(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_fly_mpg_postgres_url_is_rewritten_for_psycopg(monkeypatch):
+    """fly mpg attach grava postgres://; produção exige postgresql+psycopg://."""
+    from app.core.config import database_connect_args, normalize_database_url
+
+    _complete_production_environment(monkeypatch)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgres://fly-user:secret@abc.flympg.net:5432/fly-db?sslmode=require",
+    )
+    get_settings.cache_clear()
+    try:
+        url = get_settings().database_url
+        assert (
+            url == "postgresql+psycopg://fly-user:secret@abc.flympg.net:5432/fly-db"
+            "?sslmode=require"
+        )
+    finally:
+        get_settings.cache_clear()
+
+    already = "postgresql+psycopg://valinor:strong-secret@db/valinor"
+    assert normalize_database_url(already) == already
+    assert normalize_database_url("postgresql://u:p@db/app") == (
+        "postgresql+psycopg://u:p@db/app"
+    )
+    assert database_connect_args(already) == {"prepare_threshold": None}
+    assert database_connect_args("sqlite:///./data/arbitragem.db") == {
+        "check_same_thread": False
+    }
+
+
 def test_bare_openai_model_ids_are_prefixed_for_openrouter(monkeypatch):
     monkeypatch.setenv("LLM_DEFAULT_PROVIDER", "openrouter")
     monkeypatch.setenv("JUDGE_PROVIDER", "openrouter")
