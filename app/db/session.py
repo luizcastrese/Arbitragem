@@ -3,11 +3,11 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import database_connect_args, get_settings
 
 
 DATABASE_URL = get_settings().database_url
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = database_connect_args(DATABASE_URL)
 
 if DATABASE_URL.startswith("sqlite:///./"):
     Path(DATABASE_URL.removeprefix("sqlite:///./")).parent.mkdir(

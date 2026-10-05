@@ -4,7 +4,8 @@ Procedimentos que precisam existir antes do primeiro caso real. Cada seção
 descreve o que fazer, com que frequência e como conferir que funcionou.
 
 Antes do primeiro deploy, percorra também o
-[`checklist de publicação`](checklist-publicacao.md).
+[`checklist de publicação`](checklist-publicacao.md). O caminho Fly.io está em
+[`deploy-fly.md`](deploy-fly.md).
 
 ---
 

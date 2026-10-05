@@ -1,0 +1,70 @@
+# Deploy Fly.io do MVP Valinor (uma réplica).
+#
+# Substitua `app` pelo nome criado em `fly apps create` se não for "valinor".
+# `primary_region` precisa ser o mesmo da cluster Managed Postgres e do volume.
+# gru (São Paulo) tem MPG e fica perto do público-alvo LGPD; se a capacidade
+# da região estiver apertada, use outra região MPG (iad, gru, fra, …).
+#
+# Passos do operador: docs/deploy-fly.md
+
+app = "valinor"
+primary_region = "gru"
+
+# SIGTERM + 90s: o uvicorn do Dockerfile drena etapas em segundo plano
+# (--timeout-graceful-shutdown 60). O extra cobre o encerramento do processo.
+kill_signal = "SIGTERM"
+kill_timeout = 90
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENV = "production"
+  EXPOSE_API_DOCS = "false"
+  DOCUMENT_STORAGE_BACKEND = "local"
+  DOCUMENT_STORAGE_DIR = "/app/data/documents"
+  # Fly Proxy chega na Machine pela 6PN (ULA fdaa: / fc00::/7) e redes
+  # RFC1918. `private` cobre isso sem abrir X-Forwarded-For para a internet.
+  # Só use TRUSTED_PROXY_IPS=* se confirmar que a porta 8000 não é alcançável
+  # fora do proxy (ver docs/runbook-operacao.md).
+  TRUSTED_PROXY_IPS = "private"
+  # 1 GB compartilhado: duas etapas de modelo simultâneas bastam no piloto.
+  STAGE_WORKERS = "2"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Always-on de propósito: o rate limit e as etapas assíncronas vivem na
+  # memória do processo. auto_stop cortaria trabalho de modelo no meio e
+  # esvaziaria o limitador; o boot ainda roda alembic, então o cold start
+  # não é barato. shared-cpu-1x 1 GB always-on é o custo baixo do MVP.
+  # Para economizar em ambiente ocioso (não produção), mude para "stop" e
+  # min_machines_running = 0.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 80
+
+  [http_service.http_options]
+    # Cobre POST ...?wait=300 das etapas de modelo.
+    idle_timeout = 330
+
+[[http_service.checks]]
+  grace_period = "90s"
+  interval = "15s"
+  timeout = "5s"
+  method = "GET"
+  path = "/health"
+
+[mounts]
+  source = "documents"
+  destination = "/app/data/documents"
+  initial_size = "3gb"
+  snapshot_retention = 14
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

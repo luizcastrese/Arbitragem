@@ -36,6 +36,38 @@ def _env_or(name: str, fallback: str) -> str:
     return raw.strip()
 
 
+def normalize_database_url(url: str) -> str:
+    """Aceita URLs de PaaS (`postgres://`) e força o dialect psycopg3.
+
+    ``fly mpg attach`` grava ``DATABASE_URL`` no formato libpq
+    (``postgres://...``). O SQLAlchemy 2 recusa o scheme ``postgres``, e esta
+    aplicação instala só ``psycopg`` (não psycopg2), então o URL precisa ser
+    ``postgresql+psycopg://``. URLs já no dialect correto não mudam.
+    """
+    value = (url or "").strip()
+    if not value:
+        return value
+    if value.startswith("postgres://"):
+        value = "postgresql://" + value[len("postgres://") :]
+    if value.startswith("postgresql://"):
+        value = "postgresql+psycopg://" + value[len("postgresql://") :]
+    return value
+
+
+def database_connect_args(url: str) -> dict:
+    """Argumentos de conexão compatíveis com o backend.
+
+    Fly Managed Postgres anexa a URL *pooled* (PgBouncer). O psycopg3 usa
+    prepared statements por padrão, o que quebra pooling em modo transação.
+    ``prepare_threshold=None`` desliga isso sem afetar uma conexão direta.
+    """
+    if url.startswith("sqlite"):
+        return {"check_same_thread": False}
+    if url.startswith("postgresql"):
+        return {"prepare_threshold": None}
+    return {}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -429,7 +461,9 @@ def get_settings() -> Settings:
         return "text-embedding-3-small"
 
     settings = Settings(
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/arbitragem.db"),
+        database_url=normalize_database_url(
+            os.getenv("DATABASE_URL", "sqlite:///./data/arbitragem.db")
+        ),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_model=default_model,
         default_llm_model=default_model,

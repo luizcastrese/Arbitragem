@@ -196,7 +196,7 @@ O Compose publica a aplicação apenas em `127.0.0.1:8000`, inicia PostgreSQL,
 aguarda o banco ficar saudável, executa as migrações antes da API e mantém os
 documentos do backend local no volume `document_data`. Troque
 `POSTGRES_PASSWORD` no `.env` antes de usar fora da máquina local. Para publicar,
-coloque um proxy HTTPS na frente da porta local e siga o
+siga o [`deploy no Fly.io`](docs/deploy-fly.md) (Managed Postgres + volume) e o
 [`checklist de publicação`](docs/checklist-publicacao.md).
 
 Para aplicar migrações sem Docker:
