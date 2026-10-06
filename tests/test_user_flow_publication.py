@@ -180,3 +180,99 @@ def test_material_content_is_restricted_to_the_case(client, monkeypatch):
 
     anonymous = client.get(f"/cases/{case_id}/documents/{document['id']}/content")
     assert anonymous.status_code == 401
+
+
+def test_case_opens_with_the_counterparty_already_invited(client):
+    """O convite sai junto com o caso: não existe passo escondido no fim da tela."""
+    claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
+    created = client.post(
+        "/cases",
+        headers={"X-Session-Token": claimant["session_token"]},
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+            "counterparty_email": "Empresa@Example.com",
+        },
+    )
+    assert created.status_code == 201
+    case = created.json()
+    assert case["invitation"]["email"] == "empresa@example.com"
+    assert case["invitation"]["role"] == "respondent"
+    assert [item["email"] for item in case["invitations"]] == ["empresa@example.com"]
+    assert [(m["role"], m["email"]) for m in case["participants"]] == [
+        ("claimant", "cliente@example.com")
+    ]
+
+
+def test_company_can_open_the_case_as_respondent(client):
+    """Quem abre o caso escolhe de que lado está; o convite vai para o oposto."""
+    company = register_user(client, "Empresa Delta", "empresa@example.com")
+    created = client.post(
+        "/cases",
+        headers={"X-Session-Token": company["session_token"]},
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+            "creator_role": "respondent",
+            "counterparty_email": "cliente@example.com",
+        },
+    )
+    assert created.status_code == 201
+    case = created.json()
+    assert [m["role"] for m in case["participants"]] == ["respondent"]
+    assert case["invitation"]["role"] == "claimant"
+
+
+def test_counterparty_email_must_differ_from_the_creator(client):
+    claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
+    created = client.post(
+        "/cases",
+        headers={"X-Session-Token": claimant["session_token"]},
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+            "counterparty_email": "CLIENTE@example.com",
+        },
+    )
+    assert created.status_code == 422
+    assert client.get("/cases").json() == []
+
+
+def test_case_without_counterparty_email_keeps_working(client):
+    """O padrão antigo (reclamante, convite depois) segue válido."""
+    claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
+    created = client.post(
+        "/cases",
+        headers={"X-Session-Token": claimant["session_token"]},
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    )
+    assert created.status_code == 201
+    case = created.json()
+    assert "invitation" not in case
+    assert [m["role"] for m in case["participants"]] == ["claimant"]
+
+
+def test_waiting_on_names_who_must_act_next(client):
+    """O painel diz de quem é a vez a partir do próprio caso, sem esperar o gestor."""
+    claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
+    created = client.post(
+        "/cases",
+        headers={"X-Session-Token": claimant["session_token"]},
+        json={
+            "title": "Cobrança contestada",
+            "claimant": "Cliente Carlos",
+            "respondent": "Empresa Delta",
+        },
+    )
+    case = created.json()
+    assert case["waiting_on"] == ["claimant:adesao", "respondent:adesao"]
+    fetched = client.get(f"/cases/{case['id']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["waiting_on"] == ["claimant:adesao", "respondent:adesao"]

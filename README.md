@@ -132,6 +132,13 @@ Depois do lock, novos documentos não são aceitos. Cada rodada de composição
 considera as posições atualizadas das partes. A IA informa se vale continuar,
 quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 
+Na tela, o caso mostra sempre de quem é a vez: uma faixa "Sua vez" (o que
+fazer) ou "Aguardando a outra parte" (o que falta), calculada a partir de
+`waiting_on`, campo recalculado a cada resposta de `GET /cases/{id}`. A página
+se atualiza sozinha enquanto a outra parte age. O caso é aberto por uma das
+partes (`creator_role`: `claimant` ou `respondent`) e, com `counterparty_email`,
+o convite da outra parte sai junto com a criação.
+
 ## Usuários do produto
 
 - **cliente reclamante:** apresenta sua versão, documentos, pedidos e respostas

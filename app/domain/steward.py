@@ -80,7 +80,12 @@ def _has_new_material(round_data: Dict[str, Any]) -> bool:
     )
 
 
-def _waiting_parties(case_data: Dict[str, Any]) -> List[str]:
+def waiting_parties(case_data: Dict[str, Any]) -> List[str]:
+    """Quem ainda precisa agir, como "papel:ato[:documento]".
+
+    Também alimenta o painel ("sua vez" / "aguardando"), por isso é lido do caso
+    a cada resposta e não da última condução gravada do gestor.
+    """
     waiting: List[str] = []
     consent = case_data.get("consent") or {}
     submission = case_data.get("submission") or {}
@@ -153,7 +158,7 @@ def legal_actions(case_data: Dict[str, Any]) -> Dict[str, Any]:
         return _pack(
             ["wait"],
             [],
-            _waiting_parties(case_data) or ["Ainda falta ato de parte antes da trava."],
+            waiting_parties(case_data) or ["Ainda falta ato de parte antes da trava."],
         )
 
     if conclusion == "agreement" or status == "agreement":
@@ -178,7 +183,7 @@ def legal_actions(case_data: Dict[str, Any]) -> Dict[str, Any]:
                 [],
                 [
                     item
-                    for item in _waiting_parties(case_data)
+                    for item in waiting_parties(case_data)
                     if item.endswith(":composicao")
                 ]
                 or ["Cada parte precisa dizer sua posição nesta rodada."],
@@ -247,7 +252,7 @@ def steward_context(case_data: Dict[str, Any]) -> Dict[str, Any]:
             "both_waived": _both_waived(round_data) if round_data else False,
             "has_new_material": _has_new_material(round_data) if round_data else False,
         },
-        "waiting_on": _waiting_parties(case_data),
+        "waiting_on": waiting_parties(case_data),
     }
 
 
