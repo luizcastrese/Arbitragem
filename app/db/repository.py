@@ -24,6 +24,7 @@ from app.db.models import (
     LLMExecution,
 )
 from app.domain.legacy import public_decision_view, public_review_view
+from app.domain.steward import waiting_parties
 from app.documents.storage import (
     StorageError,
     build_content_key,
@@ -166,7 +167,7 @@ def case_to_dict(
     if case.decision_runs:
         first = min(case.decision_runs, key=lambda item: item.version or 0)
         original_decision = _public_decision(_json_load(first.payload_json))
-    return {
+    data = {
         "id": case.id,
         "title": case.title,
         "claimant": case.claimant,
@@ -203,6 +204,7 @@ def case_to_dict(
             ),
         },
         "steward": _json_load(case.steward_json),
+        "waiting_on": [],
         "contradictory": {
             "complete": bool(documents) and not pending_documents,
             "pending_document_ids": pending_documents,
@@ -268,6 +270,8 @@ def case_to_dict(
         "deadlines": [deadline_to_dict(item) for item in case.deadlines],
         "notifications": [notification_to_dict(item) for item in case.notifications],
     }
+    data["waiting_on"] = waiting_parties(data)
+    return data
 
 
 def _decision_record_summary(record: Dict[str, Any]) -> Dict[str, Any]:

@@ -1354,6 +1354,15 @@ def create_case(
     if settings.auth_required and not user:
         raise HTTPException(status_code=401, detail="Entre para criar um caso")
     _require_verified_email(user)
+    if (
+        payload.counterparty_email
+        and user
+        and payload.counterparty_email.strip().lower() == user.email
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="O e-mail da outra parte precisa ser diferente do seu.",
+        )
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -1369,11 +1378,23 @@ def create_case(
         manager_token_hash=_hash_token(credentials["manager"]),
     )
     if user:
-        # Quem abre o caso entra como parte reclamante. O gestor é a IA.
-        add_member(db, case.id, user.id, "claimant")
+        # Quem abre o caso entra na parte que declarou. O gestor é a IA.
+        add_member(db, case.id, user.id, payload.creator_role)
+        db.expire_all()
+        case = get_case(db, case.id)
+    invitation = None
+    if payload.counterparty_email:
+        counterparty_role = (
+            "respondent" if payload.creator_role == "claimant" else "claimant"
+        )
+        invitation = _issue_invitation(
+            db, case, payload.counterparty_email, counterparty_role, user
+        )
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)
+    if invitation:
+        result["invitation"] = invitation
     if not settings.auth_required:
         result["access_credentials"] = credentials
     return result
@@ -1401,15 +1422,23 @@ def invite_participant(
     _require_procedure_party(db, case, x_actor_token)
     actor = get_user_by_token(db, x_actor_token)
     try:
-        token, invitation = create_invitation(
-            db,
-            case.id,
-            payload.email,
-            payload.role,
-            actor.id if actor else None,
-        )
+        return _issue_invitation(db, case, payload.email, payload.role, actor)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _issue_invitation(db: Session, case, email: str, role: str, actor) -> dict:
+    """Cria o convite, registra na auditoria e entrega por e-mail.
+
+    Serve ao convite avulso e ao que sai junto com a abertura do caso.
+    """
+    token, invitation = create_invitation(
+        db,
+        case.id,
+        email,
+        role,
+        actor.id if actor else None,
+    )
     append_audit(
         db,
         case,
@@ -1427,10 +1456,10 @@ def invite_participant(
     create_notification(
         db,
         case.id,
-        payload.role,
+        role,
         "invitation_created",
         "Convite para participar do procedimento",
-        f"Você foi convidado para atuar como {payload.role} no caso {case.title}.",
+        f"Você foi convidado para atuar como {role} no caso {case.title}.",
     )
     return _invitation_delivery_payload(invitation, token, case)
 

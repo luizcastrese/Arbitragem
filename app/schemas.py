@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -70,6 +70,16 @@ class CreateCaseRequest(BaseModel):
     title: str = Field(min_length=3, max_length=200)
     claimant: str = Field(min_length=2, max_length=200)
     respondent: str = Field(min_length=2, max_length=200)
+    # Quem abre o caso é uma das partes. O padrão segue sendo o reclamante, mas
+    # a empresa que traz o cliente para o procedimento abre como reclamada.
+    creator_role: Literal["claimant", "respondent"] = "claimant"
+    # Com o e-mail da outra parte o convite sai junto com o caso, sem um passo
+    # separado que a pessoa precisaria descobrir.
+    counterparty_email: Optional[str] = Field(
+        default=None,
+        max_length=254,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
 
 
 class AddDocumentRequest(BaseModel):

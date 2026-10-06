@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
@@ -70,44 +70,53 @@ function invitationDeliveryMessage(data) {
   return `Convite registrado para ${data.email}. Em produção o link só chega por e-mail.`
 }
 
+// As cinco etapas que a pessoa realmente percorre. Os status internos do
+// procedimento (travar manifesto, organizar, auditar, assinar) rodam por trás
+// delas e aparecem no painel técnico, não aqui.
 const steps = [
   {
-    key: 'draft',
-    title: 'Documentos',
-    short: 'Reúna o material',
-    description: 'Adicione contratos, mensagens, comprovantes e alegações.'
+    key: 'consent',
+    title: 'Adesão',
+    short: 'As duas partes entram',
+    description: 'Cada parte aceita as mesmas regras. A outra parte recebe o convite por e-mail.'
   },
   {
-    key: 'locked',
-    title: 'Regras fixadas',
-    short: 'Proteja o processo',
-    description: 'O sistema registra os documentos e impede alterações posteriores.'
+    key: 'evidence',
+    title: 'Provas e resposta',
+    short: 'Cada lado vê e responde',
+    description: 'Cada parte apresenta seu material; a outra vê e responde antes de ele valer para a decisão.'
   },
   {
-    key: 'conciliation',
-    title: 'Composição',
-    short: 'Negocie em rodadas',
-    description: 'A IA conduz novas tentativas enquanto houver espaço útil para acordo.'
+    key: 'agreement',
+    title: 'Tentativa de acordo',
+    short: 'A IA propõe termos',
+    description: 'A IA propõe um acordo em rodadas. Só vale se as duas partes aceitarem.'
   },
   {
-    key: 'organized',
-    title: 'Fatos organizados',
-    short: 'Separe fatos e alegações',
-    description: 'O conteúdo é estruturado para facilitar a análise.'
+    key: 'decision',
+    title: 'Decisão',
+    short: 'Decisão e auditoria',
+    description: 'Sem acordo, a IA decide citando as provas e um segundo modelo audita. A decisão não obriga ninguém.'
   },
   {
-    key: 'decided',
-    title: 'Decisão da IA',
-    short: 'Julgue o conflito',
-    description: 'A IA aplica as regras fixadas e profere uma decisão fundamentada.'
-  },
-  {
-    key: 'reviewed',
-    title: 'Auditoria',
-    short: 'Valide a decisão',
-    description: 'Uma segunda IA procura falhas, contradições e desvios das regras.'
+    key: 'record',
+    title: 'Auto da decisão',
+    short: 'Documento final assinado',
+    description: 'O documento final do procedimento, que você pode levar a um advogado ou ao Judiciário.'
   }
 ]
+
+function caseProgress(caseData) {
+  const status = String(caseData?.status || '')
+  const complete = Boolean(caseData?.decision_record)
+  let index
+  if (status === 'draft' && !caseData?.consent?.complete) index = 0
+  else if (status === 'draft') index = 1
+  else if (['locking', 'locked', 'conciliation'].includes(status)) index = 2
+  else if (['organized', 'decided', 'processing_organize', 'processing_decision', 'processing_review'].includes(status)) index = 3
+  else index = 4
+  return { index, complete }
+}
 
 function userHasRole(caseData, user, role) {
   if (!user) return false
@@ -117,20 +126,20 @@ function userHasRole(caseData, user, role) {
 }
 
 const statusLabels = {
-  draft: 'Recebendo documentos',
-  locked: 'Documentos protegidos',
-  locking: 'Travando o manifesto',
-  conciliation: 'Composição avaliada',
+  draft: 'Recebendo provas',
+  locked: 'Provas fechadas',
+  locking: 'Fechando o conjunto de provas',
+  conciliation: 'Tentativa de acordo',
   organized: 'Fatos organizados',
   processing_organize: 'Organizando o registro',
   processing_decision: 'Decisão em processamento',
   decided: 'Decisão proferida',
-  processing_review: 'Auditoria automática',
-  reviewed: 'Auditoria automática concluída',
-  agreement: 'Encerrado por acordo bilateral',
-  processing_attestation: 'Emitindo attestation',
-  attested: 'Attestation emitida',
-  processing_appeal: 'Recurso automático',
+  processing_review: 'Auditoria da decisão em andamento',
+  reviewed: 'Decisão auditada',
+  agreement: 'Encerrado por acordo',
+  processing_attestation: 'Assinando a decisão',
+  attested: 'Decisão assinada',
+  processing_appeal: 'Recurso automático em andamento',
   contested: 'Recurso automático apresentado',
   inconclusive: 'Decisão inconclusiva',
   inadmissible: 'Caso inadmissível',
@@ -159,18 +168,15 @@ export default function App() {
   const [user, setUser] = useState(null)
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState('register')
-  const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
+  const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '')
   const [terms, setTerms] = useState(null)
   const [privacy, setPrivacy] = useState(null)
   const [authNotice, setAuthNotice] = useState('')
   const [showAccount, setShowAccount] = useState(false)
   const [legalView, setLegalView] = useState(null)
-
-  const currentStage = useMemo(
-    () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
-    [caseData]
-  )
+  const [booted, setBooted] = useState(false)
+  const [openedInvite, setOpenedInvite] = useState(null)
 
   async function request(path, options = {}) {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -334,12 +340,18 @@ export default function App() {
   }
 
   async function acceptPendingInvite() {
-    await run('Vinculando o convite à sua conta...', () => request('/invitations/accept', {
+    const accepted = await run('Vinculando o convite à sua conta...', () => request('/invitations/accept', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: inviteToken })
     }))
+    if (!accepted?.case_id) return
+    // Conta recém-criada ainda não tem casos carregados: abrir o caso do convite
+    // e tirar o banner, que não faz mais sentido depois do aceite.
     window.history.replaceState({}, '', window.location.pathname)
+    setInviteToken('')
+    await loadCases(accepted.case_id)
+    setStatus('Convite aceito. Leia os termos, informe seu CPF ou CNPJ e aceite para entrar no procedimento.')
   }
 
   async function loadCase(caseId) {
@@ -357,6 +369,12 @@ export default function App() {
     setCases(items)
     const target = selectId || caseData?.id || items[0]?.id
     if (target) await loadCase(target)
+    else {
+      // Conta nova, sem nenhum caso: levar direto ao formulário em vez de
+      // deixar o painel carregando para sempre.
+      setCaseData(null)
+      setShowCreate(true)
+    }
   }
 
   useEffect(() => {
@@ -397,15 +415,44 @@ export default function App() {
           if (items[0]) await loadCase(items[0].id)
           else setShowCreate(true)
         } catch (err) {
-          if (/401|sessão|entre/i.test(err.message)) setShowAuth(true)
+          if (/401|sessão|entre/i.test(err.message)) setShowAuth(Boolean(inviteToken))
           else throw err
         }
       } catch (err) {
         setError(err.message)
+      } finally {
+        setBooted(true)
       }
     }
     bootstrap()
   }, [])
+
+  // A outra parte age em outra sessão: sem isto, "aguardando" só mudaria quando
+  // esta pessoa recarregasse a página. O refresh é silencioso e não mexe nos
+  // rascunhos dos formulários.
+  async function refreshCase() {
+    if (!caseData?.id || busy) return
+    try {
+      const fresh = await request(`/cases/${caseData.id}`)
+      const signature = (item) => [
+        item.status,
+        item.updated_at,
+        (item.audit_log || []).length,
+        (item.waiting_on || []).join(',')
+      ].join('|')
+      setCaseData((current) => (
+        current?.id === fresh.id && signature(current) !== signature(fresh) ? fresh : current
+      ))
+    } catch { /* a próxima tentativa ou o botão de atualizar resolvem */ }
+  }
+
+  useEffect(() => {
+    if (!user || !caseData?.id || caseData.decision_record) return undefined
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshCase()
+    }, 15000)
+    return () => clearInterval(timer)
+  }, [user, caseData?.id, caseData?.decision_record, busy])
 
   // As etapas que chamam modelos respondem 202 e seguem em segundo plano: uma
   // decisão pode levar minutos e nenhum gateway segura a conexão até lá. O
@@ -464,7 +511,7 @@ export default function App() {
       const stewardBusy = result?.steward?.state === 'processing'
         || String(result?.status || '').startsWith('processing')
       if (stewardBusy && caseData?.id) await settleCase(caseData.id)
-      setStatus('Pronto. O gestor segue com o que for da conta dele.')
+      setStatus('Feito. A IA gestora conduz o que vem a seguir.')
       return result
     } catch (err) {
       setError(err.message)
@@ -479,6 +526,7 @@ export default function App() {
     event.preventDefault()
     const formElement = event.currentTarget
     const form = new FormData(formElement)
+    const counterpartyEmail = String(form.get('counterparty_email') || '').trim()
     setBusy(true)
     setError('')
 
@@ -489,13 +537,26 @@ export default function App() {
         body: JSON.stringify({
           title: form.get('title'),
           claimant: form.get('claimant'),
-          respondent: form.get('respondent')
+          respondent: form.get('respondent'),
+          creator_role: form.get('creator_role') || 'claimant',
+          counterparty_email: counterpartyEmail || null
         })
       })
       delete data.access_credentials
       formElement.reset()
+      setOpenedInvite(data.invitation
+        ? {
+            caseId: data.id,
+            notice: invitationDeliveryMessage(data.invitation),
+            link: data.invitation.acceptance_token
+              ? `${window.location.origin}/ui/?invite=${data.invitation.acceptance_token}`
+              : ''
+          }
+        : null)
       await loadCases(data.id)
-      setStatus('Caso criado. Agora adicione os documentos da disputa.')
+      setStatus(data.invitation
+        ? 'Caso criado e convite enviado. Enquanto a outra parte não entra, você já pode aceitar os termos e apresentar seu material.'
+        : 'Caso criado. Convide a outra parte para começar o procedimento.')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -545,6 +606,11 @@ export default function App() {
   }
 
   function startNewCase() {
+    if (!user) {
+      setAuthMode('register')
+      setShowAuth(true)
+      return
+    }
     setShowCreate(true)
     setError('')
     setStatus('')
@@ -562,10 +628,12 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <span className={`system-status ${llmReady(system) ? 'online' : 'demo'}`}>
-              <span />
-              {llmReady(system) ? 'Chave de IA configurada' : 'Modo demonstração'}
-            </span>
+            {system && !llmReady(system) && (
+              <span className="system-status demo">
+                <span />
+                Modo demonstração
+              </span>
+            )}
             {user ? (
               <div className="account-menu-wrap">
                 <span className="account-chip">
@@ -598,32 +666,40 @@ export default function App() {
       </header>
 
       <main className="page">
-        <section className="intro">
-          <div>
-            <span className="eyebrow">Antes do processo, uma decisão fundamentada</span>
-            <h1>Resolva a disputa em dias — não em anos de processo.</h1>
-            <p>
-              A Valinor é uma etapa voluntária, anterior ao Judiciário, para conflitos documentais
-              entre empresa e cliente. As duas partes apresentam suas provas, a IA busca um acordo
-              e, se não houver, profere uma decisão fundamentada — verificada de forma determinística,
-              auditada por um segundo modelo e, se contestada, reexaminada por recurso automático.
-              A decisão não obriga ninguém: o que sai do procedimento é o auto da decisão, um
-              documento assinado que a parte pode levar a um advogado ou ao Judiciário.
-              Não é sentença judicial nem arbitral.
-            </p>
-          </div>
-          <div className="trust-note">
-            <ShieldCheck size={22} />
+        {!user && (
+          <section className="intro">
             <div>
-              <strong>Fração do custo, com garantias de processo</strong>
-              <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+              <span className="eyebrow">Antes do processo, uma decisão fundamentada</span>
+              <h1>Resolva a disputa em dias — não em anos de processo.</h1>
+              <p>
+                A Valinor é uma etapa voluntária, anterior ao Judiciário, para conflitos documentais
+                entre empresa e cliente. As duas partes apresentam suas provas, a IA busca um acordo
+                e, se não houver, profere uma decisão fundamentada — verificada de forma determinística,
+                auditada por um segundo modelo e, se contestada, reexaminada por recurso automático.
+                A decisão não obriga ninguém: o que sai do procedimento é o auto da decisão, um
+                documento assinado que a parte pode levar a um advogado ou ao Judiciário.
+                Não é sentença judicial nem arbitral.
+              </p>
+              {booted && (
+                <div className="intro-cta">
+                  <button className="button primary" onClick={() => { setAuthMode('register'); setShowAuth(true) }}>
+                    Criar conta e começar <ArrowRight size={17} />
+                  </button>
+                  <button className="button ghost" onClick={() => { setAuthMode('login'); setShowAuth(true) }}>
+                    Já tenho conta
+                  </button>
+                </div>
+              )}
             </div>
-          </div>
-        </section>
-
-        <HowItWorks />
-
-        <AudienceValue />
+            <div className="trust-note">
+              <ShieldCheck size={22} />
+              <div>
+                <strong>Fração do custo, com garantias de processo</strong>
+                <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+              </div>
+            </div>
+          </section>
+        )}
 
         {authNotice && (
           <div className="invite-banner">
@@ -690,14 +766,14 @@ export default function App() {
           </div>
         )}
 
-        {!llmReady(system) && (
+        {system && !llmReady(system) && (
           <div className="demo-notice">
             <Info size={19} />
             <div>
               <strong>Você está no modo demonstração</strong>
               <span>
-                Sem uma chave OpenRouter, o agente julgador não profere decisão de mérito
-                e o caso permanece inconclusivo.
+                Neste ambiente a IA de decisão não está ativa: o caso percorre o rito, mas
+                termina como inconclusivo, sem decisão de mérito.
               </span>
             </div>
           </div>
@@ -707,101 +783,128 @@ export default function App() {
           <Message type="error" text={error} />
         )}
 
-        <div className="workspace">
-          <aside className="case-sidebar">
-            <div className="sidebar-heading">
-              <div>
-                <span className="section-label">Seus casos</span>
-                <strong>{cases.length} {cases.length === 1 ? 'disputa' : 'disputas'}</strong>
-              </div>
-              <button className="icon-button" onClick={() => loadCases()} title="Atualizar casos">
-                <RefreshCw size={16} />
-              </button>
-            </div>
-
-            <div className="case-list">
-              {cases.map((item) => (
-                <button
-                  key={item.id}
-                  className={`case-item ${caseData?.id === item.id && !showCreate ? 'active' : ''}`}
-                  onClick={() => loadCase(item.id)}
-                >
-                  <span className="case-icon"><FolderOpen size={17} /></span>
-                  <span className="case-item-content">
-                    <strong>{item.title}</strong>
-                    <small>{item.claimant} × {item.respondent}</small>
-                    <em>
-                      {item.ai_result_status === 'unavailable'
-                        ? 'Análise automática indisponível'
-                        : statusLabels[item.status]}
-                      {' · '}{item.documents_count} doc.
-                    </em>
-                  </span>
-                </button>
-              ))}
-              {!cases.length && (
-                <div className="empty-cases">
-                  <FolderOpen size={24} />
-                  <span>Seus casos aparecerão aqui.</span>
+        {user && (
+          <div className="workspace">
+            <aside className="case-sidebar">
+              <div className="sidebar-heading">
+                <div>
+                  <span className="section-label">Seus casos</span>
+                  <strong>{cases.length} {cases.length === 1 ? 'disputa' : 'disputas'}</strong>
                 </div>
+                <button className="icon-button" onClick={() => loadCases()} title="Atualizar casos">
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+
+              <div className="case-list">
+                {cases.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`case-item ${caseData?.id === item.id && !showCreate ? 'active' : ''}`}
+                    onClick={() => loadCase(item.id)}
+                  >
+                    <span className="case-icon"><FolderOpen size={17} /></span>
+                    <span className="case-item-content">
+                      <strong>{item.title}</strong>
+                      <small>{item.claimant} × {item.respondent}</small>
+                      <em>
+                        {item.ai_result_status === 'unavailable'
+                          ? 'Análise automática indisponível'
+                          : statusLabels[item.status]}
+                        {' · '}{item.documents_count} doc.
+                      </em>
+                    </span>
+                  </button>
+                ))}
+                {!cases.length && (
+                  <div className="empty-cases">
+                    <FolderOpen size={24} />
+                    <span>Seus casos aparecerão aqui.</span>
+                  </div>
+                )}
+              </div>
+
+              <details className="sidebar-help">
+                <summary><Sparkles size={17} /> Termos usados aqui</summary>
+                <dl>
+                  <dt>Gestor</dt>
+                  <dd>A IA que conduz o procedimento. Não decide o mérito nem fala por nenhuma parte.</dd>
+                  <dt>Ciência e resposta</dt>
+                  <dd>A outra parte vê cada material e responde, ou dispensa a resposta, antes de ele valer.</dd>
+                  <dt>Admitido</dt>
+                  <dd>O gestor aceitou o material para uso na decisão, depois da ciência e da resposta.</dd>
+                  <dt>Auto da decisão</dt>
+                  <dd>O documento final e assinado: acordo ou decisão, com as partes e o percurso.</dd>
+                </dl>
+              </details>
+            </aside>
+
+            <div className="main-content">
+              {showCreate ? (
+                <CreateCase busy={busy} onSubmit={createCase} onCancel={
+                  cases.length ? () => setShowCreate(false) : null
+                } />
+              ) : caseData ? (
+                <CaseWorkspace
+                  caseData={caseData}
+                  busy={busy}
+                  status={status}
+                  error={error}
+                  documentName={documentName}
+                  documentText={documentText}
+                  documentParty={documentParty}
+                  materialType={materialType}
+                  documentPurpose={documentPurpose}
+                  setDocumentName={setDocumentName}
+                  setDocumentText={setDocumentText}
+                  setDocumentParty={setDocumentParty}
+                  setMaterialType={setMaterialType}
+                  setDocumentPurpose={setDocumentPurpose}
+                  evidenceResponses={evidenceResponses}
+                  setEvidenceResponses={setEvidenceResponses}
+                  addTextDocument={addTextDocument}
+                  uploadPdf={uploadPdf}
+                  run={run}
+                  request={request}
+                  actorHeaders={actorHeaders}
+                  claimantResponse={claimantResponse}
+                  respondentResponse={respondentResponse}
+                  conciliationUpdate={conciliationUpdate}
+                  setClaimantResponse={setClaimantResponse}
+                  setRespondentResponse={setRespondentResponse}
+                  setConciliationUpdate={setConciliationUpdate}
+                  terms={terms}
+                  privacy={privacy}
+                  showTechnical={showTechnical}
+                  setShowTechnical={setShowTechnical}
+                  user={user}
+                  openedInvite={openedInvite}
+                  onRefresh={refreshCase}
+                />
+              ) : (
+                <LoadingState />
               )}
             </div>
-
-            <div className="sidebar-help">
-              <Sparkles size={17} />
-              <p>
-                <strong>Como funciona?</strong>
-                Você avança uma etapa por vez. O sistema sempre destaca a próxima ação.
-              </p>
-            </div>
-          </aside>
-
-          <div className="main-content">
-            {showCreate ? (
-              <CreateCase busy={busy} onSubmit={createCase} onCancel={
-                cases.length ? () => setShowCreate(false) : null
-              } />
-            ) : caseData ? (
-              <CaseWorkspace
-                caseData={caseData}
-                currentStage={currentStage}
-                busy={busy}
-                status={status}
-                error={error}
-                documentName={documentName}
-                documentText={documentText}
-                documentParty={documentParty}
-                materialType={materialType}
-                documentPurpose={documentPurpose}
-                setDocumentName={setDocumentName}
-                setDocumentText={setDocumentText}
-                setDocumentParty={setDocumentParty}
-                setMaterialType={setMaterialType}
-                setDocumentPurpose={setDocumentPurpose}
-                evidenceResponses={evidenceResponses}
-                setEvidenceResponses={setEvidenceResponses}
-                addTextDocument={addTextDocument}
-                uploadPdf={uploadPdf}
-                run={run}
-                request={request}
-                actorHeaders={actorHeaders}
-                claimantResponse={claimantResponse}
-                respondentResponse={respondentResponse}
-                conciliationUpdate={conciliationUpdate}
-                setClaimantResponse={setClaimantResponse}
-                setRespondentResponse={setRespondentResponse}
-                setConciliationUpdate={setConciliationUpdate}
-                terms={terms}
-                privacy={privacy}
-                showTechnical={showTechnical}
-                setShowTechnical={setShowTechnical}
-                user={user}
-              />
-            ) : (
-              <LoadingState />
-            )}
           </div>
-        </div>
+        )}
+
+        {booted && !user && (
+          <>
+            <HowItWorks />
+            <details className="about-valinor">
+              <summary>Por que usar a Valinor e o que cada pessoa faz</summary>
+              <AudienceValue />
+            </details>
+          </>
+        )}
+
+        {user && (
+          <details className="about-valinor">
+            <summary>Como a Valinor funciona e por que usar</summary>
+            <HowItWorks />
+            <AudienceValue />
+          </details>
+        )}
 
         {legalView && (
           <LegalReader
@@ -1019,8 +1122,14 @@ const AUTH_COPY = {
 
 function AuthPanel({ mode, setMode, busy, onSubmit, onClose, terms, privacy, onOpenLegal }) {
   const copy = AUTH_COPY[mode] || AUTH_COPY.login
+  const panel = useRef(null)
+  // O painel abre logo abaixo do botão que o chamou, mas em telas baixas isso
+  // fica fora da vista; trazê-lo evita a impressão de que o clique não fez nada.
+  useEffect(() => {
+    panel.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  }, [])
   return (
-    <section className="auth-panel">
+    <section className="auth-panel" ref={panel}>
       <div>
         <span className="section-label">Acesso protegido</span>
         <h2>{copy.title}</h2>
@@ -1135,6 +1244,8 @@ function PasswordResetPanel({ busy, onSubmit, onCancel }) {
 }
 
 function CreateCase({ busy, onSubmit, onCancel }) {
+  const [role, setRole] = useState('claimant')
+  const other = role === 'claimant' ? 'a empresa' : 'o cliente'
   return (
     <section className="surface create-surface">
       <div className="surface-header">
@@ -1142,11 +1253,45 @@ function CreateCase({ busy, onSubmit, onCancel }) {
         <div>
           <span className="section-label">Comece por aqui</span>
           <h2>Qual reclamação será encaminhada?</h2>
-          <p>Identifique o cliente reclamante e a empresa que responderá ao caso.</p>
+          <p>
+            Diga quem é quem e o e-mail da outra parte: o convite sai junto com o caso,
+            e o procedimento só avança quando as duas partes entram.
+          </p>
         </div>
       </div>
 
       <form onSubmit={onSubmit} className="guided-form">
+        <fieldset className="role-picker full">
+          <legend>Você abre o caso como…</legend>
+          <label className={role === 'claimant' ? 'selected' : ''}>
+            <input
+              type="radio"
+              name="creator_role"
+              value="claimant"
+              checked={role === 'claimant'}
+              onChange={() => setRole('claimant')}
+            />
+            <UserRound size={18} />
+            <span>
+              <strong>Cliente (reclamante)</strong>
+              <small>Estou reclamando de uma empresa.</small>
+            </span>
+          </label>
+          <label className={role === 'respondent' ? 'selected' : ''}>
+            <input
+              type="radio"
+              name="creator_role"
+              value="respondent"
+              checked={role === 'respondent'}
+              onChange={() => setRole('respondent')}
+            />
+            <Building2 size={18} />
+            <span>
+              <strong>Empresa (reclamada)</strong>
+              <small>Quero resolver uma reclamação com um cliente.</small>
+            </span>
+          </label>
+        </fieldset>
         <label className="field full">
           <span>Nome do caso</span>
           <small>Use um título curto que ajude você a encontrá-lo depois.</small>
@@ -1167,13 +1312,21 @@ function CreateCase({ busy, onSubmit, onCancel }) {
           <small>Empresa responsável por responder à reclamação.</small>
           <input name="respondent" placeholder="Ex.: Empresa Alfa" required minLength="2" />
         </label>
+        <label className="field full">
+          <span>E-mail d{other} (recomendado)</span>
+          <small>
+            Enviamos o convite agora, com a explicação das regras. Pode ficar em branco e ser
+            informado depois, mas o caso não avança sem a outra parte.
+          </small>
+          <input name="counterparty_email" type="email" placeholder={role === 'claimant' ? 'juridico@empresa.com' : 'cliente@email.com'} />
+        </label>
 
         <div className="form-actions">
           {onCancel && (
             <button type="button" className="button ghost" onClick={onCancel}>Cancelar</button>
           )}
           <button className="button primary" disabled={busy}>
-            Criar caso e adicionar documentos <ArrowRight size={17} />
+            Criar caso e convidar a outra parte <ArrowRight size={17} />
           </button>
         </div>
       </form>
@@ -1181,9 +1334,162 @@ function CreateCase({ busy, onSubmit, onCancel }) {
   )
 }
 
+const TERMINAL_STATUSES = [
+  'agreement', 'reviewed', 'attested', 'contested',
+  'inconclusive', 'inadmissible', 'invalidated', 'system_failure'
+]
+
+const PARTY_ROLES = ['claimant', 'respondent']
+
+function plural(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`
+}
+
+// De quem é a vez, lido do próprio caso: `waiting_on` vem recalculado a cada
+// resposta da API ("papel:ato[:documento]"), não da última condução do gestor.
+function describeTurn(caseData, roles) {
+  if (!roles.claimant && !roles.respondent) return null
+  const status = String(caseData.status || '')
+  if (caseData.decision_record) {
+    return {
+      tone: 'done',
+      title: 'Procedimento concluído',
+      detail: 'O auto da decisão está pronto abaixo. Cada parte decide se cumpre o resultado ou se leva o auto a um advogado ou ao Judiciário.'
+    }
+  }
+  if (status === 'system_failure') {
+    return {
+      tone: 'attention',
+      title: 'O procedimento parou por uma falha do sistema',
+      detail: 'O registro do caso foi preservado. Nenhuma decisão de mérito foi produzida.'
+    }
+  }
+  if (status.startsWith('processing') || status === 'locking' || caseData.steward?.state === 'processing') {
+    return {
+      tone: 'working',
+      title: statusLabels[status] || 'A IA está conduzindo o procedimento',
+      detail: 'Você não precisa fazer nada agora. Esta tela se atualiza sozinha quando a etapa terminar.'
+    }
+  }
+  if (TERMINAL_STATUSES.includes(status)) {
+    return {
+      tone: 'working',
+      title: 'Emitindo o auto da decisão',
+      detail: 'Falta só o documento final. Ele aparece aqui assim que for emitido.'
+    }
+  }
+
+  const participants = caseData.participants || []
+  const pendingInvites = (caseData.invitations || []).filter((item) => item.status === 'pending')
+  const missing = PARTY_ROLES.filter(
+    (role) => !participants.some((participant) => participant.role === role)
+  )
+  const name = (party) => partyLabel(party, caseData)
+
+  const groups = {}
+  for (const entry of caseData.waiting_on || []) {
+    const [party, kind] = entry.split(':')
+    if (missing.includes(party)) continue
+    const key = `${party}:${kind}`
+    groups[key] = { party, kind, count: (groups[key]?.count || 0) + 1 }
+  }
+
+  const mineLabel = {
+    adesao: () => 'Aceitar os termos do procedimento e informar seu CPF ou CNPJ',
+    apresentacao: () => 'Enviar seu material e clicar em “Concluí minha apresentação”',
+    ciencia: (n) => `Confirmar ciência de ${plural(n, 'material enviado', 'materiais enviados')} pela outra parte`,
+    resposta: (n) => `Responder a ${plural(n, 'material', 'materiais')}, ou dispensar a resposta`,
+    composicao: () => 'Dar sua posição na rodada de acordo'
+  }
+  const theirLabel = {
+    adesao: (who) => `${who} aceitar os termos do procedimento`,
+    apresentacao: (who) => `${who} concluir a apresentação do material`,
+    ciencia: (who, n) => `${who} confirmar ciência de ${plural(n, 'material', 'materiais')}`,
+    resposta: (who, n) => `${who} responder a ${plural(n, 'material', 'materiais')}`,
+    composicao: (who) => `${who} dar a posição na rodada de acordo`
+  }
+
+  const mine = []
+  const theirs = []
+  for (const group of Object.values(groups)) {
+    if (roles[group.party]) mine.push(mineLabel[group.kind]?.(group.count))
+    else theirs.push(theirLabel[group.kind]?.(name(group.party), group.count))
+  }
+  for (const role of missing) {
+    if (roles[role]) continue
+    const invite = pendingInvites.find((item) => item.role === role)
+    theirs.unshift(
+      invite
+        ? `${name(role)} entrar no caso (convite enviado para ${invite.email})`
+        : `${name(role)} ser convidada: informe o e-mail abaixo`
+    )
+  }
+  if (status === 'conciliation' && !mine.length) {
+    const rounds = caseData.conciliation_rounds || []
+    const latest = rounds[rounds.length - 1] || {}
+    const agreement = latest.agreement || { responses: {} }
+    const pending = PARTY_ROLES.some(
+      (role) => roles[role] && !agreement.responses?.[role]?.accepted
+    )
+    if (latest.possible_terms?.length && !agreement.complete && pending) {
+      mine.push('Ler a proposta de acordo e, se concordar, aceitá-la')
+    }
+  }
+
+  const clean = (items) => items.filter(Boolean)
+  const mineItems = clean(mine)
+  const theirItems = clean(theirs)
+  if (mineItems.length) {
+    return {
+      tone: 'you',
+      title: 'Sua vez',
+      items: mineItems,
+      after: theirItems.length ? `Depois, falta: ${theirItems.join('; ')}.` : ''
+    }
+  }
+  if (theirItems.length) {
+    return {
+      tone: 'wait',
+      title: 'Aguardando a outra parte',
+      items: theirItems,
+      detail: 'Você não precisa fazer nada agora. Esta tela se atualiza sozinha.'
+    }
+  }
+  return {
+    tone: 'working',
+    title: 'A IA gestora está avançando o procedimento',
+    detail: caseData.steward?.reason || 'Nada pendente de você neste momento.'
+  }
+}
+
+function TurnBanner({ caseData, roles, onRefresh, busy }) {
+  const turn = describeTurn(caseData, roles)
+  if (!turn) return null
+  const Icon = { you: ArrowRight, wait: Clock3, working: RefreshCw, done: CheckCircle2, attention: AlertTriangle }[turn.tone]
+  return (
+    <section className={`turn-banner ${turn.tone}`} aria-live="polite">
+      <span className="turn-icon"><Icon size={20} /></span>
+      <div>
+        <strong>{turn.title}</strong>
+        {turn.items?.length > 0 && (
+          <ul>
+            {turn.items.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        )}
+        {turn.detail && <p>{turn.detail}</p>}
+        {turn.after && <p>{turn.after}</p>}
+      </div>
+      {['wait', 'working', 'you'].includes(turn.tone) && (
+        <button type="button" className="icon-button" onClick={onRefresh} disabled={busy} title="Atualizar agora">
+          <RefreshCw size={16} />
+        </button>
+      )}
+    </section>
+  )
+}
+
 function CaseWorkspace({
   caseData,
-  currentStage,
   busy,
   status,
   error,
@@ -1214,14 +1520,33 @@ function CaseWorkspace({
   privacy,
   showTechnical,
   setShowTechnical,
-  user
+  user,
+  openedInvite,
+  onRefresh
 }) {
   const unavailable = hasUnavailableAI(caseData)
-  const displayedStage = unavailable ? 2 : currentStage
+  const progress = caseProgress(caseData)
   const roles = {
     claimant: userHasRole(caseData, user, 'claimant'),
     respondent: userHasRole(caseData, user, 'respondent')
   }
+  const canConduct = roles.claimant || roles.respondent
+  // O seletor "Quem está apresentando?" só oferece os papéis desta conta; se o
+  // estado ficou em outro (padrão: reclamante), o envio fica desabilitado.
+  useEffect(() => {
+    if (!roles[documentParty]) {
+      const own = PARTY_ROLES.find((role) => roles[role])
+      if (own) setDocumentParty(own)
+    }
+  }, [roles.claimant, roles.respondent, documentParty])
+  const participants = caseData.participants || []
+  const everyoneJoined = PARTY_ROLES.every(
+    (role) => participants.some((participant) => participant.role === role)
+  )
+  const showInviteCard = canConduct && !everyoneJoined
+  const stageLabel = progress.complete
+    ? 'Concluído'
+    : `Etapa ${progress.index + 1} de ${steps.length}`
 
   return (
     <>
@@ -1237,14 +1562,44 @@ function CaseWorkspace({
           <p>{caseData.claimant} <span>contra</span> {caseData.respondent}</p>
         </div>
         <div className="progress-summary">
-          <strong>{Math.min(displayedStage + 1, steps.length)} de {steps.length}</strong>
-          <span>{unavailable ? 'etapas antes do bloqueio técnico' : 'etapas alcançadas'}</span>
+          <strong>{stageLabel}</strong>
+          <span>{progress.complete ? 'auto da decisão emitido' : steps[progress.index].title}</span>
         </div>
       </section>
 
+      <TurnBanner caseData={caseData} roles={roles} onRefresh={onRefresh} busy={busy} />
+
+      {status && <Message type="success" text={status} />}
+      {error && <Message type="error" text={error} />}
+
+      {caseData.decision_record && (
+        <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
+      )}
+
+      {showInviteCard && (
+        <section className="invite-card">
+          <div className="card-title-row">
+            <div>
+              <span className="section-label">Passo 1 · Traga a outra parte</span>
+              <h3>O procedimento só avança com as duas partes</h3>
+            </div>
+          </div>
+          <ParticipantsBlock
+            key={caseData.id}
+            caseData={caseData}
+            busy={busy}
+            run={run}
+            request={request}
+            actorHeaders={actorHeaders}
+            user={user}
+            openedInvite={openedInvite}
+          />
+        </section>
+      )}
+
       {caseData.documents.length > 0 && <CaseBrief caseData={caseData} />}
 
-      <ProcessSteps currentStage={displayedStage} blockedByAI={unavailable} />
+      <ProcessSteps progress={progress} blockedByAI={unavailable} />
 
       {caseData.status !== 'reviewed'
         && caseData.status !== 'attested'
@@ -1281,9 +1636,6 @@ function CaseWorkspace({
         />
       )}
 
-      {status && <Message type="success" text={status} />}
-      {error && <Message type="error" text={error} />}
-
       {caseData.documents.length > 0 && (
         <DocumentsCard
           caseData={caseData}
@@ -1299,19 +1651,6 @@ function CaseWorkspace({
         />
       )}
 
-      <OperationsCard
-        caseData={caseData}
-        busy={busy}
-        run={run}
-        request={request}
-        actorHeaders={actorHeaders}
-        user={user}
-      />
-
-      {caseData.decision_record && (
-        <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
-      )}
-
       {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
@@ -1319,6 +1658,17 @@ function CaseWorkspace({
       {(caseData.conciliation || caseData.organized || caseData.decision || caseData.review) && (
         <AnalysisDetails caseData={caseData} />
       )}
+
+      <OperationsCard
+        caseData={caseData}
+        busy={busy}
+        run={run}
+        request={request}
+        actorHeaders={actorHeaders}
+        user={user}
+        showParticipants={!showInviteCard}
+        openedInvite={openedInvite}
+      />
 
       <TechnicalDetails
         caseData={caseData}
@@ -1384,6 +1734,11 @@ function DecisionRecordCard({ caseData, busy, run }) {
           <FileText size={16} /> Baixar o auto assinado (JSON)
         </button>
       </div>
+      <ol className="record-next">
+        <li><strong>Baixe o auto.</strong> É o documento final, assinado, com as partes, o percurso e o resultado.</li>
+        <li><strong>Cada parte decide</strong> se cumpre o que foi acordado ou decidido.</li>
+        <li><strong>Se quiser ir além,</strong> leve o auto a um advogado: ele serve de base para uma ação ou reclamação.</li>
+      </ol>
       <div className="blocking-note">
         <Scale size={17} />
         <span>
@@ -1398,13 +1753,16 @@ function DecisionRecordCard({ caseData, busy, run }) {
   )
 }
 
-function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
-  const [inviteLink, setInviteLink] = useState('')
-  const [inviteNotice, setInviteNotice] = useState('')
-  const deadlines = caseData.deadlines || []
+function ParticipantsBlock({ caseData, busy, run, request, actorHeaders, user, openedInvite }) {
+  const initial = openedInvite?.caseId === caseData.id ? openedInvite : null
+  const [inviteLink, setInviteLink] = useState(initial?.link || '')
+  const [inviteNotice, setInviteNotice] = useState(initial?.notice || '')
   const participants = caseData.participants || []
   const pendingInvites = (caseData.invitations || []).filter((item) => item.status === 'pending')
   const canConduct = userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
+  const missingRole = PARTY_ROLES.find(
+    (role) => !participants.some((participant) => participant.role === role)
+  ) || 'respondent'
 
   async function invite(event) {
     event.preventDefault()
@@ -1437,6 +1795,57 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
       return data
     })
   }
+
+  return (
+    <div className="operation-block">
+      <div className="operation-title"><Mail size={18} /><strong>Participantes</strong></div>
+      <p>Convide a outra parte pelo e-mail que ela vai usar na conta. O papel limita as ações disponíveis.</p>
+      {participants.map((participant) => (
+        <span className="participant-row" key={`${participant.email}-${participant.role}`}>
+          <strong>{participant.display_name}</strong> {roleLabel(participant.role)} · {participant.email}
+        </span>
+      ))}
+      {pendingInvites.map((invitation) => (
+        <span className="participant-row pending-invite" key={invitation.id}>
+          <span>
+            <strong>{invitation.email}</strong>
+            <small>{roleLabel(invitation.role)} · convite pendente</small>
+          </span>
+          {canConduct && (
+            <button
+              type="button"
+              className="button ghost compact"
+              disabled={busy}
+              onClick={() => resendInvite(invitation)}
+            >
+              Reenviar
+            </button>
+          )}
+        </span>
+      ))}
+      {canConduct && <form className="compact-form" onSubmit={invite}>
+        <input name="email" type="email" required placeholder="E-mail da parte" />
+        <select name="role" defaultValue={missingRole} key={missingRole}>
+          <option value="claimant">Cliente reclamante</option>
+          <option value="respondent">Empresa reclamada</option>
+        </select>
+        <button className="button primary" disabled={busy}>Gerar convite</button>
+      </form>}
+      {inviteNotice && <small className="invite-notice">{inviteNotice}</small>}
+      {inviteLink && (
+        <label className="invite-link">
+          <span>Link protegido para envio</span>
+          <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
+        </label>
+      )}
+      {!canConduct && <small>Somente as partes podem criar novos convites.</small>}
+    </div>
+  )
+}
+
+function OperationsCard({ caseData, busy, run, request, actorHeaders, user, showParticipants, openedInvite }) {
+  const deadlines = caseData.deadlines || []
+  const canConduct = userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
 
   async function addDeadline(event) {
     event.preventDefault()
@@ -1476,7 +1885,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
     <section className="operations-card">
       <div className="card-title-row">
         <div>
-          <span className="section-label">Acesso, agenda e entrega</span>
+          <span className="section-label">Participantes, prazos e relatório</span>
           <h3>Condução pelas partes</h3>
         </div>
         <button className="button secondary" onClick={downloadReport} disabled={busy}>
@@ -1485,53 +1894,22 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
       </div>
 
       <div className="operations-grid">
-        <div className="operation-block">
-          <div className="operation-title"><Mail size={18} /><strong>Participantes</strong></div>
-          <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
-          {participants.map((participant) => (
-            <span className="participant-row" key={`${participant.email}-${participant.role}`}>
-              <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
-            </span>
-          ))}
-          {pendingInvites.map((invitation) => (
-            <span className="participant-row pending-invite" key={invitation.id}>
-              <span>
-                <strong>{invitation.email}</strong>
-                <small>{invitation.role} · convite pendente</small>
-              </span>
-              {canConduct && (
-                <button
-                  type="button"
-                  className="button ghost compact"
-                  disabled={busy}
-                  onClick={() => resendInvite(invitation)}
-                >
-                  Reenviar
-                </button>
-              )}
-            </span>
-          ))}
-          {canConduct && <form className="compact-form" onSubmit={invite}>
-            <input name="email" type="email" required placeholder="E-mail da parte" />
-            <select name="role" defaultValue="respondent">
-              <option value="claimant">Cliente reclamante</option>
-              <option value="respondent">Empresa reclamada</option>
-            </select>
-            <button className="button primary" disabled={busy}>Gerar convite</button>
-          </form>}
-          {inviteNotice && <small className="invite-notice">{inviteNotice}</small>}
-          {inviteLink && (
-            <label className="invite-link">
-              <span>Link protegido para envio</span>
-              <input value={inviteLink} readOnly onFocus={(event) => event.target.select()} />
-            </label>
-          )}
-          {!canConduct && <small>Somente as partes podem criar novos convites.</small>}
-        </div>
+        {showParticipants && (
+          <ParticipantsBlock
+            key={caseData.id}
+            caseData={caseData}
+            busy={busy}
+            run={run}
+            request={request}
+            actorHeaders={actorHeaders}
+            user={user}
+            openedInvite={openedInvite}
+          />
+        )}
 
-        <div className="operation-block">
-          <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
-          <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
+        <details className="operation-block deadlines-block" open={deadlines.length > 0}>
+          <summary className="operation-title"><Clock3 size={18} /><strong>Prazos (opcional)</strong></summary>
+          <p>Combine datas para manifestação, documentos ou negociação. A situação de cada prazo é calculada automaticamente e as partes são notificadas.</p>
           <div className="deadline-list">
             {deadlines.map((deadline) => (
               <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
@@ -1551,7 +1929,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
             <input name="due_at" type="datetime-local" required />
             <button className="button secondary" disabled={busy}>Adicionar prazo</button>
           </form>}
-        </div>
+        </details>
       </div>
     </section>
   )
@@ -1630,7 +2008,9 @@ function BriefPoint({ label, text }) {
   )
 }
 
-function ProcessSteps({ currentStage, blockedByAI = false }) {
+function ProcessSteps({ progress, blockedByAI = false }) {
+  const { index: currentStage, complete: processComplete } = progress
+  const reached = processComplete ? steps.length : currentStage
   return (
     <section className="process-card">
       <div className="process-heading">
@@ -1641,19 +2021,24 @@ function ProcessSteps({ currentStage, blockedByAI = false }) {
         <span>
           {blockedByAI
             ? 'Análise interrompida com segurança'
-            : `${Math.round(((currentStage + 1) / steps.length) * 100)}% concluído`}
+            : processComplete
+              ? 'Concluído'
+              : `${reached} de ${steps.length} etapas concluídas`}
         </span>
       </div>
       <div className="progress-bar">
-        <span style={{ width: `${((currentStage + 1) / steps.length) * 100}%` }} />
+        <span style={{ width: `${Math.max(4, (reached / steps.length) * 100)}%` }} />
       </div>
       <div className="steps">
         {steps.map((step, index) => {
-          const processComplete = currentStage === steps.length - 1
           const done = index < currentStage || processComplete
           const active = index === currentStage && !processComplete
           return (
-            <div className={`step ${done ? 'done' : ''} ${active ? 'active' : ''}`} key={step.key}>
+            <div
+              className={`step ${done ? 'done' : ''} ${active ? 'active' : ''}`}
+              key={step.key}
+              aria-current={active ? 'step' : undefined}
+            >
               <span className="step-marker">
                 {done ? <Check size={15} /> : active ? index + 1 : <Circle size={11} />}
               </span>
@@ -1700,33 +2085,33 @@ function NextAction({
   const actionContent = {
     draft: {
       icon: <Upload size={22} />,
-      label: 'Etapa atual',
-      title: 'Adicione os documentos da disputa',
-      description: 'Inclua tudo que ajuda a entender o acordo, o que aconteceu e o que cada parte pede.'
+      label: 'Sua etapa',
+      title: 'Aceite os termos e apresente seu material',
+      description: 'Inclua contratos, mensagens, comprovantes e o que cada parte pede. A outra parte vê tudo e responde antes de qualquer material valer para a decisão.'
     },
     locked: {
       icon: <Handshake size={22} />,
-      label: 'Próximo passo',
-      title: 'Verifique se existe espaço para acordo',
-      description: 'A IA buscará interesses convergentes e indicará conciliação, mediação ou continuidade do julgamento.'
+      label: 'Automático',
+      title: 'A IA vai abrir a tentativa de acordo',
+      description: 'As provas estão fechadas e ninguém pode mais acrescentar material. Não há nada a clicar: a IA busca pontos em comum e propõe termos.'
     },
     conciliation: {
-      icon: <Search size={22} />,
-      label: 'Sem acordo ou após a tentativa',
-      title: 'Prepare o caso para julgamento',
-      description: 'Se a composição não encerrar a disputa, o sistema organiza fatos, pedidos e evidências.'
+      icon: <Handshake size={22} />,
+      label: 'Sua etapa',
+      title: 'Tentativa de acordo',
+      description: 'A IA propôs termos a partir do que as duas partes apresentaram. Dê sua posição e aceite a proposta se concordar. Sem acordo, o procedimento segue para a decisão.'
     },
     organized: {
       icon: <Gavel size={22} />,
-      label: 'Próximo passo',
-      title: 'Solicite a decisão da IA',
-      description: 'O agente julgador aplicará o framework Comercial Equilibrado às evidências do caso.'
+      label: 'Automático',
+      title: 'A IA vai proferir a decisão',
+      description: 'Não houve acordo. A IA aplica os critérios do procedimento às provas admitidas e fundamenta a decisão. Nada a clicar.'
     },
     decided: {
       icon: <ShieldCheck size={22} />,
-      label: 'Último passo',
-      title: 'Audite a decisão',
-      description: 'Uma segunda IA verificará fundamentos, evidências, contradições e aderência às regras.'
+      label: 'Automático',
+      title: 'Uma segunda IA vai auditar a decisão',
+      description: 'A auditoria procura falhas, contradições e desvios das regras. Depois dela, o auto da decisão é emitido. Nada a clicar.'
     }
   }[caseData.status]
 
@@ -1851,8 +2236,8 @@ function NextAction({
             <div>
               <strong>Quando a sua parte não tiver mais nada a apresentar</strong>
               <span>
-                O gestor é uma IA. Ele trava o conjunto quando as duas partes
-                declaram a apresentação encerrada e o contraditório fecha.
+                O gestor é uma IA. Ele fecha o conjunto de provas quando as duas partes
+                declaram a apresentação encerrada e todas as respostas foram dadas.
                 Nenhuma das partes aperta esse botão pela outra.
               </span>
             </div>
@@ -1887,7 +2272,7 @@ function NextAction({
               {' '}Empresa: {caseData.submission?.respondent?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
               {' '}{!caseData.consent?.complete ? 'A adesão das duas partes ainda está pendente. ' : ''}
               {!caseData.contradictory?.complete
-                ? 'Cada material precisa de ciência e resposta antes de o gestor travar.'
+                ? 'Cada material precisa de ciência e resposta antes de o gestor fechar o conjunto de provas.'
                 : 'O gestor admite o material sozinho, depois da resposta.'}
             </span>
           </div>
@@ -1924,7 +2309,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
         <ShieldCheck size={20} />
         <div>
           <strong>Adesão ao procedimento</strong>
-          <span>Cada parte deve aceitar as mesmas regras antes do procedimento Valinor.</span>
+          <span>Cada parte aceita as mesmas regras antes de o procedimento começar.</span>
         </div>
       </div>
       <div className="consent-grid">
@@ -2191,13 +2576,45 @@ function DocumentsCard({
   setEvidenceResponses,
   roles
 }) {
+  // Quem recebe vários materiais confirma a ciência de uma vez: o ato continua
+  // sendo da própria parte e cada ciência segue registrada por documento.
+  const toAcknowledge = locked
+    ? []
+    : documents.filter((item) => roles[item.counterparty] && !item.acknowledged_at)
   return (
     <section className="surface documents-card">
       <div className="card-title-row">
         <div>
-          <span className="section-label">Material analisado</span>
+          <span className="section-label">Material apresentado</span>
           <h3>{documents.length} {documents.length === 1 ? 'documento' : 'documentos'} no caso</h3>
         </div>
+        {toAcknowledge.length > 1 && (
+          <button
+            type="button"
+            className="button primary"
+            disabled={busy}
+            onClick={() => run(
+              'Registrando a sua ciência...',
+              async () => {
+                for (const item of toAcknowledge) {
+                  await request(
+                    `/cases/${caseData.id}/documents/${item.id}/acknowledge`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...actorHeaders(caseData.id, item.counterparty)
+                      },
+                      body: JSON.stringify({ party: item.counterparty })
+                    }
+                  )
+                }
+              }
+            )}
+          >
+            <Check size={15} /> Ciente de todos ({toAcknowledge.length})
+          </button>
+        )}
         {locked && <span className="locked-badge"><LockKeyhole size={14} /> Conjunto protegido</span>}
       </div>
       <div className="document-list">
@@ -2278,7 +2695,7 @@ function DocumentEvidenceItem({
 
   function respondToEvidence(responseStatus) {
     return run(
-      'Registrando a manifestação da contraparte...',
+      'Registrando a sua manifestação...',
       () => request(
         `/cases/${caseData.id}/documents/${document.id}/respond`,
         {
@@ -2339,13 +2756,13 @@ function DocumentEvidenceItem({
             {readError && <p className="document-read-error">{readError}</p>}
 
             <div className="evidence-timeline">
-              <EvidenceState done={Boolean(document.disclosed_at)} label="Disponibilizado" />
+              <EvidenceState done={Boolean(document.disclosed_at)} label="Mostrado à outra parte" />
               <EvidenceState done={Boolean(document.acknowledged_at)} label="Ciência confirmada" />
               <EvidenceState
                 done={document.response_status !== 'pending'}
                 label={responseStatusLabel(document.response_status)}
               />
-              <EvidenceState done={document.admitted} label="Admitido para decisão" />
+              <EvidenceState done={document.admitted} label="Admitido pelo gestor" />
             </div>
 
             {!locked && roles[document.counterparty] && !document.acknowledged_at && (
@@ -2367,7 +2784,7 @@ function DocumentEvidenceItem({
                   )
                 )}
               >
-                Confirmar ciência da contraparte
+                Estou ciente deste material
               </button>
             )}
 
@@ -2404,7 +2821,7 @@ function DocumentEvidenceItem({
                     disabled={busy}
                     onClick={() => respondToEvidence('waived')}
                   >
-                    Renunciar à resposta
+                    Sem resposta a dar
                   </button>
                 </div>
               </div>
@@ -2456,7 +2873,7 @@ function Conclusion({ caseData }) {
         {inconclusive || !approvedFinal ? <AlertTriangle size={28} /> : <CheckCircle2 size={28} />}
       </div>
       <div className="conclusion-copy">
-        <span className="section-label">Decisão do procedimento autônomo</span>
+        <span className="section-label">Resultado do procedimento</span>
         <h2>
           {unavailable
             ? 'A análise automática não foi concluída'
@@ -2481,7 +2898,7 @@ function Conclusion({ caseData }) {
         <Fact
           label="Verificação"
           value={verification.valid ? 'Válida' : verification.valid === false ? 'Reprovada' : 'Pendente'}
-          note="Verificador determinístico do manifesto"
+          note="Conferência automática: a decisão só cita material do caso"
         />
         <Fact
           label="Auditoria"
@@ -2491,12 +2908,12 @@ function Conclusion({ caseData }) {
         <Fact
           label="Resultado"
           value={outcomeLabel(decision.outcome)}
-          note={`Framework ${decision.framework_id || decision.framework || ''} ${(decision.execution || {}).model || ''}`}
+          note={`Critérios: ${decision.framework_id || decision.framework || ''} ${(decision.execution || {}).model || ''}`}
         />
       </div>
       {decision.material_findings?.length > 0 && (
         <div className="findings-block">
-          <strong>Findings</strong>
+          <strong>Fatos apurados</strong>
           {decision.material_findings.map((finding) => (
             <article key={finding.finding_id} className="finding-item">
               <span>{finding.status}</span>
@@ -2533,7 +2950,7 @@ function Conclusion({ caseData }) {
       {caseData.model_independence_satisfied === false && (
         <div className="human-review-note">
           <AlertTriangle size={18} />
-          <span>Julgador e revisor não estão com políticas independentes nesta instância. O modo de demonstração não emite attestation de mérito.</span>
+          <span>Julgador e revisor não estão com políticas independentes nesta instância. O modo de demonstração não emite assinatura de mérito.</span>
         </div>
       )}
     </section>
@@ -2740,8 +3157,8 @@ function procedureLabel(caseData) {
   if (attestation && attestation.signature && verification.valid && review.approved && (!stability || stability.stable !== false)) {
     return 'Decisão aprovada'
   }
-  if (review && !review.approved) return 'Auditoria automática'
-  if (verification && verification.valid === false) return 'Verificação determinística'
+  if (caseData.review && !review.approved) return 'Auditoria automática'
+  if (caseData.verification && verification.valid === false) return 'Verificação determinística'
   return statusLabels[caseData.status] || caseData.status
 }
 
@@ -2768,6 +3185,10 @@ function conciliationPathLabel(path) {
     adjudication: 'Seguir para julgamento',
     human_screening: 'Composição automática não concluída'
   }[path] || 'Não informado'
+}
+
+function roleLabel(role) {
+  return { claimant: 'cliente', respondent: 'empresa' }[role] || role
 }
 
 function partyLabel(party, caseData) {
