@@ -604,7 +604,8 @@ export default function App() {
             <h1>Resolva a disputa em dias — não em anos de processo.</h1>
             <p>
               A Valinor é uma etapa voluntária, anterior ao Judiciário, para conflitos documentais
-              entre empresa e cliente. As duas partes apresentam suas provas, a IA busca um acordo
+              de serviços digitais entre empresas e profissionais: entrega, atraso, pagamento,
+              escopo e aceite. As duas partes apresentam suas provas, a IA busca um acordo
               e, se não houver, profere uma decisão fundamentada — verificada de forma determinística,
               auditada por um segundo modelo e, se contestada, reexaminada por recurso automático.
               A decisão não obriga ninguém: o que sai do procedimento é o auto da decisão, um
@@ -827,7 +828,7 @@ function HowItWorks() {
   const steps = [
     {
       title: 'As duas partes aderem',
-      text: 'Empresa e cliente aceitam as mesmas regras, com convite e consentimento registrados.'
+      text: 'Reclamante e reclamada aceitam as mesmas regras, com convite e consentimento registrados.'
     },
     {
       title: 'Provas com contraditório',
@@ -906,8 +907,8 @@ function AudienceValue() {
       <div className="audience-cards">
         <article className="audience-card company">
           <span className="audience-icon"><Building2 size={22} /></span>
-          <span className="audience-kicker">Para a empresa reclamada</span>
-          <h3>Reduza o custo por reclamação sem transformar eficiência em parcialidade.</h3>
+          <span className="audience-kicker">Para a parte reclamada</span>
+          <h3>Responda à disputa com custo baixo, sem transformar eficiência em parcialidade.</h3>
           <ul>
             <li>Diminui horas operacionais e jurídicas consumidas em cada disputa.</li>
             <li>Centraliza documentos, defesa e histórico em um único procedimento.</li>
@@ -918,10 +919,10 @@ function AudienceValue() {
 
         <article className="audience-card claimant">
           <span className="audience-icon"><UserRound size={22} /></span>
-          <span className="audience-kicker">Para o cliente reclamante</span>
-          <h3>Busque uma solução de menor custo sem perder voz, acesso ou proteção.</h3>
+          <span className="audience-kicker">Para a parte reclamante</span>
+          <h3>Contratante ou prestador: busque uma solução de menor custo sem perder voz nem acesso.</h3>
           <ul>
-            <li>Evita que o custo de discutir o direito torne a reclamação inviável.</li>
+            <li>Evita que o custo de discutir o contrato torne a cobrança ou a reclamação inviável.</li>
             <li>Apresenta sua versão, documentos, pedidos e respostas às propostas.</li>
             <li>Entende por que cada acordo foi sugerido e pode aceitar ou recusar.</li>
             <li>Vê quais provas sustentam a decisão, em vez de receber apenas um resultado.</li>
@@ -951,18 +952,18 @@ function AudienceValue() {
         </div>
         <div className="journey-columns">
           <Journey
-            title="Empresa reclamada"
+            title="Parte reclamada"
             steps={[
-              'Convida o cliente com explicação clara do procedimento.',
+              'Recebe o convite e conhece as regras antes de aceitar participar.',
               'Apresenta defesa, documentos e limites possíveis para acordo.',
               'Responde a cada rodada com aceite, recusa ou contraproposta.',
               'Recebe o auto da decisão, decide se cumpre e guarda a trilha para o jurídico.'
             ]}
           />
           <Journey
-            title="Cliente reclamante"
+            title="Parte reclamante"
             steps={[
-              'Conhece as regras e decide se aceita participar.',
+              'Abre o caso e convida a outra parte com explicação clara do procedimento.',
               'Apresenta fatos, documentos, pedido e resultado esperado.',
               'Avalia cada proposta e informa o que aceita ou deseja alterar.',
               'Recebe o auto da decisão, que pode usar como base para ir ao Judiciário.'
@@ -1142,7 +1143,7 @@ function CreateCase({ busy, onSubmit, onCancel }) {
         <div>
           <span className="section-label">Comece por aqui</span>
           <h2>Qual reclamação será encaminhada?</h2>
-          <p>Identifique o cliente reclamante e a empresa que responderá ao caso.</p>
+          <p>Identifique quem abre o caso e a outra parte do contrato, que responderá a ele.</p>
         </div>
       </div>
 
@@ -1158,14 +1159,14 @@ function CreateCase({ busy, onSubmit, onCancel }) {
           />
         </label>
         <label className="field">
-          <span>Cliente ou reclamante</span>
-          <small>Quem apresentou a reclamação ou iniciou o processo.</small>
-          <input name="claimant" placeholder="Ex.: Maria Oliveira" required minLength="2" />
+          <span>Reclamante</span>
+          <small>Quem abre o caso: o contratante que questiona a entrega ou o prestador que cobra o pagamento.</small>
+          <input name="claimant" placeholder="Ex.: Estúdio Beta Ltda." required minLength="2" />
         </label>
         <label className="field">
-          <span>Empresa reclamada</span>
-          <small>Empresa responsável por responder à reclamação.</small>
-          <input name="respondent" placeholder="Ex.: Empresa Alfa" required minLength="2" />
+          <span>Reclamada</span>
+          <small>A outra parte do contrato, que responderá ao caso.</small>
+          <input name="respondent" placeholder="Ex.: Comercial Alfa Ltda." required minLength="2" />
         </label>
 
         <div className="form-actions">
@@ -1514,8 +1515,8 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
           {canConduct && <form className="compact-form" onSubmit={invite}>
             <input name="email" type="email" required placeholder="E-mail da parte" />
             <select name="role" defaultValue="respondent">
-              <option value="claimant">Cliente reclamante</option>
-              <option value="respondent">Empresa reclamada</option>
+              <option value="claimant">Reclamante</option>
+              <option value="respondent">Reclamada</option>
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
           </form>}
@@ -1545,8 +1546,8 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
             <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
             <select name="assigned_to" defaultValue="all">
               <option value="all">Todas as pessoas</option>
-              <option value="claimant">Cliente</option>
-              <option value="respondent">Empresa</option>
+              <option value="claimant">Reclamante</option>
+              <option value="respondent">Reclamada</option>
             </select>
             <input name="due_at" type="datetime-local" required />
             <button className="button secondary" disabled={busy}>Adicionar prazo</button>
@@ -1592,18 +1593,18 @@ function CaseBrief({ caseData }) {
         <BriefPoint
           label={`Posição de ${caseData.claimant}`}
           text={[...customerResponses, ...claimantPurposes][0]
-            || 'A posição do cliente ainda não foi resumida nos materiais.'}
+            || 'A posição da reclamante ainda não foi resumida nos materiais.'}
         />
         <BriefPoint
           label={`Posição de ${caseData.respondent}`}
           text={[...companyResponses, ...respondentPurposes][0]
-            || 'A posição da empresa ainda não foi resumida nos materiais.'}
+            || 'A posição da reclamada ainda não foi resumida nos materiais.'}
         />
         <BriefPoint
           label="Questão central"
           text={
             caseData.organized?.disputed_facts?.[0]
-            || 'Comparar o pedido do cliente e a defesa da empresa usando apenas os materiais admitidos.'
+            || 'Comparar o pedido da reclamante e a defesa da reclamada usando apenas os materiais admitidos.'
           }
         />
       </div>
@@ -1779,8 +1780,8 @@ function NextAction({
                 value={documentParty}
                 onChange={(event) => setDocumentParty(event.target.value)}
               >
-                {roles.claimant && <option value="claimant">Cliente reclamante</option>}
-                {roles.respondent && <option value="respondent">Empresa reclamada</option>}
+                {roles.claimant && <option value="claimant">Reclamante</option>}
+                {roles.respondent && <option value="respondent">Reclamada</option>}
                 {!roles.claimant && !roles.respondent && <option value="">Sem papel de parte</option>}
               </select>
             </label>
@@ -1883,8 +1884,8 @@ function NextAction({
           <div className="blocking-note">
             <AlertTriangle size={17} />
             <span>
-              Cliente: {caseData.submission?.claimant?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
-              {' '}Empresa: {caseData.submission?.respondent?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
+              Reclamante: {caseData.submission?.claimant?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
+              {' '}Reclamada: {caseData.submission?.respondent?.ready ? 'apresentação encerrada' : 'ainda pode incluir material'}.
               {' '}{!caseData.consent?.complete ? 'A adesão das duas partes ainda está pendente. ' : ''}
               {!caseData.contradictory?.complete
                 ? 'Cada material precisa de ciência e resposta antes de o gestor travar.'
@@ -1906,13 +1907,13 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
   const entries = [
     {
       party: 'claimant',
-      label: 'Cliente reclamante',
+      label: 'Reclamante',
       name: caseData.claimant,
       consent: caseData.consent?.claimant
     },
     {
       party: 'respondent',
-      label: 'Empresa reclamada',
+      label: 'Reclamada',
       name: caseData.respondent,
       consent: caseData.consent?.respondent
     }
@@ -1942,7 +1943,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
                 className="tax-id-input"
                 value={taxIds[entry.party]}
                 onChange={(event) => setTaxIds({ ...taxIds, [entry.party]: event.target.value })}
-                placeholder={entry.party === 'claimant' ? 'Seu CPF ou CNPJ' : 'CNPJ da empresa'}
+                placeholder="CPF ou CNPJ da parte"
                 aria-label={`CPF ou CNPJ de ${entry.name}`}
                 maxLength={20}
               />
@@ -2037,11 +2038,11 @@ function PartyPosition({
   setDraft
 }) {
   const recorded = latest.party_positions?.[party]
-  const label = party === 'claimant' ? 'cliente reclamante' : 'empresa reclamada'
+  const label = party === 'claimant' ? 'parte reclamante' : 'parte reclamada'
   if (recorded) {
     return (
       <p className="consent-note">
-        Posição do {label} registrada
+        Posição da {label} registrada
         {recorded.waived ? ' (nada a acrescentar).' : '.'}
       </p>
     )
@@ -2049,7 +2050,7 @@ function PartyPosition({
   return (
     <div className="evidence-response">
       <label className="mini-field">
-        <span>Posição do {label} nesta rodada</span>
+        <span>Posição da {label} nesta rodada</span>
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -2623,7 +2624,7 @@ function ConciliationHistory({ rounds }) {
       </div>
       <div className="list-block warning">
         <strong>Participação voluntária</strong>
-        <p>As propostas só formam acordo quando empresa e cliente manifestam concordância.</p>
+        <p>As propostas só formam acordo quando as duas partes manifestam concordância.</p>
       </div>
     </article>
   )
@@ -2771,8 +2772,8 @@ function conciliationPathLabel(path) {
 }
 
 function partyLabel(party, caseData) {
-  if (party === 'claimant') return `${caseData.claimant} (cliente)`
-  if (party === 'respondent') return `${caseData.respondent} (empresa)`
+  if (party === 'claimant') return `${caseData.claimant} (reclamante)`
+  if (party === 'respondent') return `${caseData.respondent} (reclamada)`
   return 'parte não identificada'
 }
 

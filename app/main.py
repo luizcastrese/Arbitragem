@@ -157,7 +157,7 @@ from app.reports.decision_record import (
     verify_record,
 )
 from app.reports.decision_record_docx import build_decision_record_docx
-from app.domain.frameworks import list_frameworks
+from app.domain.frameworks import framework_kind, list_frameworks
 from app.domain.legacy import public_decision_view
 from app.domain.steward import decide_steward_action, steward_actuator_token
 from app.domain.procedure import (
@@ -280,8 +280,9 @@ app = FastAPI(
     version="0.6.0",
     description=(
         "Procedimento privado, voluntário e prévio ao Judiciário para disputas "
-        "entre empresas e clientes. A IA busca o acordo e, sem ele, profere uma "
-        "decisão fundamentada que não obriga as partes. A saída é o auto da "
+        "de serviços digitais entre empresas e profissionais. A IA busca o "
+        "acordo e, sem ele, profere uma decisão fundamentada que não obriga as "
+        "partes. A saída é o auto da "
         "decisão: documento assinado e verificável que pode servir de base a "
         "uma ação judicial. O resultado não é sentença judicial nem arbitral."
     ),
@@ -698,7 +699,7 @@ def _lock_manifest_now(db: Session, case):
     if not case_data["consent"]["complete"]:
         raise HTTPException(
             status_code=409,
-            detail="Cliente e empresa precisam aceitar o procedimento antes da trava",
+            detail="Reclamante e reclamada precisam aceitar o procedimento antes da trava",
         )
     if not case_data["contradictory"]["complete"]:
         pending = ", ".join(case_data["contradictory"]["pending_document_ids"])
@@ -3051,7 +3052,7 @@ def contest_case(
     if actor_role is None:
         raise HTTPException(
             status_code=403,
-            detail="Apenas o reclamante ou a empresa reclamada podem contestar",
+            detail="Apenas a parte reclamante ou a parte reclamada podem contestar",
         )
 
     case_data = case_to_dict(case)
@@ -3320,7 +3321,10 @@ def get_appeals(
 
 @app.get("/frameworks")
 def get_frameworks():
-    return [item.lock_summary() for item in list_frameworks()]
+    return [
+        {**item.lock_summary(), "kind": framework_kind(item.id)}
+        for item in list_frameworks()
+    ]
 
 
 @app.post("/cases/{case_id}/decision-record")

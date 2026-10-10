@@ -2,6 +2,18 @@
 
 Não são legislação. São conjuntos contratuais e computacionais fixados no
 manifesto: regras com IDs estáveis, exclusões e condições de abstenção.
+
+Há duas camadas, e todo caso usa as duas:
+
+- **abordagem**: como a IA trata qualquer caso — equilíbrio, proporcionalidade,
+  boa-fé, vedação ao enriquecimento injusto. Hoje é `commercial_balanced_v1`;
+- **matéria**: as regras do assunto em disputa, com escopo, exclusões e limite
+  de valor próprios. Hoje é `digital_services_b2b_v1`.
+
+A abordagem não concorre com a matéria: o manifesto trava uma de cada, e a
+decisão é verificada contra a composição das duas (`compose_framework`).
+Manifestos travados antes da composição não têm abordagem e continuam
+resolvidos só pela matéria que fixaram.
 """
 
 from __future__ import annotations
@@ -55,6 +67,9 @@ class Framework:
     )
     case_value_limit_minor_units: Optional[int] = None
     case_value_currency: str = "BRL"
+    # Preenchido só na composição matéria + abordagem. Ausente, não entra no
+    # dict nem no hash, e os frameworks publicados mantêm o hash de sempre.
+    approach: Optional[Dict] = None
 
     def rule_by_id(self, rule_id: str) -> Optional[FrameworkRule]:
         for rule in self.rules:
@@ -69,7 +84,7 @@ class Framework:
         return canonical_hash(self.as_dict())
 
     def as_dict(self) -> Dict:
-        return {
+        data = {
             "id": self.id,
             "version": self.version,
             "name": self.name,
@@ -82,10 +97,13 @@ class Framework:
             "case_value_currency": self.case_value_currency,
             "rules": [rule.as_dict() for rule in self.rules],
         }
+        if self.approach is not None:
+            data["approach"] = dict(self.approach)
+        return data
 
     def lock_summary(self) -> Dict:
         """Recorte fixado no manifesto: identidade, hash e IDs das regras."""
-        return {
+        data = {
             "id": self.id,
             "name": self.name,
             "version": self.version,
@@ -97,6 +115,9 @@ class Framework:
             "case_value_limit_minor_units": self.case_value_limit_minor_units,
             "case_value_currency": self.case_value_currency,
         }
+        if self.approach is not None:
+            data["approach"] = dict(self.approach)
+        return data
 
 
 def _commercial_balanced() -> Framework:
@@ -335,18 +356,29 @@ def _digital_services_b2b() -> Framework:
     )
 
 
+APPROACH = "approach"
+MATTER = "matter"
+
 _REGISTRY: Dict[str, Framework] = {}
+_KINDS: Dict[str, str] = {}
 
 
-def register_framework(framework: Framework) -> Framework:
+def register_framework(framework: Framework, kind: str = MATTER) -> Framework:
+    if kind not in {APPROACH, MATTER}:
+        raise ValueError(f"tipo de framework desconhecido: {kind}")
     _REGISTRY[framework.id] = framework
+    _KINDS[framework.id] = kind
     return framework
 
 
-register_framework(_commercial_balanced())
-register_framework(_digital_services_b2b())
+# O conteúdo de cada framework é imutável depois de publicado: o hash dele está
+# em manifestos travados. `commercial_balanced_v1` nasceu como alternativa de
+# matéria e passou a ser a abordagem; o texto e o hash continuam os mesmos.
+register_framework(_commercial_balanced(), kind=APPROACH)
+register_framework(_digital_services_b2b(), kind=MATTER)
 
 DEFAULT_FRAMEWORK_ID = "digital_services_b2b_v1"
+DEFAULT_APPROACH_ID = "commercial_balanced_v1"
 
 
 def get_framework(framework_id: str) -> Framework:
@@ -356,9 +388,79 @@ def get_framework(framework_id: str) -> Framework:
         raise LookupError(f"framework desconhecido: {framework_id}") from exc
 
 
+def framework_kind(framework_id: str) -> str:
+    get_framework(framework_id)
+    return _KINDS[framework_id]
+
+
 def list_frameworks() -> List[Framework]:
     return [item for _, item in sorted(_REGISTRY.items())]
 
 
 def resolve_framework(framework_id: Optional[str] = None) -> Framework:
     return get_framework(framework_id or DEFAULT_FRAMEWORK_ID)
+
+
+def _merge_unique(*groups: Sequence[str]) -> tuple:
+    merged: List[str] = []
+    for group in groups:
+        for item in group:
+            if item not in merged:
+                merged.append(item)
+    return tuple(merged)
+
+
+def compose_framework(matter: Framework, approach: Framework) -> Framework:
+    """Framework efetivo do caso: regras da matéria e da abordagem juntas.
+
+    A identidade (id, versão, escopo e limite de valor) é a da matéria, que é o
+    que a decisão declara aplicar. A abordagem entra com seus princípios, suas
+    regras e suas exclusões, e fica identificada pelo hash no próprio dict.
+    """
+    if framework_kind(matter.id) != MATTER:
+        raise ValueError(f"{matter.id} não é um framework de matéria")
+    if framework_kind(approach.id) != APPROACH:
+        raise ValueError(f"{approach.id} não é um framework de abordagem")
+    return Framework(
+        id=matter.id,
+        version=matter.version,
+        name=matter.name,
+        description=matter.description,
+        in_scope=tuple(matter.in_scope),
+        exclusions=_merge_unique(matter.exclusions, approach.exclusions),
+        rules=tuple(matter.rules) + tuple(approach.rules),
+        principles=_merge_unique(approach.principles, matter.principles),
+        disclaimer=matter.disclaimer,
+        case_value_limit_minor_units=matter.case_value_limit_minor_units,
+        case_value_currency=matter.case_value_currency,
+        approach={
+            "id": approach.id,
+            "name": approach.name,
+            "version": approach.version,
+            "hash": approach.hash(),
+        },
+    )
+
+
+def resolve_case_framework(
+    matter_id: Optional[str] = None, approach_id: Optional[str] = None
+) -> Framework:
+    """Framework a travar num caso novo: sempre matéria + abordagem."""
+    matter = resolve_framework(matter_id)
+    approach = get_framework(approach_id or DEFAULT_APPROACH_ID)
+    return compose_framework(matter, approach)
+
+
+def framework_from_lock(locked: Optional[Dict]) -> Framework:
+    """Reconstrói o framework efetivo a partir do recorte travado no manifesto.
+
+    Recorte com `approach` é composição; sem ela, é um manifesto anterior à
+    separação, resolvido só pelo id que fixou.
+    """
+    locked = locked or {}
+    approach = locked.get("approach") or {}
+    if approach.get("id"):
+        return compose_framework(
+            resolve_framework(locked.get("id")), get_framework(approach["id"])
+        )
+    return resolve_framework(locked.get("id"))

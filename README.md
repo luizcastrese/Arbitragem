@@ -156,9 +156,9 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 O mercado de entrada são as disputas de serviços digitais entre empresas e
 profissionais (agências, software houses, estúdios, freelancers com atividade
 empresarial e quem os contrata): entrega, atraso, pagamento, alteração de
-escopo, aceite e rescisão. É o escopo do framework padrão
+escopo, aceite e rescisão. É o escopo do framework de matéria padrão
 (`digital_services_b2b_v1`), com as exclusões e o limite de valor que ele
-fixa no manifesto. Relações de consumo ficam fora: o framework não tem regras
+fixa no manifesto. Relações de consumo ficam fora: não há matéria com regras
 de consumidor e os termos pedem que a parte declare contratação profissional.
 
 O canal previsto é a adesão antes do conflito, por cláusula no contrato de
@@ -167,9 +167,26 @@ ser apresentada como imposição de uma parte à outra. O levantamento de mercad
 concorrência e riscos está em
 [`docs/mercado-servicos-digitais.md`](docs/mercado-servicos-digitais.md).
 
-O painel e o auto da decisão ainda rotulam as partes como "cliente reclamante"
-e "empresa reclamada". No escopo B2B, o reclamante pode ser o prestador, então
-os rótulos precisam ser neutralizados antes da exposição pública.
+As partes são **reclamante** e **reclamada**, sem presumir quem é cliente ou
+fornecedor: no escopo B2B, quem abre o caso pode ser o contratante ou o
+prestador.
+
+### Frameworks: abordagem e matéria
+
+Todo caso trava no manifesto duas camadas de framework, que se somam:
+
+- **abordagem** (`commercial_balanced_v1`): como a IA trata qualquer caso —
+  prioridade contratual, proporcionalidade, boa-fé, vedação ao enriquecimento
+  injusto e análise contextual de atrasos;
+- **matéria** (`digital_services_b2b_v1`): as regras do assunto, com escopo,
+  exclusões e limite de valor próprios.
+
+A decisão declara a matéria e pode aplicar regras das duas camadas; o
+verificador determinístico confere contra a composição. Uma matéria nova (por
+exemplo, consumo) entra como outro framework de matéria, sem duplicar a
+abordagem. Os frameworks publicados são imutáveis: mudar o conteúdo exige um
+id novo. Manifestos travados antes da separação continuam resolvidos só pelo
+framework que fixaram.
 
 ## Rodar localmente
 
@@ -246,7 +263,8 @@ Variáveis do arquivo `.env`:
 | `LLM_MAX_RETRIES` | Retries só para erros transitórios |
 | `LLM_ALLOWED_PROVIDERS` / `LLM_ALLOWED_MODELS` | Allowlists |
 | `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL` | Fallback explícito (nunca silencioso) |
-| `FRAMEWORK_ID` | Framework fixado no manifesto. `digital_services_b2b_v1` é o padrão e o escopo dos termos; `commercial_balanced_v1` é genérico e fica fora do piloto |
+| `FRAMEWORK_ID` | Framework de **matéria** fixado no manifesto (padrão `digital_services_b2b_v1`) |
+| `APPROACH_FRAMEWORK_ID` | Framework de **abordagem** somado à matéria em todo caso (padrão `commercial_balanced_v1`). Trocar as camadas derruba o boot |
 | `DECISION_STABILITY_ENABLED` | Segunda execução controlada |
 | `DECISION_STABILITY_RUNS` / `DECISION_STABILITY_THRESHOLD` | Política de estabilidade |
 | `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |

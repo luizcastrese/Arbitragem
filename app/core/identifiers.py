@@ -22,7 +22,7 @@ def mask_email(email: str) -> str:
     """`carlos@empresa.com.br` vira `c****@empresa.com.br`.
 
     O domínio fica: ele quase nunca identifica uma pessoa e é o que dá
-    sentido ao evento ("convidamos alguém da empresa reclamada").
+    sentido ao evento ("convidamos alguém da parte reclamada").
     """
     value = (email or "").strip()
     if "@" not in value:

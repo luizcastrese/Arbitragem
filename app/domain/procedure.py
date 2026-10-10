@@ -29,7 +29,7 @@ from app.db.repository import (
     persist_verification,
 )
 from app.domain.decision_verifier import verify_decision
-from app.domain.frameworks import Framework, resolve_framework
+from app.domain.frameworks import Framework, framework_from_lock, resolve_framework
 from app.domain.legacy import (
     infer_procedure_conclusion,
     strip_private_reasoning,
@@ -45,10 +45,10 @@ logger = logging.getLogger("valinor.procedure")
 
 
 def _framework_from_manifest(manifest: Dict[str, Any]) -> Framework:
-    framework_id = (manifest.get("framework") or {}).get("id") or manifest.get(
-        "framework_id"
-    )
-    return resolve_framework(framework_id)
+    locked = manifest.get("framework") or {}
+    if locked.get("id"):
+        return framework_from_lock(locked)
+    return resolve_framework(manifest.get("framework_id"))
 
 
 def _admitted(case_data: Dict[str, Any]) -> List[Dict[str, Any]]:
