@@ -6,7 +6,7 @@ from app.core.config import get_settings
 from app.core.signing import attach_signature
 from app.core.terms import current_terms
 from app.domain.decision_verifier import VERIFIER_VERSION
-from app.domain.frameworks import resolve_framework
+from app.domain.frameworks import resolve_case_framework
 from app.domain.provenance import (
     ATTESTATION_SCHEMA_VERSION,
     CANONICALIZATION_VERSION,
@@ -234,7 +234,9 @@ def lock_case_manifest(case: Dict) -> Dict:
         or DEFAULT_FRAMEWORK
     )
     try:
-        framework_obj = resolve_framework(framework_id)
+        framework_obj = resolve_case_framework(
+            framework_id, settings.approach_framework_id
+        )
     except LookupError as exc:
         raise ValueError(f"Framework desconhecido: {framework_id}") from exc
     framework = framework_obj.lock_summary()

@@ -129,11 +129,11 @@ def test_verification_endpoint_exists_after_decision(client):
     assert "errors" in body
 
 
-def test_frameworks_endpoint_lists_both_frameworks(client):
+def test_frameworks_endpoint_lists_matter_and_approach(client):
     body = client.get("/frameworks").json()
-    ids = {item["id"] for item in body}
-    assert "digital_services_b2b_v1" in ids
-    assert "commercial_balanced_v1" in ids
+    kinds = {item["id"]: item["kind"] for item in body}
+    assert kinds["digital_services_b2b_v1"] == "matter"
+    assert kinds["commercial_balanced_v1"] == "approach"
 
 
 def test_root_does_not_promise_human_review(client):
@@ -148,10 +148,9 @@ def test_root_does_not_promise_human_review(client):
 def test_locked_manifest_records_independence_and_framework(client):
     case_id, _, locked = prepare_locked_case(client)
     manifest = locked.json()["manifest"]
-    assert manifest["framework_id"] in {
-        "digital_services_b2b_v1",
-        "commercial_balanced_v1",
-    }
+    assert manifest["framework_id"] == "digital_services_b2b_v1"
+    assert manifest["framework"]["approach"]["id"] == "commercial_balanced_v1"
+    assert "commercial_balanced_v1:good_faith" in manifest["framework"]["rule_ids"]
     assert "framework_hash" in manifest
     assert "deterministic_verification_version" in manifest
     commitments = manifest["anti_bias_commitments"]

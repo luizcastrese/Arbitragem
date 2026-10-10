@@ -82,8 +82,8 @@ def _object(document: Document, record: Dict[str, Any]) -> None:
     document.add_heading("II. Objeto da disputa", level=1)
     document.add_paragraph(subject.get("summary") or record.get("case_title") or "Não registrado.")
     for label, key in (
-        ("Pedidos do cliente reclamante", "claimant_requests"),
-        ("Argumentos da empresa reclamada", "respondent_arguments"),
+        ("Pedidos da parte reclamante", "claimant_requests"),
+        ("Argumentos da parte reclamada", "respondent_arguments"),
         ("Fatos incontroversos", "undisputed_facts"),
         ("Fatos controvertidos", "disputed_facts"),
     ):

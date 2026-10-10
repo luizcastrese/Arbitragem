@@ -135,6 +135,7 @@ class Settings:
     decision_stability_runs: int
     decision_stability_threshold: float
     framework_id: str
+    approach_framework_id: str
     max_appeals_per_attestation: int
     case_value_limit_minor_units: int
     llm_fallback_provider: str
@@ -305,12 +306,32 @@ class Settings:
         }
 
 
+def _validate_frameworks(settings: Settings) -> None:
+    """FRAMEWORK_ID é a matéria e APPROACH_FRAMEWORK_ID a abordagem; trocados,
+    toda trava de manifesto falharia, então o boot recusa antes."""
+    from app.domain.frameworks import APPROACH, MATTER, framework_kind
+
+    for env, value, expected in (
+        ("FRAMEWORK_ID", settings.framework_id, MATTER),
+        ("APPROACH_FRAMEWORK_ID", settings.approach_framework_id, APPROACH),
+    ):
+        try:
+            kind = framework_kind(value)
+        except LookupError as exc:
+            raise RuntimeError(f"{env}={value} não é um framework conhecido.") from exc
+        if kind != expected:
+            label = "de matéria" if expected == MATTER else "de abordagem"
+            raise RuntimeError(f"{env}={value} precisa ser um framework {label}.")
+
+
 def validate_runtime_policy(settings: Settings) -> None:
     """Em produção, julgador e revisor iguais com LLM ligado derrubam o boot."""
     try:
         settings.trusted_proxy_networks
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
+
+    _validate_frameworks(settings)
 
     if settings.is_production and (
         settings.using_development_signing_secret
@@ -551,6 +572,9 @@ def get_settings() -> Settings:
             os.getenv("DECISION_STABILITY_THRESHOLD", "1.0")
         ),
         framework_id=_env_or("FRAMEWORK_ID", "digital_services_b2b_v1"),
+        approach_framework_id=_env_or(
+            "APPROACH_FRAMEWORK_ID", "commercial_balanced_v1"
+        ),
         max_appeals_per_attestation=int(os.getenv("MAX_APPEALS_PER_ATTESTATION", "1")),
         case_value_limit_minor_units=int(
             os.getenv("CASE_VALUE_LIMIT_MINOR_UNITS", "500000000")

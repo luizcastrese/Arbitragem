@@ -161,7 +161,7 @@ class ConciliationRoundRequest(BaseModel):
 class AgreementResponseRequest(BaseModel):
     """Manifestação individual sobre a proposta de uma rodada.
 
-    O cliente nunca pode registrar a manifestação da empresa (ou vice-versa),
+    A reclamante nunca pode registrar a manifestação da reclamada (ou vice-versa),
     por isso o papel faz parte do corpo e também é conferido contra a
     credencial pelo endpoint.
     """

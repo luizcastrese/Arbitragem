@@ -257,8 +257,8 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
             ("Status", case.get("status", "")),
             ("Criado em", _format_timestamp(case.get("created_at"))),
             ("Atualizado em", _format_timestamp(case.get("updated_at"))),
-            ("Cliente", case.get("claimant", "")),
-            ("Empresa", case.get("respondent", "")),
+            ("Reclamante", case.get("claimant", "")),
+            ("Reclamada", case.get("respondent", "")),
         ),
     )
 
@@ -269,10 +269,10 @@ def build_docx_report(case: Dict[str, Any]) -> BytesIO:
         document,
         (
             ("Aceite bilateral", "Completo" if consent.get("complete") else "Pendente"),
-            ("Aceite do cliente", _format_timestamp((consent.get("claimant") or {}).get("accepted_at"))),
-            ("Termos aceitos pelo cliente", _terms_reference(consent.get("claimant"))),
-            ("Aceite da empresa", _format_timestamp((consent.get("respondent") or {}).get("accepted_at"))),
-            ("Termos aceitos pela empresa", _terms_reference(consent.get("respondent"))),
+            ("Aceite da reclamante", _format_timestamp((consent.get("claimant") or {}).get("accepted_at"))),
+            ("Termos aceitos pela reclamante", _terms_reference(consent.get("claimant"))),
+            ("Aceite da reclamada", _format_timestamp((consent.get("respondent") or {}).get("accepted_at"))),
+            ("Termos aceitos pela reclamada", _terms_reference(consent.get("respondent"))),
             ("Contraditório", "Completo" if contradictory.get("complete") else "Pendente"),
             ("Manifesto", "Travado" if case.get("manifest_locked") else "Ainda aberto"),
         ),

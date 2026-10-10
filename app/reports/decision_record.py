@@ -38,7 +38,7 @@ from app.core.tax_id import describe_tax_id
 RECORD_VERSION = "1.0"
 RECORD_TYPE = "auto_da_decisao"
 PARTIES = ("claimant", "respondent")
-PARTY_LABELS = {"claimant": "Cliente reclamante", "respondent": "Empresa reclamada"}
+PARTY_LABELS = {"claimant": "Reclamante", "respondent": "Reclamada"}
 
 LEGAL_NOTICE = (
     "Este auto registra a decisão proferida no procedimento Valinor, um "
@@ -54,8 +54,8 @@ LEGAL_NOTICE = (
 )
 
 OUTCOME_LABELS = {
-    "claimant": "Procedente em favor do cliente reclamante",
-    "respondent": "Improcedente: prevalece a posição da empresa reclamada",
+    "claimant": "Procedente em favor da parte reclamante",
+    "respondent": "Improcedente: prevalece a posição da parte reclamada",
     "partial": "Parcialmente procedente",
     "inconclusive": "Sem decisão de mérito",
 }
@@ -325,8 +325,8 @@ def _appeal_section(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _summary(kind: str, case_data: Dict[str, Any], agreement: Optional[Dict[str, Any]]) -> str:
-    claimant = case_data.get("claimant") or "o cliente reclamante"
-    respondent = case_data.get("respondent") or "a empresa reclamada"
+    claimant = case_data.get("claimant") or "a parte reclamante"
+    respondent = case_data.get("respondent") or "a parte reclamada"
     if kind == "agreement" and agreement:
         return (
             f"{claimant} e {respondent} aceitaram, de forma independente, a proposta "
@@ -339,7 +339,7 @@ def _summary(kind: str, case_data: Dict[str, Any], agreement: Optional[Dict[str,
         text = f"Sem acordo entre as partes, a Valinor proferiu decisão: {outcome}."
         if decision.get("outcome") == "partial" and decision.get("partial_claimant_bps") is not None:
             percent = int(decision["partial_claimant_bps"]) / 100
-            text += f" Proporção reconhecida ao cliente reclamante: {percent:.2f}%."
+            text += f" Proporção reconhecida à parte reclamante: {percent:.2f}%."
         remedy = decision.get("remedy_calculation") or {}
         if isinstance(remedy, dict) and remedy.get("result_minor_units") is not None:
             text += (
