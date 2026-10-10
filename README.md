@@ -1,8 +1,11 @@
 # Valinor
 
-Procedimento privado, voluntário e prévio ao Judiciário para disputas entre
-empresas e clientes, criado para reduzir drasticamente o custo de resolvê-las
-sem sacrificar contraditório, transparência ou integridade. Não é arbitragem.
+Procedimento privado, voluntário e prévio ao Judiciário para disputas
+documentais de serviços digitais entre empresas e profissionais — sites,
+software simples sob encomenda, design, marketing, conteúdo, audiovisual,
+consultoria e automação —, criado para reduzir drasticamente o custo de
+resolvê-las sem sacrificar contraditório, transparência ou integridade. Não é
+arbitragem e não atende relações de consumo.
 
 A IA busca primeiro o acordo. Sem acordo, profere uma decisão fundamentada que
 **não obriga as partes**. Qualquer que seja o desfecho, a saída é o **auto da
@@ -36,8 +39,8 @@ saída em sentença arbitral ou estatal.
 - API FastAPI com validação e documentação OpenAPI;
 - painel React responsivo;
 - casos persistidos em SQLite;
-- autorização separada para cliente e empresa em cada caso, que conduzem o
-  procedimento sem um terceiro gestor;
+- autorização separada para reclamante e reclamada em cada caso, que conduzem
+  o procedimento sem um terceiro gestor;
 - contas com senha derivada por PBKDF2 e sessões expiráveis em cookie HttpOnly;
 - verificação de e-mail, redefinição de senha por link de uso único e bloqueio
   da conta após tentativas de senha malsucedidas;
@@ -121,7 +124,8 @@ percurso, e só trava o conjunto quando as duas partes declararam encerrada a
 própria apresentação. Uma parte não conduz a etapa da outra.
 
 O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
-natureza prévia ao Judiciário e não arbitral, participação voluntária,
+natureza prévia ao Judiciário e não arbitral, escopo de serviços digitais entre
+profissionais (fora de relação de consumo), participação voluntária,
 qualificação por CPF/CNPJ, acesso a todo material, oportunidade de resposta,
 composição consensual, decisão por IA que não obriga as partes, auditoria
 automática, verificador determinístico, recurso automático e auto da decisão. O texto vive em `app/terms/<versão>.md` e é
@@ -134,10 +138,12 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 
 ## Usuários do produto
 
-- **cliente reclamante:** apresenta sua versão, documentos, pedidos e respostas
-  às propostas; deve compreender e aceitar o procedimento;
-- **empresa reclamada:** apresenta defesa e documentos, formula contrapropostas
-  e acompanha exposição, acordos e decisões de forma consistente;
+- **reclamante:** quem abre o caso — o contratante que questiona a entrega ou o
+  prestador que cobra o pagamento; apresenta sua versão, documentos, pedidos e
+  respostas às propostas; deve compreender e aceitar o procedimento;
+- **reclamada:** a outra parte do contrato; apresenta defesa e documentos,
+  formula contrapropostas e acompanha exposição, acordos e decisões de forma
+  consistente;
 - **gestor:** uma IA do procedimento. Admite material, trava o conjunto e avança
   composição, organização, decisão e auditoria. Não fala por nenhuma parte e não
   julga o mérito;
@@ -147,11 +153,23 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 - **representantes e advogados:** podem apoiar qualquer parte na preparação e
   manifestação dentro do caso.
 
-O nicho inicial é a resolução privada de reclamações entre empresas e clientes,
-especialmente situações que já geraram ou poderiam gerar processos. A empresa
-ganha previsibilidade e escala; o cliente ganha um canal inteligível, bilateral
-e baseado em evidências. A composição é voluntária e não pode ser apresentada
-como imposição automática da empresa à contraparte.
+O mercado de entrada são as disputas de serviços digitais entre empresas e
+profissionais (agências, software houses, estúdios, freelancers com atividade
+empresarial e quem os contrata): entrega, atraso, pagamento, alteração de
+escopo, aceite e rescisão. É o escopo do framework padrão
+(`digital_services_b2b_v1`), com as exclusões e o limite de valor que ele
+fixa no manifesto. Relações de consumo ficam fora: o framework não tem regras
+de consumidor e os termos pedem que a parte declare contratação profissional.
+
+O canal previsto é a adesão antes do conflito, por cláusula no contrato de
+prestação, que resolve o aceite bilateral. A composição é voluntária e não pode
+ser apresentada como imposição de uma parte à outra. O levantamento de mercado,
+concorrência e riscos está em
+[`docs/mercado-servicos-digitais.md`](docs/mercado-servicos-digitais.md).
+
+O painel e o auto da decisão ainda rotulam as partes como "cliente reclamante"
+e "empresa reclamada". No escopo B2B, o reclamante pode ser o prestador, então
+os rótulos precisam ser neutralizados antes da exposição pública.
 
 ## Rodar localmente
 
@@ -228,7 +246,7 @@ Variáveis do arquivo `.env`:
 | `LLM_MAX_RETRIES` | Retries só para erros transitórios |
 | `LLM_ALLOWED_PROVIDERS` / `LLM_ALLOWED_MODELS` | Allowlists |
 | `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL` | Fallback explícito (nunca silencioso) |
-| `FRAMEWORK_ID` | Framework fixado no manifesto (`digital_services_b2b_v1` ou `commercial_balanced_v1`) |
+| `FRAMEWORK_ID` | Framework fixado no manifesto. `digital_services_b2b_v1` é o padrão e o escopo dos termos; `commercial_balanced_v1` é genérico e fica fora do piloto |
 | `DECISION_STABILITY_ENABLED` | Segunda execução controlada |
 | `DECISION_STABILITY_RUNS` / `DECISION_STABILITY_THRESHOLD` | Política de estabilidade |
 | `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |
@@ -476,7 +494,9 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   offline no CI; falta ampliar os cenários para disputas reais anonimizadas e
   rodar o modo live a cada troca de modelo;
 - o texto dos termos é versionado e endereçado por hash, mas ainda não passou
-  por validação jurídica;
+  por validação jurídica. O recorte B2B precisa de atenção específica: pela
+  teoria finalista mitigada, um MEI ou pequena empresa vulnerável pode ser
+  tratado como consumidor;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis). Atrás de proxy,

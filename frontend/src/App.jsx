@@ -1983,7 +1983,7 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>procedimento voluntário e prévio ao Judiciário, que não é arbitragem; acesso a todo material; oportunidade de resposta; composição somente por acordo; sem acordo, decisão por IA que não obriga as partes; auditoria e recurso automáticos; o sistema pode se abster; ao final, um auto da decisão assinado, com CPF/CNPJ das partes, que pode servir de base a uma ação judicial.</span>
+        <span>procedimento voluntário e prévio ao Judiciário, que não é arbitragem; disputa de serviços digitais contratados no exercício de atividade profissional ou empresarial, fora de relação de consumo; acesso a todo material; oportunidade de resposta; composição somente por acordo; sem acordo, decisão por IA que não obriga as partes; auditoria e recurso automáticos; o sistema pode se abster; ao final, um auto da decisão assinado, com CPF/CNPJ das partes, que pode servir de base a uma ação judicial.</span>
         <button className="link-button" onClick={() => setShowTerms(!showTerms)}>
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>
