@@ -141,6 +141,16 @@ class Settings:
     llm_fallback_provider: str
     llm_fallback_model: str
     expose_api_docs: bool
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    platform_fee_bps: int = 1000
+    public_app_url: str = "http://localhost:5173"
+
+    @property
+    def payments_enabled(self) -> bool:
+        """Pagamento opcional da decisão: só liga com chave e segredo de webhook.
+        Sem eles a plataforma funciona como antes, sem qualquer fluxo de valores."""
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret)
 
     @property
     def openai_enabled(self) -> bool:
@@ -586,6 +596,14 @@ def get_settings() -> Settings:
             else os.getenv("LLM_FALLBACK_MODEL", "").strip()
         ),
         expose_api_docs=_env_flag("EXPOSE_API_DOCS", not is_production),
+        stripe_secret_key=os.getenv("STRIPE_SECRET_KEY", "").strip(),
+        stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", "").strip(),
+        platform_fee_bps=min(
+            10000, max(0, int(os.getenv("PLATFORM_FEE_BPS", "1000")))
+        ),
+        public_app_url=os.getenv("PUBLIC_APP_URL", "http://localhost:5173")
+        .strip()
+        .rstrip("/"),
     )
     validate_runtime_policy(settings)
     return settings
