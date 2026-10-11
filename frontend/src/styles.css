@@ -1253,3 +1253,13 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
   .consent-action { flex-direction: column; align-items: stretch; }
   .tax-id-input { width: 100%; }
 }
+
+.settlement-card { background: linear-gradient(135deg, #fffdf7, #f6f4e8); border-color: #e3dcb8; }
+.settlement-card.paid { background: linear-gradient(135deg, #fbfefa, #edf7eb); border-color: #c9dec5; }
+.settlement-split { display: grid; gap: 8px; margin: 0; padding: 14px 16px; background: rgba(255, 255, 255, .7); border: 1px solid var(--line); border-radius: 12px; }
+.settlement-split div { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.settlement-split dt { color: var(--muted); }
+.settlement-split dd { margin: 0; font-weight: 600; }
+.settlement-note { color: var(--muted); font-size: 14px; line-height: 1.5; align-self: center; }
+.settlement-line { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; background: var(--green-50); border: 1px solid #c9dec5; border-radius: 12px; color: var(--green-900); font-size: 14px; line-height: 1.5; }
+.settlement-line svg { flex: 0 0 auto; margin-top: 2px; }

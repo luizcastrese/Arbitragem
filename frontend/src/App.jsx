@@ -42,6 +42,20 @@ function llmReady(system) {
   return Boolean(system.openrouter_enabled || system.openai_enabled)
 }
 
+function formatMoney(minorUnits, currency = 'BRL') {
+  const value = Number(minorUnits || 0) / 100
+  try {
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency }).format(value)
+  } catch {
+    return `${currency} ${value.toFixed(2)}`
+  }
+}
+
+const settlementReasons = {
+  contest_window_open: 'O pagamento opcional fica disponível quando o prazo de recurso terminar.',
+  appeal_pending: 'O pagamento opcional fica disponível quando o recurso for concluído.'
+}
+
 function formatApiDetail(detail, fallback = 'Erro inesperado') {
   if (typeof detail === 'string' && detail.trim()) return detail
   if (Array.isArray(detail)) {
@@ -394,8 +408,21 @@ export default function App() {
           setUser(await request('/auth/me'))
           const items = await request('/cases')
           setCases(items)
-          if (items[0]) await loadCase(items[0].id)
+          const params = new URLSearchParams(window.location.search)
+          const returnedCase = items.find((item) => item.id === params.get('case'))
+          const first = returnedCase || items[0]
+          if (first) await loadCase(first.id)
           else setShowCreate(true)
+          if (params.get('settlement') === 'success') {
+            setStatus('Pagamento enviado. A confirmação do Stripe pode levar alguns instantes; o auto será atualizado em seguida.')
+          } else if (params.get('settlement') === 'cancelled') {
+            setStatus('Pagamento não concluído. Nada foi cobrado, e você pode pagar depois, se quiser.')
+          } else if (params.get('connect') === 'return') {
+            setStatus('Cadastro de recebedor enviado ao Stripe. Quando for aprovado, o pagamento da decisão poderá chegar até você.')
+          }
+          if (params.get('settlement') || params.get('connect')) {
+            window.history.replaceState({}, '', window.location.pathname)
+          }
         } catch (err) {
           if (/401|sessão|entre/i.test(err.message)) setShowAuth(true)
           else throw err
@@ -764,6 +791,7 @@ export default function App() {
               } />
             ) : caseData ? (
               <CaseWorkspace
+                reload={() => loadCases(caseData.id)}
                 caseData={caseData}
                 currentStage={currentStage}
                 busy={busy}
@@ -1183,6 +1211,7 @@ function CreateCase({ busy, onSubmit, onCancel }) {
 }
 
 function CaseWorkspace({
+  reload,
   caseData,
   currentStage,
   busy,
@@ -1313,6 +1342,17 @@ function CaseWorkspace({
         <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
       )}
 
+      {caseData.decision_record && caseData.decision && (
+        <SettlementCard
+          caseData={caseData}
+          roles={roles}
+          busy={busy}
+          run={run}
+          request={request}
+          reload={reload}
+        />
+      )}
+
       {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
@@ -1377,6 +1417,16 @@ function DecisionRecordCard({ caseData, busy, run }) {
           <p>{record.outcome?.summary}</p>
         </div>
       </div>
+      {record.settlement && (
+        <div className="settlement-line">
+          <CircleDollarSign size={17} />
+          <span>
+            Pagamento registrado neste auto: {record.settlement.amount_display}
+            {record.settlement.paid_at ? `, em ${new Date(record.settlement.paid_at).toLocaleDateString('pt-BR')}` : ''}.
+            Ele deve ser abatido de qualquer cobrança do mesmo crédito.
+          </span>
+        </div>
+      )}
       <div className="record-actions">
         <button className="button primary" onClick={downloadDocx} disabled={busy}>
           <Download size={16} /> Baixar o auto (Word)
@@ -1393,6 +1443,175 @@ function DecisionRecordCard({ caseData, busy, run }) {
           judicial ou reclamação. Hash {String(record.record_hash || '').slice(0, 16)}… ·
           assinatura {record.signature_algorithm}. A versão JSON é a que se confere
           em <code>/decision-records/verify</code>.
+        </span>
+      </div>
+    </section>
+  )
+}
+
+function SettlementCard({ caseData, roles, busy, run, request, reload }) {
+  const [info, setInfo] = useState(null)
+  const [connect, setConnect] = useState(null)
+  const [loadError, setLoadError] = useState('')
+  const caseId = caseData.id
+  const version = `${caseData.updated_at}|${caseData.decision_record?.record_number}`
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const data = await request(`/cases/${caseId}/settlement`)
+        if (cancelled) return
+        setInfo(data)
+        setLoadError('')
+        if (roles.claimant && data.payments_enabled && data.offer?.available) {
+          const status = await request('/payments/connect/status').catch(() => null)
+          if (!cancelled) setConnect(status)
+        }
+      } catch (err) {
+        if (!cancelled) setLoadError(err.message)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [caseId, version, roles.claimant])
+
+  // Depois de pagar no Stripe, o webhook confirma de forma assíncrona: consulta
+  // por até dois minutos e então recarrega o caso para trazer o auto novo.
+  const pending = info?.payment?.status === 'pending'
+  useEffect(() => {
+    if (!pending) return undefined
+    const startedAt = Date.now()
+    const timer = setInterval(async () => {
+      try {
+        const data = await request(`/cases/${caseId}/settlement`)
+        setInfo(data)
+        if (data.payment?.status === 'paid') {
+          clearInterval(timer)
+          await reload()
+        }
+      } catch { /* a próxima volta tenta de novo */ }
+      if (Date.now() - startedAt > 120000) clearInterval(timer)
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [pending, caseId])
+
+  if (!info || !info.payments_enabled) return null
+  const offer = info.offer || {}
+  const payment = info.payment
+  const isParty = roles.claimant || roles.respondent
+
+  if (payment?.status === 'paid') {
+    return (
+      <section className="record-card settlement-card paid">
+        <div className="record-heading">
+          <span className="action-icon"><CheckCircle2 size={22} /></span>
+          <div>
+            <span className="section-label">Pagamento da decisão</span>
+            <h3>Pago: {formatMoney(payment.amount_minor_units, payment.currency)}</h3>
+            <p>
+              O pagamento foi confirmado e consta do auto da decisão, que
+              deve ser usado para abater este valor de qualquer cobrança do
+              mesmo crédito. Não há nova cobrança neste caso.
+            </p>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  if (!offer.available) {
+    const note = settlementReasons[offer.reason]
+    if (!note || !isParty) return null
+    return (
+      <section className="record-card settlement-card">
+        <div className="record-heading">
+          <span className="action-icon"><CircleDollarSign size={22} /></span>
+          <div>
+            <span className="section-label">Pagamento opcional</span>
+            <h3>Encerrar o litígio com um pagamento</h3>
+            <p>{note}</p>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  if (!isParty) return null
+
+  const amount = formatMoney(offer.amount_minor_units, offer.currency)
+  const fee = formatMoney(offer.platform_fee_minor_units, offer.currency)
+  const net = formatMoney(offer.net_to_payee_minor_units, offer.currency)
+
+  async function pay() {
+    const result = await run('Abrindo o pagamento...', () =>
+      request(`/cases/${caseId}/settlement/checkout`, { method: 'POST' })
+    )
+    if (result?.checkout_url) window.location.assign(result.checkout_url)
+  }
+
+  async function onboard() {
+    const result = await run('Abrindo o cadastro de recebedor...', () =>
+      request('/payments/connect/onboarding', { method: 'POST' })
+    )
+    if (result?.onboarding_url) window.location.assign(result.onboarding_url)
+  }
+
+  return (
+    <section className="record-card settlement-card">
+      <div className="record-heading">
+        <span className="action-icon"><CircleDollarSign size={22} /></span>
+        <div>
+          <span className="section-label">Pagamento opcional da decisão</span>
+          <h3>{amount}</h3>
+          <p>
+            {roles.respondent
+              ? 'Você pode pagar o valor da decisão por aqui para encerrar o litígio. É uma escolha sua: não pagar não tem consequência dentro da plataforma, e a decisão continua sem obrigar ninguém.'
+              : 'A parte reclamada pode escolher pagar o valor da decisão por aqui. Não é obrigada, e a decisão continua sem obrigar ninguém.'}
+          </p>
+        </div>
+      </div>
+      <dl className="settlement-split">
+        <div><dt>Valor pago</dt><dd>{amount}</dd></div>
+        <div><dt>Taxa da plataforma (10%)</dt><dd>{fee}</dd></div>
+        <div><dt>Repassado à parte reclamante</dt><dd>{net}</dd></div>
+      </dl>
+      {loadError && <p className="settlement-note">{loadError}</p>}
+      {roles.respondent && (
+        <div className="record-actions">
+          <button
+            className="button primary"
+            onClick={pay}
+            disabled={busy || !info.payee_onboarded || pending}
+          >
+            <CircleDollarSign size={16} /> {pending ? 'Aguardando confirmação...' : `Pagar ${amount}`}
+          </button>
+          {!info.payee_onboarded && (
+            <span className="settlement-note">
+              Aguardando a parte reclamante concluir o cadastro de recebedor.
+            </span>
+          )}
+        </div>
+      )}
+      {roles.claimant && (
+        <div className="record-actions">
+          {connect?.ready ? (
+            <span className="settlement-note">
+              Seu cadastro de recebedor está ativo. Se a parte reclamada pagar, o valor chega a você.
+            </span>
+          ) : (
+            <button className="button secondary" onClick={onboard} disabled={busy}>
+              <LockKeyhole size={16} /> {connect?.has_account ? 'Concluir cadastro para receber' : 'Cadastrar para receber'}
+            </button>
+          )}
+        </div>
+      )}
+      <div className="blocking-note">
+        <Scale size={17} />
+        <span>
+          O pagamento é processado pelo Stripe e confirmado por ele. Depois de
+          confirmado, entra numa nova versão do auto da decisão para evitar
+          cobrança em duplicidade. Pagar não impede nenhum direito das partes.
         </span>
       </div>
     </section>
