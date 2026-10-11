@@ -243,9 +243,33 @@ def _review(document: Document, record: Dict[str, Any]) -> None:
             document.add_paragraph(str(appeal["explanation"]))
 
 
-def _integrity(document: Document, record: Dict[str, Any]) -> None:
+def _settlement(document: Document, record: Dict[str, Any]) -> bool:
+    settlement = record.get("settlement")
+    if not settlement:
+        return False
+    document.add_heading("VII. Pagamento registrado", level=1)
+    _add_callout(
+        document,
+        "Valor já pago por esta plataforma",
+        str(settlement.get("notice") or ""),
+    )
+    _add_key_value_table(
+        document,
+        (
+            ("Valor pago", str(settlement.get("amount_display") or "")),
+            ("Pago por", _party_name(record, settlement.get("payer_role") or "")),
+            ("Recebido por", _party_name(record, settlement.get("payee_role") or "")),
+            ("Data do pagamento", _format_timestamp(settlement.get("paid_at"))),
+            ("Referência do pagamento", str(settlement.get("payment_reference") or "—")),
+            ("Declaração da decisão", str(settlement.get("attestation_hash") or "")),
+        ),
+    )
+    return True
+
+
+def _integrity(document: Document, record: Dict[str, Any], number: str = "VII") -> None:
     integrity = record.get("integrity") or {}
-    document.add_heading("VII. Autenticidade", level=1)
+    document.add_heading(f"{number}. Autenticidade", level=1)
     _add_key_value_table(
         document,
         (
@@ -301,7 +325,8 @@ def build_decision_record_docx(record: Dict[str, Any]) -> BytesIO:
         _grounds(document, record)
         _operative(document, record)
         _review(document, record)
-    _integrity(document, record)
+    paid = _settlement(document, record)
+    _integrity(document, record, "VIII" if paid else "VII")
 
     document.add_heading("Natureza deste documento", level=1)
     _add_callout(document, "Decisão não vinculante", record.get("legal_notice") or "", warning=True)

@@ -577,9 +577,15 @@ parte reclamada pode escolher para encerrar o litígio.
   `/stripe/webhook` com os eventos `checkout.session.completed`,
   `checkout.session.async_payment_succeeded`,
   `checkout.session.async_payment_failed` e `checkout.session.expired`.
-- **Vínculo:** o pagamento é único por attestation. Uma correção em recurso gera
-  nova attestation e, portanto, nova oferta. Cada passo entra na cadeia de
-  auditoria.
+- **Sem duplicidade:** depois de confirmado, o pagamento entra no **auto da
+  decisão** como nova versão, assinada pela plataforma e encadeada à anterior
+  (seção "Pagamento registrado", com valor, data e referência). Havendo
+  pagamento confirmado, o caso não aceita nova cobrança, mesmo que uma
+  correção em recurso gere outra attestation. O auto serve para a parte
+  credora abater o valor de qualquer cobrança judicial do mesmo crédito. Cada
+  passo também entra na cadeia de auditoria. Não se exige assinatura das
+  partes: a prova do pagamento é a confirmação do Stripe, e a assinatura é a
+  da plataforma.
 - **Termos:** a cláusula 9.1 (termos `2026-10-11`) descreve o pagamento e a taxa.
   Como os textos ainda aguardam revisão jurídica, trate o enquadramento
   (intermediação de pagamento, tributação, Banco Central) como pendência antes

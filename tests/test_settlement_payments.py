@@ -394,13 +394,21 @@ def test_expired_session_allows_a_new_checkout(env):
         assert db.query(SettlementPayment).count() == 1
 
 
-def test_new_attestation_requires_new_payment(env):
+def test_paid_event_issues_a_new_record_version_and_blocks_a_second_charge(env, monkeypatch):
+    from app import main
+
     client, factory, fake = env
     case_id, creds = _make_case(client, factory)
+    issued = []
+    monkeypatch.setattr(
+        main, "_issue_decision_record_safely", lambda db, cid: issued.append(cid)
+    )
     headers = {"X-Actor-Token": creds["respondent"]}
     client.post(f"/cases/{case_id}/settlement/checkout", headers=headers)
     paid = _event("checkout.session.completed", "cs_test_1")
     client.post("/stripe/webhook", content=paid, headers=_sign(paid))
+    assert issued == [case_id]
+
     with factory() as db:
         db.add(
             AttestationRecord(
@@ -409,6 +417,7 @@ def test_new_attestation_requires_new_payment(env):
             )
         )
         db.commit()
-    view = client.get(f"/cases/{case_id}/settlement").json()
-    assert view["offer"]["attestation_hash"] == "b" * 64
-    assert view["payment"] is None
+    again = client.post(f"/cases/{case_id}/settlement/checkout", headers=headers)
+    assert again.status_code == 409
+    assert again.json()["detail"] == "already_paid"
+    assert client.get(f"/cases/{case_id}/settlement").json()["payment"]["status"] == "paid"

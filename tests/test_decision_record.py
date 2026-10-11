@@ -293,3 +293,55 @@ def test_ed25519_record_is_verifiable_with_the_public_key(monkeypatch):
         assert forged_valid is False
     finally:
         get_settings.cache_clear()
+
+
+def _paid_settlement():
+    return {
+        "id": "pay-1",
+        "status": "paid",
+        "amount_minor_units": 100_000,
+        "platform_fee_minor_units": 10_000,
+        "currency": "BRL",
+        "paid_at": "2026-10-20T12:00:00+00:00",
+        "attestation_hash": "a" * 64,
+        "payment_intent_id": "pi_123",
+    }
+
+
+def test_unpaid_record_has_no_settlement_and_keeps_its_basis():
+    from app.reports.decision_record import record_basis
+
+    data = _decided_case_data()
+    record = build_decision_record(data, audit_chain_head="h", audit_chain_length=1)
+    assert record["settlement"] is None
+    assert "settlement" not in record_basis(data)
+    data["settlement_payment"] = {**_paid_settlement(), "status": "pending"}
+    assert "settlement" not in record_basis(data)
+
+
+def test_paid_settlement_is_in_a_new_signed_version_of_the_record():
+    from app.reports.decision_record import record_basis
+
+    data = _decided_case_data()
+    first = build_decision_record(data, audit_chain_head="h", audit_chain_length=1)
+    data["settlement_payment"] = _paid_settlement()
+    assert record_basis(data)["settlement"]["payment_id"] == "pay-1"
+    second = build_decision_record(
+        data, audit_chain_head="h2", audit_chain_length=2, previous=first
+    )
+    assert second["record_number"] == first["record_number"] + 1
+    assert second["supersedes_record_hash"] == first["record_hash"]
+    assert second["integrity"]["basis_hash"] != first["integrity"]["basis_hash"]
+    settlement = second["settlement"]
+    assert settlement["amount_minor_units"] == 100_000
+    assert settlement["net_to_payee_minor_units"] == 90_000
+    assert settlement["payment_reference"] == "pi_123"
+    assert "abatido" in settlement["notice"]
+    assert verify_record(second)[0] is True
+
+    tampered = {**second, "settlement": {**settlement, "amount_minor_units": 1}}
+    assert verify_record(tampered)[0] is False
+
+    text = _docx_text(build_decision_record_docx(second).getvalue())
+    assert "Pagamento registrado" in text
+    assert "pi_123" in text

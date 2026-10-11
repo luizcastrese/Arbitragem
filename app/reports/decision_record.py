@@ -324,6 +324,40 @@ def _appeal_section(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+SETTLEMENT_NOTICE = (
+    "Este valor foi pago voluntariamente pela parte reclamada à parte reclamante "
+    "por meio da plataforma. Deve ser abatido de qualquer cobrança, execução ou "
+    "pedido judicial sobre o mesmo crédito. O pagamento não encerra o "
+    "procedimento nem quita valor além do efetivamente pago."
+)
+
+
+def _settlement_section(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pagamento voluntário confirmado pelo Stripe. Só consta do auto depois da
+    confirmação por webhook: checkout aberto ou falho não é fato do caso."""
+    payment = case_data.get("settlement_payment") or {}
+    if payment.get("status") != "paid":
+        return None
+    amount = payment.get("amount_minor_units")
+    fee = payment.get("platform_fee_minor_units") or 0
+    currency = payment.get("currency")
+    return {
+        "status": "paid",
+        "payment_id": payment.get("id"),
+        "payer_role": "respondent",
+        "payee_role": "claimant",
+        "amount_minor_units": amount,
+        "amount_display": format_money(amount, currency),
+        "platform_fee_minor_units": fee,
+        "net_to_payee_minor_units": (amount or 0) - fee,
+        "currency": currency,
+        "paid_at": payment.get("paid_at"),
+        "attestation_hash": payment.get("attestation_hash"),
+        "payment_reference": payment.get("payment_intent_id"),
+        "notice": SETTLEMENT_NOTICE,
+    }
+
+
 def _summary(kind: str, case_data: Dict[str, Any], agreement: Optional[Dict[str, Any]]) -> str:
     claimant = case_data.get("claimant") or "a parte reclamante"
     respondent = case_data.get("respondent") or "a parte reclamada"
@@ -376,7 +410,18 @@ def record_basis(case_data: Dict[str, Any]) -> Dict[str, Any]:
     appeals = case_data.get("appeals") or []
     latest = appeals[-1] if appeals else {}
     consent = case_data.get("consent") or {}
+    settlement = _settlement_section(case_data)
+    extra: Dict[str, Any] = {}
+    if settlement:
+        # Só entra quando há pagamento: autos antigos mantêm o mesmo hash-base.
+        extra["settlement"] = {
+            "payment_id": settlement["payment_id"],
+            "amount_minor_units": settlement["amount_minor_units"],
+            "currency": settlement["currency"],
+            "attestation_hash": settlement["attestation_hash"],
+        }
     return {
+        **extra,
         "kind": outcome_kind(case_data),
         "procedure_conclusion": case_data.get("procedure_conclusion"),
         "decision_hash": canonical_hash(case_data.get("decision") or {}),
@@ -448,6 +493,7 @@ def build_decision_record(
         "decision": _decision_section(case_data, kind),
         "review": _review_section(case_data) if kind != "agreement" else None,
         "appeal": _appeal_section(case_data) if kind != "agreement" else None,
+        "settlement": _settlement_section(case_data) if kind != "agreement" else None,
         "integrity": {
             "manifest_hash": manifest.get("manifest_hash"),
             "manifest_signature": manifest.get("platform_signature"),

@@ -33,6 +33,15 @@ def get_payment(
     )
 
 
+def paid_payment(db: Session, case_id: str) -> Optional[SettlementPayment]:
+    return (
+        db.query(SettlementPayment)
+        .filter(SettlementPayment.case_id == case_id, SettlementPayment.status == "paid")
+        .order_by(SettlementPayment.paid_at.asc())
+        .first()
+    )
+
+
 def get_payment_by_session(db: Session, session_id: str) -> Optional[SettlementPayment]:
     return (
         db.query(SettlementPayment)
@@ -67,14 +76,18 @@ def new_payment(
     return payment
 
 
-def payment_to_dict(payment: Optional[SettlementPayment]) -> Optional[Dict[str, Any]]:
+def payment_to_dict(
+    payment: Optional[SettlementPayment], detailed: bool = False
+) -> Optional[Dict[str, Any]]:
     if payment is None:
         return None
 
     def iso(value: Optional[datetime]) -> Optional[str]:
         return value.isoformat() if value else None
 
+    extra = {"payment_intent_id": payment.payment_intent_id} if detailed else {}
     return {
+        **extra,
         "id": payment.id,
         "status": payment.status,
         "amount_minor_units": payment.amount_minor_units,

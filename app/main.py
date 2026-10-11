@@ -113,6 +113,7 @@ from app.db.settlement_repository import (
     get_payment_by_session,
     member_user,
     new_payment,
+    paid_payment,
     payment_to_dict,
 )
 from app.domain.settlement import settlement_offer
@@ -677,6 +678,9 @@ def _issue_decision_record(db: Session, case_id: str):
     case_data = case_to_dict(case, include_content=False, include_embeddings=False)
     if outcome_kind(case_data) is None:
         return None
+    case_data["settlement_payment"] = payment_to_dict(
+        paid_payment(db, case_id), detailed=True
+    )
     current = case_data.get("decision_record")
     basis_hash = canonical_hash(record_basis(case_data))
     if current and (current.get("integrity") or {}).get("basis_hash") == basis_hash:
@@ -3402,7 +3406,7 @@ def get_settlement(
     case = _case_or_404(db, case_id)
     _require_case_view(db, case, x_session_token)
     offer = settlement_offer(case_to_dict(case, include_content=False))
-    payment = (
+    payment = paid_payment(db, case.id) or (
         get_payment(db, case.id, offer["attestation_hash"])
         if offer["available"]
         else None
@@ -3431,6 +3435,10 @@ def create_settlement_checkout(
     if not offer["available"]:
         raise HTTPException(status_code=409, detail=offer["reason"])
 
+    if paid_payment(db, case.id) is not None:
+        # Qualquer pagamento anterior do caso basta: evita cobrar duas vezes o
+        # mesmo crédito, mesmo que a declaração tenha mudado depois.
+        raise HTTPException(status_code=409, detail="already_paid")
     payee = member_user(db, case.id, "claimant")
     if payee is None or not payee.stripe_account_id:
         raise HTTPException(status_code=409, detail="payee_not_onboarded")
@@ -3544,6 +3552,9 @@ def _apply_payment_event(db: Session, event: Dict[str, Any]) -> None:
         },
     )
     db.commit()
+    if new_status == "paid":
+        # O pagamento passa a constar do auto: nova versão assinada, encadeada.
+        _issue_decision_record_safely(db, payment.case_id)
 
 
 @app.post(STRIPE_WEBHOOK_PATH, include_in_schema=False)
