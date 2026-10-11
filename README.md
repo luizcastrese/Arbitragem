@@ -76,7 +76,10 @@ saída em sentença arbitral ou estatal.
 - Decision Attestation assinada em Ed25519: declaração da decisão que qualquer
   terceiro verifica offline com a chave pública publicada em
   `/.well-known/valinor-signing-key`, emitida apenas com a cadeia de auditoria
-  íntegra; abre o prazo de recurso automático. Não há execução automática;
+  íntegra; abre o prazo de recurso automático. Não há execução automática nem forçada de valores;
+- pagamento **opcional** da decisão via Stripe Connect: a parte reclamada pode
+  escolher pagar o valor verificado da decisão; 10% ficam com a plataforma e o
+  restante vai à parte reclamante (ver "Pagamento opcional" abaixo);
 - âncora pública opcional da attestation em relays Nostr (só hash, assinatura e
   identificadores — nunca o teor da decisão ou das partes), dando timestamp
   independente do servidor da Valinor; a âncora só é registrada quando algum
@@ -114,7 +117,8 @@ caso
   -> attestation assinada (opcional)
   -> recurso automático
   -> auto da decisão (acordo, decisão ou encerramento sem mérito)
-  -> cada parte decide se cumpre ou se leva o auto ao Judiciário
+  -> cada parte decide se cumpre (inclusive pagando pela plataforma, de forma
+     opcional) ou se leva o auto ao Judiciário
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
@@ -269,6 +273,9 @@ Variáveis do arquivo `.env`:
 | `DECISION_STABILITY_RUNS` / `DECISION_STABILITY_THRESHOLD` | Política de estabilidade |
 | `APP_ENV` | `development` ou `production`; em produção força autenticação, exige os segredos e desliga os tokens por papel |
 | `EXPOSE_API_DOCS` | Expõe `/docs`, `/redoc` e `/openapi.json`; padrão ligado em desenvolvimento e desligado em produção |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Pagamento opcional da decisão. Sem os dois, o recurso fica desligado (`503`) e o restante funciona igual |
+| `PLATFORM_FEE_BPS` | Taxa da plataforma sobre o valor pago, em basis points (padrão `1000` = 10%). Mudar o valor exige nova versão dos termos |
+| `PUBLIC_APP_URL` | URL pública do front, usada nos retornos do Stripe |
 | `DATABASE_URL` | Banco SQLAlchemy |
 | `POSTGRES_DB` | Banco criado pelo Docker Compose |
 | `POSTGRES_USER` | Usuário PostgreSQL do Compose |
@@ -376,6 +383,11 @@ críticos derrubam o boot em vez de virar aviso.
 | `GET /cases/{id}/deadlines` | Listar a agenda processual |
 | `POST /cases/{id}/deadlines` | Criar prazo e notificações |
 | `POST /cases/{id}/deadlines/{deadline_id}/complete` | Marcar o prazo como cumprido |
+| `POST /payments/connect/onboarding` | Cria a conta Stripe Connect da pessoa e devolve o link de cadastro de recebedor |
+| `GET /payments/connect/status` | Informa se a conta já pode receber repasses |
+| `GET /cases/{id}/settlement` | Oferta de pagamento da decisão (valor, taxa, motivo de indisponibilidade) e estado do pagamento |
+| `POST /cases/{id}/settlement/checkout` | A parte reclamada escolhe pagar: devolve a URL do Checkout |
+| `POST /stripe/webhook` | Confirmação do Stripe (assinada). Só o webhook marca o pagamento como pago |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte, com o CPF/CNPJ dela |
@@ -541,3 +553,34 @@ migrar o rate limiting e a fila de etapas para backends compartilhados.
 - [OpenRouter API](https://openrouter.ai/docs/api-reference/overview)
 - [Structured Outputs](https://openrouter.ai/docs/features/structured-outputs)
 - [Models](https://openrouter.ai/models)
+
+## Pagamento opcional da decisão
+
+A decisão continua não vinculante: ninguém é obrigado a pagar, e a plataforma
+nunca debita ou retém valores por força dela. O pagamento é uma saída que a
+parte reclamada pode escolher para encerrar o litígio.
+
+- **Quando existe oferta:** decisão de mérito verificada e atestada, a favor do
+  reclamante (`claimant` ou `partial`), com `remedy_calculation` em minor units,
+  sem recurso pendente e depois do fim do prazo de contestação (ou do recurso).
+  Sem valor verificado, não há oferta. A decisão a favor do reclamado não gera
+  pagamento.
+- **Fluxo:** o reclamante faz o cadastro de recebedor
+  (`POST /payments/connect/onboarding`); o reclamado abre o Checkout
+  (`POST /cases/{id}/settlement/checkout`) e paga. O Stripe repassa à conta do
+  reclamante, retendo `PLATFORM_FEE_BPS` como `application_fee_amount`. É uma
+  cobrança com destino: a plataforma não custodia o dinheiro e absorve as
+  tarifas do Stripe.
+- **Confirmação:** apenas o webhook `checkout.session.completed` (ou
+  `async_payment_succeeded`) marca `paid`, após conferir valor e moeda. O
+  retorno do navegador não confirma nada. Configure no Stripe o endpoint
+  `/stripe/webhook` com os eventos `checkout.session.completed`,
+  `checkout.session.async_payment_succeeded`,
+  `checkout.session.async_payment_failed` e `checkout.session.expired`.
+- **Vínculo:** o pagamento é único por attestation. Uma correção em recurso gera
+  nova attestation e, portanto, nova oferta. Cada passo entra na cadeia de
+  auditoria.
+- **Termos:** a cláusula 9.1 (termos `2026-10-11`) descreve o pagamento e a taxa.
+  Como os textos ainda aguardam revisão jurídica, trate o enquadramento
+  (intermediação de pagamento, tributação, Banco Central) como pendência antes
+  da exposição pública.

@@ -194,6 +194,9 @@ class User(Base):
     email_verified_at = Column(DateTime(timezone=True), nullable=True)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)
+    # Conta Stripe Connect (Express) para receber o pagamento opcional de uma
+    # decisão. Só existe depois que a própria pessoa inicia o cadastro.
+    stripe_account_id = Column(String, nullable=True, unique=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
@@ -440,3 +443,38 @@ class AttestationRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     case = relationship("Case", back_populates="attestation_records")
+
+
+class SettlementPayment(Base):
+    """Pagamento opcional da decisão, feito pela parte devedora à credora.
+
+    Nada aqui é execução forçada: a parte devedora escolhe pagar para encerrar
+    o litígio. Fica vinculado ao hash da attestation vigente, de modo que uma
+    decisão corrigida em recurso nunca reaproveita um pagamento anterior.
+    """
+
+    __tablename__ = "settlement_payments"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id", "attestation_hash", name="uq_settlement_payments_attestation"
+        ),
+    )
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.id"), nullable=False, index=True)
+    attestation_hash = Column(String, nullable=False)
+    payer_role = Column(String, nullable=False)
+    payee_role = Column(String, nullable=False)
+    payer_user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    payee_user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    amount_minor_units = Column(Integer, nullable=False)
+    fee_minor_units = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="pending", index=True)
+    checkout_session_id = Column(String, nullable=True, unique=True)
+    payment_intent_id = Column(String, nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
