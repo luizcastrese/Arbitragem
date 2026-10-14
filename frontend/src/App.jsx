@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import ValinorMark from './ValinorMark.jsx'
 import {
   AlertTriangle,
   ArrowRight,
@@ -555,7 +556,7 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <span className="brand-mark"><Scale size={20} /></span>
+            <span className="brand-mark"><ValinorMark size={34} title="Valinor" /></span>
             <div>
               <strong>Valinor</strong>
               <small>Decisão prévia ao Judiciário</small>
@@ -601,26 +602,34 @@ export default function App() {
         <section className="intro">
           <div>
             <span className="eyebrow">Antes do processo, uma decisão fundamentada</span>
-            <h1>Resolva a disputa em dias — não em anos de processo.</h1>
+            <h1>Resolva a disputa em dias, <em>não em anos</em> de processo.</h1>
             <p>
-              A Valinor é uma etapa voluntária, anterior ao Judiciário, para conflitos documentais
-              de serviços digitais entre empresas e profissionais: entrega, atraso, pagamento,
-              escopo e aceite. As duas partes apresentam suas provas, a IA busca um acordo
-              e, se não houver, profere uma decisão fundamentada — verificada de forma determinística,
-              auditada por um segundo modelo e, se contestada, reexaminada por recurso automático.
-              A decisão não obriga ninguém: o que sai do procedimento é o auto da decisão, um
-              documento assinado que a parte pode levar a um advogado ou ao Judiciário.
-              Não é sentença judicial nem arbitral.
+              Uma etapa voluntária e anterior ao Judiciário para conflitos entre empresas e
+              profissionais de serviços digitais. As duas partes apresentam suas provas; a IA
+              busca o acordo e, sem acordo, explica a decisão.
             </p>
+            <div className="intro-actions">
+              <button className="button gold" onClick={startNewCase}>
+                <Plus size={17} /> Abrir um caso
+              </button>
+              <a className="button outline" href="#para-quem">Recebi um convite</a>
+            </div>
+            <ul className="intro-tags">
+              <li>Participação voluntária</li>
+              <li>Contraditório para as duas partes</li>
+              <li>Histórico lacrado e verificável</li>
+            </ul>
           </div>
           <div className="trust-note">
             <ShieldCheck size={22} />
             <div>
-              <strong>Fração do custo, com garantias de processo</strong>
-              <span>Nenhuma prova entra na decisão sem a outra parte ver e responder. Todo o histórico é lacrado e auditável.</span>
+              <strong>A decisão não obriga ninguém</strong>
+              <span>Não é sentença judicial nem arbitral. O que sai do procedimento é o auto da decisão: um documento assinado que você pode levar a um advogado ou ao Judiciário.</span>
             </div>
           </div>
         </section>
+
+        <AudienceGuide onStart={startNewCase} onLogin={() => setShowAuth(true)} />
 
         <HowItWorks />
 
@@ -824,6 +833,99 @@ export default function App() {
   )
 }
 
+const AUDIENCE_PROFILES = [
+  {
+    id: 'reclamante',
+    label: 'Abri a reclamação',
+    headline: 'Você quer resolver sem abrir um processo.',
+    body: 'Conte o que aconteceu, anexe os documentos e deixe a outra parte conhecer as regras antes de aceitar. Você acompanha cada etapa e entende por que cada proposta foi feita.',
+    cta: 'Abrir um caso',
+    note: 'Leva alguns minutos para registrar.',
+    steps: [
+      'Descreva o caso e o que você espera receber.',
+      'Convide a outra parte. Ela só participa se aceitar as regras.',
+      'Avalie as propostas de acordo ou siga para a decisão fundamentada.'
+    ],
+    result: 'você recebe o auto da decisão, assinado, para levar a um advogado se precisar.'
+  },
+  {
+    id: 'reclamada',
+    label: 'Fui chamado a responder',
+    headline: 'Antes de aceitar, entenda exatamente o que está em jogo.',
+    body: 'Participar é voluntário. Você lê as regras, vê as provas da outra parte e responde a cada uma. Nada entra na decisão sem o seu contraditório.',
+    cta: 'Entrar para abrir o convite',
+    note: 'Use o mesmo e-mail do convite.',
+    steps: [
+      'Leia o convite e os termos. Aceite só se concordar.',
+      'Apresente sua defesa e seus documentos.',
+      'Responda às rodadas de acordo: aceitar, recusar ou contrapropor.'
+    ],
+    result: 'todo o histórico fica registrado e auditável para o seu jurídico.'
+  },
+  {
+    id: 'representante',
+    label: 'Sou advogado ou representante',
+    headline: 'Apoie seu cliente com um registro que você pode auditar.',
+    body: 'Representantes e advogados podem atuar ao lado de qualquer uma das partes. Cada ato fica registrado, e a decisão pode ser verificada por terceiros, sem depender da plataforma.',
+    cta: 'Entrar como representante',
+    note: 'Vincule-se ao caso do seu cliente.',
+    steps: [
+      'Entre com sua conta e vincule-se ao caso.',
+      'Organize as provas e apresente o caso pela parte.',
+      'Verifique o auto da decisão e a assinatura de forma independente.'
+    ],
+    result: 'um documento assinado, com partes qualificadas, percurso e dispositivo.'
+  }
+]
+
+function AudienceGuide({ onStart, onLogin }) {
+  const [profileId, setProfileId] = useState('reclamante')
+  const profile = AUDIENCE_PROFILES.find((item) => item.id === profileId)
+  return (
+    <section className="audience-guide" id="para-quem">
+      <div className="value-heading">
+        <span className="section-label">Como você chega aqui?</span>
+        <h2>Diga quem você é. Mostramos o caminho que importa para você.</h2>
+      </div>
+      <div className="guide-tabs" role="tablist" aria-label="Perfil de quem usa a Valinor">
+        {AUDIENCE_PROFILES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={item.id === profileId}
+            className={item.id === profileId ? 'guide-tab active' : 'guide-tab'}
+            onClick={() => setProfileId(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="guide-panel" role="tabpanel">
+        <div className="guide-copy">
+          <h3>{profile.headline}</h3>
+          <p>{profile.body}</p>
+          <div className="guide-cta">
+            <button className="button primary" onClick={profile.id === 'reclamante' ? onStart : onLogin}>
+              {profile.cta}
+            </button>
+            <span>{profile.note}</span>
+          </div>
+        </div>
+        <ol className="guide-steps">
+          {profile.steps.map((step, index) => (
+            <li key={step}>
+              <span>{index + 1}</span>
+              <p>{step}</p>
+            </li>
+          ))}
+          <li className="guide-result"><strong>No fim:</strong> {profile.result}</li>
+        </ol>
+      </div>
+    </section>
+  )
+}
+
 function HowItWorks() {
   const steps = [
     {
@@ -848,7 +950,7 @@ function HowItWorks() {
     }
   ]
   return (
-    <section className="how-it-works">
+    <section className="how-it-works" id="como">
       <div className="value-heading">
         <span className="section-label">Como funciona</span>
         <h2>Cinco etapas, as mesmas regras para os dois lados.</h2>
