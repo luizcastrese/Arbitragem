@@ -666,6 +666,8 @@ export default function App() {
           </aside>
         </section>
 
+        <ScopeSection />
+
         <HowItWorks />
 
         <AudienceGuide onStart={startNewCase} onLogin={() => openAuth('login')} />
@@ -970,6 +972,64 @@ function AudienceGuide({ onStart, onLogin }) {
           ))}
           <li className="guide-result"><strong>No fim:</strong> {profile.result}</li>
         </ol>
+      </div>
+    </section>
+  )
+}
+
+const SCOPE_CATEGORIES = [
+  'Sites e desenvolvimento web',
+  'Software simples sob encomenda',
+  'Design',
+  'Marketing',
+  'Gestão de conteúdo',
+  'Produção audiovisual',
+  'Consultoria operacional',
+  'Automação não crítica'
+]
+
+const SCOPE_ISSUES = [
+  'Entrega', 'Atraso', 'Pagamento', 'Reembolso', 'Alteração de escopo',
+  'Aceite', 'Rescisão', 'Correção', 'Pagamento proporcional'
+]
+
+const SCOPE_EXCLUDED = [
+  'Consumo (compra como destinatário final)',
+  'Dano corporal, saúde, trabalho, família',
+  'Fraude relevante e atividade criminal',
+  'Segurança crítica e vazamento de dados',
+  'Propriedade intelectual complexa',
+  'Disputas que exigem perícia técnica',
+  'Lucros cessantes elevados e urgência',
+  'Valor acima do limite fixado no caso'
+]
+
+function ScopeSection() {
+  return (
+    <section className="scope" id="escopo">
+      <div className="value-heading">
+        <span className="section-label">O que o Valinor trata</span>
+        <h2>Disputas de serviços digitais entre empresas e profissionais.</h2>
+        <p>Contratos de serviço firmados para a atividade profissional das partes, em qualquer destas áreas.</p>
+      </div>
+      <ul className="scope-categories">
+        {SCOPE_CATEGORIES.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+      <div className="scope-issues">
+        <strong>Questões típicas</strong>
+        <ul>
+          {SCOPE_ISSUES.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      </div>
+      <div className="scope-excluded">
+        <div>
+          <span className="eyebrow">Fora do escopo</span>
+          <h3>O que o procedimento não decide.</h3>
+          <p>Matéria fora do escopo encerra o caso como inadmissível, sem decisão de mérito.</p>
+        </div>
+        <ul>
+          {SCOPE_EXCLUDED.map((item) => <li key={item}>{item}</li>)}
+        </ul>
       </div>
     </section>
   )

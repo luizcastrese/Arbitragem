@@ -256,7 +256,24 @@ h1, h2, h3, p { margin-top: 0; }
 .value-heading { max-width: 700px; }
 .value-heading h2 { margin: 12px 0 0; font-family: var(--font-display); font-size: 36px; font-weight: 500; line-height: 1.15; letter-spacing: -.012em; }
 
-.how-it-works { margin-bottom: 40px; padding: 56px 8px 24px; animation: rise .55s var(--ease) backwards; }
+.scope { margin-top: 24px; padding: 56px 8px 24px; animation: rise .55s var(--ease) backwards; }
+.scope .value-heading p { margin: 14px 0 0; color: var(--muted); line-height: 1.65; }
+.scope-categories { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 32px; margin: 36px 0 0; padding: 0; list-style: none; }
+.scope-categories li { padding: 22px 20px; border-top: 1px solid var(--line); font-family: var(--font-display); font-size: 19px; line-height: 1.3; }
+.scope-issues { margin-top: 36px; }
+.scope-issues strong { display: block; margin-bottom: 14px; font-size: 14px; }
+.scope-issues ul { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.scope-issues li { padding: 8px 16px; border: 1px solid #cfc6ae; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.scope-excluded { display: flex; flex-wrap: wrap; gap: 24px 56px; margin-top: 44px; padding: 36px; color: #f6f2e8; background: var(--green-950); border-radius: 24px; }
+.scope-excluded > div { flex: 1 1 280px; min-width: 0; }
+.scope-excluded .eyebrow { color: var(--gold); }
+.scope-excluded h3 { margin: 12px 0 10px; font-family: var(--font-display); font-size: 26px; font-weight: 400; line-height: 1.2; }
+.scope-excluded p { margin: 0; color: #aebbcd; font-size: 14px; line-height: 1.65; }
+.scope-excluded ul { flex: 1 1 360px; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 32px; align-content: start; margin: 0; padding: 0; list-style: none; }
+.scope-excluded li { display: flex; gap: 10px; padding: 11px 0; border-top: 1px solid rgba(201, 211, 224, .16); color: var(--silver); font-size: 14px; line-height: 1.5; }
+.scope-excluded li::before { content: '–'; color: var(--gold); }
+
+.how-it-works { margin-bottom: 40px; padding: 40px 8px 24px; animation: rise .55s var(--ease) backwards; }
 .how-steps {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
