@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ValinorMark from './ValinorMark.jsx'
 import {
   AlertTriangle,
@@ -167,6 +167,8 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState('')
   const [showAccount, setShowAccount] = useState(false)
   const [legalView, setLegalView] = useState(null)
+  const [pendingStart, setPendingStart] = useState(false)
+  const workspaceRef = useRef(null)
 
   const currentStage = useMemo(
     () => Math.max(0, steps.findIndex((step) => step.key === caseData?.status)),
@@ -221,6 +223,12 @@ export default function App() {
         setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
       }
       await loadCases()
+      // Quem entrou para abrir um caso cai direto no formulário.
+      if (pendingStart) {
+        setPendingStart(false)
+        setShowCreate(true)
+        scrollToWorkspace()
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -289,8 +297,9 @@ export default function App() {
     setUser(null)
     setCases([])
     setCaseData(null)
+    setShowCreate(false)
     setShowAccount(false)
-    setShowAuth(true)
+    window.scrollTo({ top: 0 })
   }
 
   async function exportAccountData() {
@@ -327,8 +336,9 @@ export default function App() {
       setUser(null)
       setCases([])
       setCaseData(null)
+      setShowCreate(false)
       setShowAccount(false)
-      setShowAuth(true)
+      window.scrollTo({ top: 0 })
     } catch (err) {
       setError(err.message)
     }
@@ -398,8 +408,8 @@ export default function App() {
           if (items[0]) await loadCase(items[0].id)
           else setShowCreate(true)
         } catch (err) {
-          if (/401|sessão|entre/i.test(err.message)) setShowAuth(true)
-          else throw err
+          // Sem sessão: o visitante vê a apresentação e entra quando quiser.
+          if (!/401|sessão|entre/i.test(err.message)) throw err
         }
       } catch (err) {
         setError(err.message)
@@ -545,11 +555,41 @@ export default function App() {
     event.target.value = ''
   }
 
+  function scrollToWorkspace() {
+    requestAnimationFrame(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  function openAuth(mode = 'login') {
+    setAuthMode(mode)
+    setShowAuth(true)
+  }
+
   function startNewCase() {
-    setShowCreate(true)
     setError('')
     setStatus('')
+    if (!user) {
+      // Criar um caso exige conta: abre o acesso e retoma o formulário depois.
+      setPendingStart(true)
+      openAuth('register')
+      return
+    }
+    setShowCreate(true)
+    scrollToWorkspace()
   }
+
+  function closeAuth() {
+    setShowAuth(false)
+    setPendingStart(false)
+  }
+
+  useEffect(() => {
+    if (!showAuth) return undefined
+    const onKey = (event) => { if (event.key === 'Escape') closeAuth() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showAuth])
 
   return (
     <div className="app">
@@ -587,7 +627,7 @@ export default function App() {
                 )}
               </div>
             ) : (
-              <button className="button ghost compact" onClick={() => setShowAuth(true)}>
+              <button className="button ghost compact" onClick={() => openAuth('login')}>
                 <LogIn size={16} /> Entrar
               </button>
             )}
@@ -599,6 +639,7 @@ export default function App() {
       </header>
 
       <main className="page">
+        {!user && (<>
         <section className="intro">
           <div>
             <span className="eyebrow">Antes do processo, uma decisão fundamentada</span>
@@ -614,26 +655,29 @@ export default function App() {
               </button>
               <a className="button outline" href="#para-quem">Recebi um convite</a>
             </div>
-            <ul className="intro-tags">
-              <li>Participação voluntária</li>
-              <li>Contraditório para as duas partes</li>
-              <li>Histórico lacrado e verificável</li>
+          </div>
+          <aside className="trust-note">
+            <span className="eyebrow">Garantias do procedimento</span>
+            <ul>
+              <li><strong>Participação voluntária</strong><span>Ninguém é obrigado a aderir.</span></li>
+              <li><strong>Contraditório para as duas partes</strong><span>Cada prova é vista e respondida.</span></li>
+              <li><strong>Histórico lacrado e verificável</strong><span>Cada etapa é registrada com hash.</span></li>
             </ul>
-          </div>
-          <div className="trust-note">
-            <ShieldCheck size={22} />
-            <div>
-              <strong>A decisão não obriga ninguém</strong>
-              <span>Não é sentença judicial nem arbitral. O que sai do procedimento é o auto da decisão: um documento assinado que você pode levar a um advogado ou ao Judiciário.</span>
-            </div>
-          </div>
+          </aside>
         </section>
-
-        <AudienceGuide onStart={startNewCase} onLogin={() => setShowAuth(true)} />
 
         <HowItWorks />
 
-        <AudienceValue />
+        <AudienceGuide onStart={startNewCase} onLogin={() => openAuth('login')} />
+
+        <section className="closing-band">
+          <div>
+            <h2>A decisão não obriga ninguém.</h2>
+            <p>Não é sentença judicial nem arbitral. O que sai do procedimento é o auto da decisão: um documento assinado que você pode levar a um advogado ou ao Judiciário.</p>
+          </div>
+          <button className="button gold" onClick={startNewCase}>Abrir um caso</button>
+        </section>
+        </>)}
 
         {authNotice && (
           <div className="invite-banner">
@@ -673,16 +717,19 @@ export default function App() {
         )}
 
         {showAuth && !resetToken && (
-          <AuthPanel
-            mode={authMode}
-            setMode={setAuthMode}
-            busy={busy}
-            onSubmit={authMode === 'forgot' ? requestPasswordReset : authenticate}
-            onClose={() => setShowAuth(false)}
-            terms={terms}
-            privacy={privacy}
-            onOpenLegal={setLegalView}
-          />
+          <div className="overlay" role="dialog" aria-modal="true" onMouseDown={(e) => { if (e.target === e.currentTarget) closeAuth() }}>
+            <AuthPanel
+              mode={authMode}
+              setMode={setAuthMode}
+              busy={busy}
+              error={error}
+              onSubmit={authMode === 'forgot' ? requestPasswordReset : authenticate}
+              onClose={closeAuth}
+              terms={terms}
+              privacy={privacy}
+              onOpenLegal={setLegalView}
+            />
+          </div>
         )}
 
         {inviteToken && (
@@ -695,7 +742,7 @@ export default function App() {
             {user ? (
               <button className="button primary" onClick={acceptPendingInvite} disabled={busy}>Aceitar convite</button>
             ) : (
-              <button className="button primary" onClick={() => setShowAuth(true)}>Entrar para aceitar</button>
+              <button className="button primary" onClick={() => openAuth('login')}>Entrar para aceitar</button>
             )}
           </div>
         )}
@@ -713,11 +760,12 @@ export default function App() {
           </div>
         )}
 
-        {error && !caseData && (
+        {error && !caseData && !showCreate && !showAuth && (
           <Message type="error" text={error} />
         )}
 
-        <div className="workspace">
+        {user && (
+        <div className="workspace" ref={workspaceRef}>
           <aside className="case-sidebar">
             <div className="sidebar-heading">
               <div>
@@ -768,7 +816,7 @@ export default function App() {
 
           <div className="main-content">
             {showCreate ? (
-              <CreateCase busy={busy} onSubmit={createCase} onCancel={
+              <CreateCase busy={busy} error={error} onSubmit={createCase} onCancel={
                 cases.length ? () => setShowCreate(false) : null
               } />
             ) : caseData ? (
@@ -812,6 +860,7 @@ export default function App() {
             )}
           </div>
         </div>
+        )}
 
         {legalView && (
           <LegalReader
@@ -968,140 +1017,6 @@ function HowItWorks() {
   )
 }
 
-function AudienceValue() {
-  return (
-    <section className="audience-value">
-      <div className="value-heading">
-        <span className="section-label">Por que usar</span>
-        <h2>O custo de resolver deixa de ser maior que o valor da disputa.</h2>
-        <p>
-          A IA faz o trabalho que consome tempo e honorários: organiza documentos,
-          identifica convergências, conduz rodadas de acordo e fundamenta a análise.
-          As garantias ficam: autoria, ciência, resposta, admissão e auditoria
-          registradas do início ao fim.
-        </p>
-      </div>
-
-      <div className="economy-strip">
-        <div>
-          <CircleDollarSign size={22} />
-          <span>
-            <strong>Fração do custo</strong>
-            Sem custas, audiências ou anos de honorários. A IA absorve o trabalho repetitivo.
-          </span>
-        </div>
-        <div>
-          <Clock3 size={22} />
-          <span>
-            <strong>Dias, não anos</strong>
-            O procedimento inteiro — adesão, provas, acordo, decisão — corre na plataforma, sem pauta.
-          </span>
-        </div>
-        <div>
-          <ShieldCheck size={22} />
-          <span>
-            <strong>Verificável, não é caixa-preta</strong>
-            Decisão com provas citadas, auditoria independente e histórico lacrado por hash.
-          </span>
-        </div>
-      </div>
-
-      <div className="audience-cards">
-        <article className="audience-card company">
-          <span className="audience-icon"><Building2 size={22} /></span>
-          <span className="audience-kicker">Para a parte reclamada</span>
-          <h3>Responda à disputa com custo baixo, sem transformar eficiência em parcialidade.</h3>
-          <ul>
-            <li>Diminui horas operacionais e jurídicas consumidas em cada disputa.</li>
-            <li>Centraliza documentos, defesa e histórico em um único procedimento.</li>
-            <li>Cria novas propostas quando ainda houver espaço real para acordo.</li>
-            <li>Produz uma trilha auditável para jurídico, atendimento e compliance.</li>
-          </ul>
-        </article>
-
-        <article className="audience-card claimant">
-          <span className="audience-icon"><UserRound size={22} /></span>
-          <span className="audience-kicker">Para a parte reclamante</span>
-          <h3>Contratante ou prestador: busque uma solução de menor custo sem perder voz nem acesso.</h3>
-          <ul>
-            <li>Evita que o custo de discutir o contrato torne a cobrança ou a reclamação inviável.</li>
-            <li>Apresenta sua versão, documentos, pedidos e respostas às propostas.</li>
-            <li>Entende por que cada acordo foi sugerido e pode aceitar ou recusar.</li>
-            <li>Vê quais provas sustentam a decisão, em vez de receber apenas um resultado.</li>
-          </ul>
-        </article>
-      </div>
-
-      <div className="role-strip">
-        <div>
-          <BriefcaseBusiness size={20} />
-          <span><strong>Gestor do procedimento</strong> é uma IA: admite, trava e avança o rito sem decidir o mérito nem falar por uma parte.</span>
-        </div>
-        <div>
-          <MessagesSquare size={20} />
-          <span><strong>Representantes e advogados</strong> podem apoiar qualquer parte na apresentação do caso.</span>
-        </div>
-        <div>
-          <ShieldCheck size={20} />
-          <span><strong>Adesão transparente</strong> a contraparte deve compreender e aceitar o procedimento.</span>
-        </div>
-      </div>
-
-      <div className="user-journeys">
-        <div className="journey-heading">
-          <span className="section-label">Quem faz o quê?</span>
-          <h3>O fluxo de cada usuário dentro do caso</h3>
-        </div>
-        <div className="journey-columns">
-          <Journey
-            title="Parte reclamada"
-            steps={[
-              'Recebe o convite e conhece as regras antes de aceitar participar.',
-              'Apresenta defesa, documentos e limites possíveis para acordo.',
-              'Responde a cada rodada com aceite, recusa ou contraproposta.',
-              'Recebe o auto da decisão, decide se cumpre e guarda a trilha para o jurídico.'
-            ]}
-          />
-          <Journey
-            title="Parte reclamante"
-            steps={[
-              'Abre o caso e convida a outra parte com explicação clara do procedimento.',
-              'Apresenta fatos, documentos, pedido e resultado esperado.',
-              'Avalia cada proposta e informa o que aceita ou deseja alterar.',
-              'Recebe o auto da decisão, que pode usar como base para ir ao Judiciário.'
-            ]}
-          />
-          <Journey
-            title="Gestor, uma IA"
-            steps={[
-              'É uma IA, não um vazio preenchido por uma das partes.',
-              'Admite o material quando o contraditório fecha.',
-              'Trava o conjunto só depois que as duas apresentações encerram.',
-              'Abre a composição e, sem acordo, leva o caso à decisão, à auditoria e ao auto.'
-            ]}
-          />
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function Journey({ title, steps }) {
-  return (
-    <article className="journey">
-      <h4>{title}</h4>
-      <ol>
-        {steps.map((step, index) => (
-          <li key={step}>
-            <span>{index + 1}</span>
-            <p>{step}</p>
-          </li>
-        ))}
-      </ol>
-    </article>
-  )
-}
-
 const AUTH_COPY = {
   register: {
     title: 'Crie sua conta',
@@ -1120,7 +1035,7 @@ const AUTH_COPY = {
   }
 }
 
-function AuthPanel({ mode, setMode, busy, onSubmit, onClose, terms, privacy, onOpenLegal }) {
+function AuthPanel({ mode, setMode, busy, error, onSubmit, onClose, terms, privacy, onOpenLegal }) {
   const copy = AUTH_COPY[mode] || AUTH_COPY.login
   return (
     <section className="auth-panel">
@@ -1159,6 +1074,7 @@ function AuthPanel({ mode, setMode, busy, onSubmit, onClose, terms, privacy, onO
             <input name="password" type="password" minLength={mode === 'register' ? 10 : 1} required placeholder="Mínimo de 10 caracteres" />
           </label>
         )}
+        {error && <div className="auth-error"><Message type="error" text={error} /></div>}
         <div className="auth-actions">
           <button type="button" className="button ghost" onClick={onClose}>Agora não</button>
           <button className="button primary" disabled={busy}>{copy.submit}</button>
@@ -1237,7 +1153,7 @@ function PasswordResetPanel({ busy, onSubmit, onCancel }) {
   )
 }
 
-function CreateCase({ busy, onSubmit, onCancel }) {
+function CreateCase({ busy, error, onSubmit, onCancel }) {
   return (
     <section className="surface create-surface">
       <div className="surface-header">
@@ -1270,6 +1186,8 @@ function CreateCase({ busy, onSubmit, onCancel }) {
           <small>A outra parte do contrato, que responderá ao caso.</small>
           <input name="respondent" placeholder="Ex.: Comercial Alfa Ltda." required minLength="2" />
         </label>
+
+        {error && <div className="full-row"><Message type="error" text={error} /></div>}
 
         <div className="form-actions">
           {onCancel && (
