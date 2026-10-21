@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ValinorMark from './ValinorMark.jsx'
+import ValinorMark, { HeroArt } from './ValinorMark.jsx'
 import {
   AlertTriangle,
   ArrowRight,
@@ -596,7 +596,7 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <span className="brand-mark"><ValinorMark size={34} title="Valinor" /></span>
+            <span className="brand-mark"><ValinorMark size={44} tone="light" title="Valinor" /></span>
             <div>
               <strong>Valinor</strong>
               <small>Decisão prévia ao Judiciário</small>
@@ -656,14 +656,12 @@ export default function App() {
               <a className="button outline" href="#para-quem">Recebi um convite</a>
             </div>
           </div>
-          <aside className="trust-note">
-            <span className="eyebrow">Garantias do procedimento</span>
-            <ul>
-              <li><strong>Participação voluntária</strong><span>Ninguém é obrigado a aderir.</span></li>
-              <li><strong>Contraditório para as duas partes</strong><span>Cada prova é vista e respondida.</span></li>
-              <li><strong>Histórico lacrado e verificável</strong><span>Cada etapa é registrada com hash.</span></li>
-            </ul>
-          </aside>
+          <aside className="intro-art" aria-hidden="true"><HeroArt /></aside>
+          <ul className="intro-guarantees">
+            <li><strong>Participação voluntária</strong><span>Ninguém é obrigado a aderir.</span></li>
+            <li><strong>Contraditório para as duas partes</strong><span>Cada prova é vista e respondida.</span></li>
+            <li><strong>Histórico lacrado e verificável</strong><span>Cada etapa é registrada com hash.</span></li>
+          </ul>
         </section>
 
         <ScopeSection />
