@@ -205,8 +205,8 @@ def _lawsuit_ref(pathway: Dict[str, Any]) -> str:
 def legal_effect(pathway: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]:
     """O que o documento final é e o que ele pode fazer com o conflito.
 
-    ``kind`` é o desfecho do auto: ``agreement``, ``decision`` ou
-    ``no_merit_decision``. Casos anteriores à via são tratados como antes do
+    ``kind`` é o desfecho do auto: ``agreement``, ``decision``,
+    ``no_merit_decision`` ou ``withdrawn``. Casos anteriores à via são tratados como antes do
     processo e sem escolha de arbitragem.
     """
     pathway = pathway or {}
@@ -299,6 +299,35 @@ def legal_effect(pathway: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]
             steps.append(
                 f"O auto pode ser juntado ao {_lawsuit_ref(pathway)} como prova "
                 "do procedimento, cabendo ao juízo avaliá-lo."
+            )
+    elif kind == "withdrawn":
+        instrument = "auto_de_encerramento_pela_via_judicial"
+        label = "Encerramento por opção pela via judicial"
+        binding = False
+        basis += [
+            "Adesão voluntária: qualquer parte deixa o procedimento antes do desfecho",
+            "Lei 13.140/2015, art. 30, e CPC, art. 166, §1º (confidencialidade do que se disse na busca de acordo)",
+        ]
+        steps.append(
+            "As duas partes recebem este auto com o histórico completo, para "
+            "auditar o que foi apresentado, respondido e proposto."
+        )
+        if pending_lawsuit:
+            steps.append(
+                f"Comunicar o encerramento no {_lawsuit_ref(pathway)} para que "
+                "o processo retome o curso, se estava suspenso (CPC, art. 313, II)."
+            )
+        else:
+            steps.append(
+                "O conflito segue no Judiciário. O auto pode ser juntado à "
+                "petição como prova do procedimento, cabendo ao juízo avaliá-lo."
+            )
+        if track == ARBITRATION:
+            pending.append(
+                "As duas partes tinham escolhido a arbitragem. Se já firmaram "
+                "compromisso arbitral fora da plataforma, a saída unilateral não "
+                "o desfaz, e a outra parte pode alegá-lo no processo (CPC, art. "
+                "337, X)."
             )
     else:
         instrument = "auto_sem_merito"

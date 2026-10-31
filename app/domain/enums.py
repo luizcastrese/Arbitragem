@@ -15,6 +15,7 @@ ProcedureConclusion = Literal[
     "inadmissible",
     "invalidated",
     "system_failure",
+    "withdrawn",
 ]
 
 AutomaticReviewOutcome = Literal["approved", "rejected", "inconclusive"]
@@ -80,6 +81,7 @@ PROCEDURE_CONCLUSIONS: Tuple[str, ...] = (
     "inadmissible",
     "invalidated",
     "system_failure",
+    "withdrawn",
 )
 AUTOMATIC_REVIEW_OUTCOMES: Tuple[str, ...] = (
     "approved",

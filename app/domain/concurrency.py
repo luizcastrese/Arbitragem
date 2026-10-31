@@ -32,6 +32,8 @@ TERMINAL_STATUSES = {
     "contested",
     "attested",
     "reviewed",
+    # Uma parte optou pela via judicial: o caso encerrou sem acordo nem decisão.
+    "withdrawn",
 }
 
 

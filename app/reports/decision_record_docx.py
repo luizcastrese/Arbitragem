@@ -266,6 +266,34 @@ def _integrity(document: Document, record: Dict[str, Any]) -> None:
     )
 
 
+def _withdrawal(document: Document, record: Dict[str, Any]) -> None:
+    withdrawal = record.get("withdrawal") or {}
+    document.add_heading("IV. Opção pela via judicial", level=1)
+    rows = [
+        ("Parte que optou", _party_name(record, withdrawal.get("party") or "")),
+        ("Registrada em", _format_timestamp(withdrawal.get("recorded_at"))),
+        ("Etapa em que o caso estava", str(withdrawal.get("previous_status") or "")),
+    ]
+    if withdrawal.get("reason"):
+        rows.append(("Motivo informado", str(withdrawal["reason"])))
+    _add_key_value_table(document, rows)
+    document.add_paragraph(
+        "Não houve acordo nem decisão. O histórico acima é o registro completo "
+        "do procedimento até este ponto, disponível às duas partes."
+    )
+    trail = record.get("audit_trail") or []
+    if trail:
+        document.add_heading("Trilha de auditoria", level=2)
+        _bullets(
+            document,
+            [
+                f"{_format_timestamp(item.get('timestamp_utc'))} — {item.get('event_type')} — "
+                f"{str(item.get('event_hash') or '')[:16]}…"
+                for item in trail
+            ],
+        )
+
+
 def _legal_effect(document: Document, record: Dict[str, Any]) -> None:
     effect = record.get("legal_effect")
     if not effect:
@@ -315,7 +343,7 @@ def build_decision_record_docx(record: Dict[str, Any]) -> BytesIO:
         document,
         outcome.get("conclusion_label") or "Desfecho",
         outcome.get("summary") or "",
-        warning=outcome.get("kind") == "no_merit_decision",
+        warning=outcome.get("kind") in {"no_merit_decision", "withdrawn"},
     )
 
     _qualification(document, record)
@@ -323,6 +351,8 @@ def build_decision_record_docx(record: Dict[str, Any]) -> BytesIO:
     _procedure(document, record)
     if outcome.get("kind") == "agreement":
         _agreement(document, record)
+    elif outcome.get("kind") == "withdrawn":
+        _withdrawal(document, record)
     else:
         _grounds(document, record)
         _operative(document, record)

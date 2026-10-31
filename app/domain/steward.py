@@ -15,7 +15,7 @@ from app.core.config import get_settings
 
 PARTIES = ("claimant", "respondent")
 MODEL_ACTIONS = ("conciliate", "organize", "decide", "review")
-TERMINAL_STATUSES = {"agreement", "reviewed", "attested", "contested"}
+TERMINAL_STATUSES = {"agreement", "reviewed", "attested", "contested", "withdrawn"}
 
 
 def steward_actuator_token() -> str:
