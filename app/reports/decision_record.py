@@ -34,6 +34,7 @@ from app.core.canonical import canonical_hash, canonical_json
 from app.core.config import get_settings
 from app.core.signing import sign_payload
 from app.core.tax_id import describe_tax_id
+from app.domain.pathway import legal_effect
 
 RECORD_VERSION = "1.0"
 RECORD_TYPE = "auto_da_decisao"
@@ -51,6 +52,25 @@ LEGAL_NOTICE = (
     "fundamentação — cabendo ao juízo competente avaliá-lo livremente. Hashes "
     "e assinaturas comprovam integridade e origem do registro, não a verdade "
     "material das alegações."
+)
+
+AGREEMENT_NOTICE = (
+    "Este auto registra o acordo celebrado no procedimento Valinor: as duas "
+    "partes aceitaram, de forma independente, a mesma proposta. O acordo é "
+    "uma transação e obriga as partes nos termos aceitos. A seção de efeito "
+    "jurídico indica como ele encerra o conflito ou o processo. Hashes e "
+    "assinaturas comprovam integridade e origem do registro, não a verdade "
+    "material das alegações."
+)
+
+ARBITRAL_NOTICE = (
+    "As duas partes escolheram, depois de surgido o conflito, submeter a "
+    "disputa à arbitragem se não houvesse acordo. A decisão foi elaborada "
+    "pela IA com o raciocínio e os cálculos visíveis. A lei exige que a "
+    "sentença arbitral seja assinada por árbitro pessoa física (Lei 9.307/96, "
+    "arts. 13 e 26): até essa assinatura, este documento é projeto de "
+    "sentença arbitral e não obriga as partes. Hashes e assinaturas comprovam "
+    "integridade e origem do registro, não a verdade material das alegações."
 )
 
 OUTCOME_LABELS = {
@@ -376,7 +396,7 @@ def record_basis(case_data: Dict[str, Any]) -> Dict[str, Any]:
     appeals = case_data.get("appeals") or []
     latest = appeals[-1] if appeals else {}
     consent = case_data.get("consent") or {}
-    return {
+    basis = {
         "kind": outcome_kind(case_data),
         "procedure_conclusion": case_data.get("procedure_conclusion"),
         "decision_hash": canonical_hash(case_data.get("decision") or {}),
@@ -390,6 +410,10 @@ def record_basis(case_data: Dict[str, Any]) -> Dict[str, Any]:
         },
         "tax_ids": {party: (consent.get(party) or {}).get("tax_id") for party in PARTIES},
     }
+    # Só casos com via entram com ela: os autos já emitidos mantêm a base.
+    if case_data.get("pathway"):
+        basis["pathway"] = case_data["pathway"]
+    return basis
 
 
 def build_decision_record(
@@ -408,6 +432,13 @@ def build_decision_record(
     agreement = _agreement(case_data) if kind == "agreement" else None
     organized = case_data.get("organized") or {}
     decision = case_data.get("decision") or {}
+    effect = legal_effect(case_data.get("pathway"), kind)
+    if kind == "agreement":
+        notice = AGREEMENT_NOTICE
+    elif effect["instrument"] == "sentenca_arbitral":
+        notice = ARBITRAL_NOTICE
+    else:
+        notice = LEGAL_NOTICE
     conclusion = (
         "agreement"
         if kind == "agreement"
@@ -442,8 +473,9 @@ def build_decision_record(
             "procedure_conclusion": conclusion,
             "conclusion_label": CONCLUSION_LABELS.get(conclusion, conclusion),
             "summary": _summary(kind, case_data, agreement),
-            "binding": False,
+            "binding": effect["binding"],
         },
+        "legal_effect": effect,
         "agreement": agreement,
         "decision": _decision_section(case_data, kind),
         "review": _review_section(case_data) if kind != "agreement" else None,
@@ -456,7 +488,7 @@ def build_decision_record(
             "attestation_hash": (case_data.get("attestation") or {}).get("attestation_hash"),
             "basis_hash": canonical_hash(record_basis(case_data)),
         },
-        "legal_notice": LEGAL_NOTICE,
+        "legal_notice": notice,
         "platform": {
             "name": "Valinor",
             "platform_version": manifest.get("platform_version"),

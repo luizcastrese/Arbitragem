@@ -8,7 +8,9 @@ Há duas camadas, e todo caso usa as duas:
 - **abordagem**: como a IA trata qualquer caso — equilíbrio, proporcionalidade,
   boa-fé, vedação ao enriquecimento injusto. Hoje é `commercial_balanced_v1`;
 - **matéria**: as regras do assunto em disputa, com escopo, exclusões e limite
-  de valor próprios. Hoje é `digital_services_b2b_v1`.
+  de valor próprios. O primeiro setor é `consumer_banking_v1` (disputas
+  bancárias de massa); `digital_services_b2b_v1` continua disponível. Um setor
+  novo entra como outra matéria, sem tocar no núcleo.
 
 A abordagem não concorre com a matéria: o manifesto trava uma de cada, e a
 decisão é verificada contra a composição das duas (`compose_framework`).
@@ -70,6 +72,11 @@ class Framework:
     # Preenchido só na composição matéria + abordagem. Ausente, não entra no
     # dict nem no hash, e os frameworks publicados mantêm o hash de sempre.
     approach: Optional[Dict] = None
+    # Matéria de relação de consumo (CDC). Liga as salvaguardas da via
+    # arbitral: só vale se o consumidor escolher a arbitragem depois do
+    # conflito (Lei 9.307/96, art. 4º, §2º; CDC, art. 51, VII). Falso não entra
+    # no dict, para não mudar o hash das matérias já publicadas.
+    consumer_relation: bool = False
 
     def rule_by_id(self, rule_id: str) -> Optional[FrameworkRule]:
         for rule in self.rules:
@@ -99,6 +106,8 @@ class Framework:
         }
         if self.approach is not None:
             data["approach"] = dict(self.approach)
+        if self.consumer_relation:
+            data["consumer_relation"] = True
         return data
 
     def lock_summary(self) -> Dict:
@@ -117,6 +126,8 @@ class Framework:
         }
         if self.approach is not None:
             data["approach"] = dict(self.approach)
+        if self.consumer_relation:
+            data["consumer_relation"] = True
         return data
 
 
@@ -356,6 +367,192 @@ def _digital_services_b2b() -> Framework:
     )
 
 
+def _consumer_banking() -> Framework:
+    """Primeiro setor: disputas bancárias de massa entre consumidor e banco.
+
+    Alto volume, processo lento e mérito pouco subjetivo: cobrança, desconto e
+    tarifa se resolvem com contrato, extrato e regra objetiva. O que depende de
+    perícia, de juízo de valor aberto (dano moral) ou de procedimento próprio
+    (superendividamento) fica fora, e o sistema se abstém.
+
+    As referências legais são parâmetros explícitos para a IA e para quem lê a
+    decisão; não substituem a lei nem a jurisprudência vigente.
+    """
+    prefix = "consumer_banking_v1"
+    rules = (
+        FrameworkRule(
+            id=f"{prefix}:contract:proof",
+            version="1.0.0",
+            title="Prova da contratação",
+            description=(
+                "Cobrança, desconto ou débito exige contrato, autorização ou "
+                "registro de contratação no material admitido. Cabe à "
+                "instituição provar a contratação e, impugnada a assinatura, "
+                "a autenticidade (CDC, art. 6º, VIII; STJ, Súmula 297 e Tema "
+                "1061). Autenticidade que dependa de perícia leva à abstenção."
+            ),
+            required_findings=("contract_existence",),
+            allowed_outcomes=("claimant", "respondent", "partial", "inconclusive"),
+            calculation_policy="none",
+            abstention_conditions=(
+                "technical_expertise_required",
+                "insufficient_evidence",
+            ),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:charge:undue_refund",
+            version="1.0.0",
+            title="Restituição de cobrança indevida",
+            description=(
+                "Valor cobrado ou descontado sem lastro contratual ou "
+                "regulatório é restituído, item a item, conforme extratos e "
+                "faturas admitidos."
+            ),
+            required_findings=("undue_charges",),
+            allowed_outcomes=("claimant", "partial", "respondent", "inconclusive"),
+            calculation_policy="refund = soma das cobranças indevidas comprovadas, em minor units",
+            abstention_conditions=("unsupported_calculation",),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:charge:double_refund",
+            version="1.0.0",
+            title="Repetição em dobro",
+            description=(
+                "Quem pagou quantia indevida tem direito à devolução em dobro, "
+                "salvo engano justificável (CDC, art. 42, parágrafo único). "
+                "Observa-se a modulação temporal fixada pelo STJ no EAREsp "
+                "676.608; sem data de pagamento no registro, aplica-se só a "
+                "restituição simples."
+            ),
+            required_findings=("undue_charges", "payment_dates"),
+            allowed_outcomes=("claimant", "partial", "inconclusive"),
+            calculation_policy="refund = 2 * valor pago indevidamente no período alcançado pela modulação",
+            abstention_conditions=("unsupported_calculation",),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:fees:regulated",
+            version="1.0.0",
+            title="Tarifas reguladas",
+            description=(
+                "Só é devida a tarifa prevista na regulamentação do CMN/Bacen "
+                "e no contrato, informada ao consumidor; serviço essencial "
+                "não é tarifado."
+            ),
+            required_findings=("fee_basis",),
+            allowed_outcomes=("claimant", "respondent", "partial", "inconclusive"),
+            calculation_policy="refund = soma das tarifas sem previsão regulatória ou contratual",
+            abstention_conditions=("insufficient_evidence",),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:interest:market_rate",
+            version="1.0.0",
+            title="Juros remuneratórios",
+            description=(
+                "Juros acima de 12% ao ano, por si só, não indicam abusividade "
+                "(STJ, Súmula 382). A revisão exige abusividade demonstrada "
+                "frente à taxa média de mercado divulgada pelo Bacen para a "
+                "mesma operação e período (STJ, REsp 1.061.530)."
+            ),
+            required_findings=("contract_rate", "market_average_rate"),
+            allowed_outcomes=("claimant", "respondent", "partial", "inconclusive"),
+            calculation_policy="difference = encargos cobrados - encargos recalculados à taxa média, quando a abusividade for estabelecida",
+            abstention_conditions=("insufficient_evidence", "unsupported_calculation"),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:payroll:unrecognized",
+            version="1.0.0",
+            title="Desconto ou consignado não reconhecido",
+            description=(
+                "Sem contratação provada, os descontos são restituídos, "
+                "abatido o valor comprovadamente creditado ao consumidor, "
+                "para que nenhuma parte enriqueça sem causa."
+            ),
+            required_findings=("contract_existence", "deductions", "amount_credited"),
+            allowed_outcomes=("claimant", "partial", "respondent", "inconclusive"),
+            calculation_policy="refund = descontos comprovados - valor comprovadamente creditado ao consumidor",
+            abstention_conditions=("unsupported_calculation", "technical_expertise_required"),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:fraud:internal_risk",
+            version="1.0.0",
+            title="Fraude de terceiro em operação bancária",
+            description=(
+                "A instituição responde objetivamente por fraude de terceiro "
+                "no âmbito das operações bancárias (STJ, Súmula 479), quando a "
+                "operação contestada e a comunicação ao banco estão "
+                "documentadas. Culpa exclusiva do consumidor precisa estar "
+                "demonstrada no registro."
+            ),
+            required_findings=("disputed_transaction", "bank_notice"),
+            allowed_outcomes=("claimant", "respondent", "partial", "inconclusive"),
+            calculation_policy="refund = valor das operações contestadas e não atribuídas ao consumidor",
+            abstention_conditions=(
+                "technical_expertise_required",
+                "contradictory_material_evidence",
+            ),
+        ),
+        FrameworkRule(
+            id=f"{prefix}:clause:abusive",
+            version="1.0.0",
+            title="Cláusula abusiva",
+            description=(
+                "Cláusula que coloque o consumidor em desvantagem exagerada "
+                "não prevalece sobre a regra protetiva (CDC, art. 51), mesmo "
+                "que esteja no contrato."
+            ),
+            required_findings=("contract_terms",),
+            allowed_outcomes=("claimant", "respondent", "partial", "inconclusive"),
+            calculation_policy="none",
+        ),
+    )
+    return Framework(
+        id="consumer_banking_v1",
+        version="1.0.0",
+        name="Disputas bancárias de consumo",
+        description=(
+            "Matéria de disputas bancárias de massa entre consumidor e "
+            "instituição financeira: cobranças, descontos, tarifas, juros, "
+            "consignados e operações não reconhecidas, com prova documental."
+        ),
+        in_scope=(
+            "cobrança ou desconto não reconhecido",
+            "tarifas bancárias",
+            "juros e encargos de contratos bancários",
+            "empréstimo consignado não reconhecido",
+            "operações contestadas por fraude de terceiro",
+            "restituição simples ou em dobro e cancelamento de cobrança",
+        ),
+        exclusions=(
+            "superendividamento (repactuação da Lei 14.181/2021)",
+            "autenticidade que dependa de perícia grafotécnica ou digital",
+            "quantificação de dano moral sem parâmetro fixado pelas partes",
+            "financiamento imobiliário",
+            "ação coletiva",
+            "matéria suspensa por tema repetitivo ou IRDR",
+            "tutela de urgência",
+            "relação sem consumidor",
+            "direito indisponível",
+            "valor acima do limite configurado",
+        ),
+        principles=(
+            "o consumidor é a parte vulnerável e a prova da contratação cabe à instituição",
+            "cada valor reconhecido aparece com fórmula, entradas e documento de origem",
+            "dano moral não é arbitrado pela IA; pode entrar no acordo, se as partes quiserem",
+            "na dúvida sobre fato, prova ou regra, o sistema se abstém",
+        ),
+        disclaimer=(
+            "Este framework é o conjunto de regras do procedimento Valinor "
+            "para a matéria bancária de consumo. As referências legais e "
+            "jurisprudenciais são parâmetros explícitos, não substituem a lei "
+            "e não dispensam a verificação de sua vigência."
+        ),
+        rules=rules,
+        case_value_limit_minor_units=100_000_00,
+        case_value_currency="BRL",
+        consumer_relation=True,
+    )
+
+
 APPROACH = "approach"
 MATTER = "matter"
 
@@ -376,8 +573,10 @@ def register_framework(framework: Framework, kind: str = MATTER) -> Framework:
 # matéria e passou a ser a abordagem; o texto e o hash continuam os mesmos.
 register_framework(_commercial_balanced(), kind=APPROACH)
 register_framework(_digital_services_b2b(), kind=MATTER)
+register_framework(_consumer_banking(), kind=MATTER)
 
-DEFAULT_FRAMEWORK_ID = "digital_services_b2b_v1"
+# Primeiro setor da Valinor. Os demais entram como outra matéria.
+DEFAULT_FRAMEWORK_ID = "consumer_banking_v1"
 DEFAULT_APPROACH_ID = "commercial_balanced_v1"
 
 
@@ -433,6 +632,7 @@ def compose_framework(matter: Framework, approach: Framework) -> Framework:
         disclaimer=matter.disclaimer,
         case_value_limit_minor_units=matter.case_value_limit_minor_units,
         case_value_currency=matter.case_value_currency,
+        consumer_relation=matter.consumer_relation,
         approach={
             "id": approach.id,
             "name": approach.name,

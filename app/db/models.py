@@ -39,6 +39,9 @@ class Case(Base):
     claimant_submission_ready_at = Column(String, nullable=True)
     respondent_submission_ready_at = Column(String, nullable=True)
     steward_json = Column(Text, nullable=True)
+    # Via do caso (antes do processo ou com processo ajuizado), matéria e a
+    # escolha individual de cada parte pela arbitragem. Ver app.domain.pathway.
+    pathway_json = Column(Text, nullable=True)
     claimant_token_hash = Column(String, nullable=True)
     respondent_token_hash = Column(String, nullable=True)
     manager_token_hash = Column(String, nullable=True)

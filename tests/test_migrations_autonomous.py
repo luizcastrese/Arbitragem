@@ -9,10 +9,10 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 
 
-def test_alembic_head_is_the_settlement_payments_revision():
+def test_alembic_head_is_the_case_pathway_revision():
     cfg = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "e3b5a7c9d1f2"
+    assert script.get_current_head() == "a7d3e5f9c2b1"
 
 
 def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):

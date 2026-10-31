@@ -1151,7 +1151,12 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
 .record-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .record-card .blocking-note { margin: 0; }
 .record-card code { font-size: 12.5px; overflow-wrap: anywhere; }
-.consent-action { display: flex; align-items: center; gap: 8px; }
+.consent-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.election-choice { display: flex; align-items: flex-start; gap: 6px; max-width: 320px; font-size: 12.5px; line-height: 1.4; color: #5a6879; }
+.election-choice input { width: auto; min-height: 0; margin-top: 2px; }
+.consent-party .election-choice span { text-transform: none; letter-spacing: normal; font-size: 12.5px; color: #5a6879; font-weight: 400; }
+.pathway-line { margin-top: 4px; color: var(--ink); font-weight: 600; }
+.pathway-list li { font-family: inherit; font-size: 16px; line-height: 1.55; }
 .tax-id-input {
   width: 150px;
   min-width: 0;

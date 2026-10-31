@@ -168,7 +168,12 @@ from app.reports.decision_record import (
     verify_record,
 )
 from app.reports.decision_record_docx import build_decision_record_docx
-from app.domain.frameworks import framework_kind, list_frameworks
+from app.domain.frameworks import MATTER, framework_kind, get_framework, list_frameworks
+from app.domain.pathway import (
+    ARBITRATION_TERMS_SINCE,
+    PathwayError,
+    build_pathway,
+)
 from app.domain.legacy import public_decision_view
 from app.domain.steward import decide_steward_action, steward_actuator_token
 from app.domain.procedure import (
@@ -1066,9 +1071,19 @@ def root():
         "openrouter_enabled": settings.openrouter_enabled,
         "llm_enabled": settings.llm_enabled,
         "auth_required": settings.auth_required,
+        "mission": (
+            "Tirar conflitos da Justiça: acordo primeiro e, sem acordo, "
+            "decisão da IA com raciocínio e cálculos visíveis, antes do "
+            "processo ou em processo já ajuizado."
+        ),
         "procedure_terms": {
-            "version": "2026-07-12",
+            "version": current_terms().version,
             "principles": [
+                "acordo antes de decisão",
+                "transparência total: raciocínio, provas e cálculos visíveis",
+                "adesão voluntária; arbitragem só por escolha das duas partes",
+                "em consumo, arbitragem só por escolha do consumidor depois do conflito",
+                "abstenção quando houver dúvida",
                 "participação voluntária e regras iguais para as partes",
                 "conhecimento e oportunidade de resposta a todo material",
                 "tentativas de composição dependem de aceitação das partes",
@@ -1369,6 +1384,26 @@ def create_case(
     if settings.auth_required and not user:
         raise HTTPException(status_code=401, detail="Entre para criar um caso")
     _require_verified_email(user)
+    matter_id = payload.matter_framework_id or settings.framework_id
+    try:
+        if framework_kind(matter_id) != MATTER:
+            raise LookupError(matter_id)
+        matter = get_framework(matter_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Matéria desconhecida: {matter_id}"
+        ) from exc
+    try:
+        pathway = build_pathway(
+            entry_point=payload.entry_point,
+            matter_framework_id=matter.id,
+            consumer_relation=matter.consumer_relation,
+            lawsuit_number=payload.lawsuit_number,
+            court=payload.court,
+            consumer_party=payload.consumer_party,
+        )
+    except PathwayError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     credentials = {
         "claimant": secrets.token_urlsafe(24),
         "respondent": secrets.token_urlsafe(24),
@@ -1382,6 +1417,7 @@ def create_case(
         claimant_token_hash=_hash_token(credentials["claimant"]),
         respondent_token_hash=_hash_token(credentials["respondent"]),
         manager_token_hash=_hash_token(credentials["manager"]),
+        pathway=pathway,
     )
     if user:
         # Quem abre o caso entra como parte reclamante. O gestor é a IA.
@@ -1774,6 +1810,28 @@ def set_case_consent(
                 "Recarregue os termos vigentes em /terms antes de aceitar."
             ),
         ) from exc
+    if payload.elects_arbitration:
+        if not payload.accepted:
+            raise HTTPException(
+                status_code=422,
+                detail="A escolha pela arbitragem exige o aceite do procedimento",
+            )
+        if not case.pathway_json:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Este caso foi aberto antes da via arbitral e segue com "
+                    "decisão não vinculante"
+                ),
+            )
+        if terms.version < ARBITRATION_TERMS_SINCE:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A escolha pela arbitragem exige os termos vigentes, que "
+                    "descrevem a via arbitral. Recarregue os termos em /terms."
+                ),
+            )
     updated = record_consent(
         db,
         case,
@@ -1782,6 +1840,7 @@ def set_case_consent(
         terms_version=terms.version,
         terms_sha256=terms.sha256,
         tax_id=payload.tax_id,
+        elects_arbitration=payload.elects_arbitration,
     )
     return case_to_dict(updated, include_content=False, include_embeddings=False)[
         "consent"

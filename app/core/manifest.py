@@ -16,7 +16,7 @@ from app.domain.provenance import (
 
 PLATFORM_VERSION = "0.6.0"
 PROCEDURE_VERSION = "autonomous-procedure-0.6"
-DEFAULT_FRAMEWORK = "digital_services_b2b_v1"
+DEFAULT_FRAMEWORK = "consumer_banking_v1"
 
 
 def _prompt_policy() -> Dict:
@@ -129,6 +129,8 @@ def build_process_manifest(
         "case_id": case.get("id"),
         "case_title": case.get("title"),
         "consent": case.get("consent"),
+        # Via do caso e escolhas pela arbitragem, congeladas na trava.
+        "pathway": case.get("pathway"),
         "terms": _accepted_terms(case),
         "terms_version": (_accepted_terms(case).get("current_version")),
         "terms_hash": (_accepted_terms(case).get("current_sha256")),

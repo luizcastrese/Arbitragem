@@ -266,6 +266,32 @@ def _integrity(document: Document, record: Dict[str, Any]) -> None:
     )
 
 
+def _legal_effect(document: Document, record: Dict[str, Any]) -> None:
+    effect = record.get("legal_effect")
+    if not effect:
+        return
+    document.add_heading("Efeito jurídico e próximos passos", level=1)
+    lawsuit = effect.get("lawsuit") or {}
+    rows = [
+        ("Via", str(effect.get("entry_label") or "")),
+        ("Trilha sem acordo", str(effect.get("resolution_track_label") or "")),
+        ("Documento", str(effect.get("instrument_label") or "")),
+        ("Obriga as partes", "sim" if effect.get("binding") else "não"),
+    ]
+    if lawsuit:
+        rows.append(("Processo", f"{lawsuit.get('number')} — {lawsuit.get('court')}"))
+    _add_key_value_table(document, rows)
+    if effect.get("next_steps"):
+        document.add_heading("Próximos passos", level=2)
+        _bullets(document, effect["next_steps"])
+    if effect.get("pending"):
+        document.add_heading("Pendente", level=2)
+        _bullets(document, effect["pending"])
+    if effect.get("legal_basis"):
+        document.add_heading("Fundamento legal", level=2)
+        _bullets(document, effect["legal_basis"])
+
+
 def build_decision_record_docx(record: Dict[str, Any]) -> BytesIO:
     document = Document()
     _configure_styles(document)
@@ -301,10 +327,17 @@ def build_decision_record_docx(record: Dict[str, Any]) -> BytesIO:
         _grounds(document, record)
         _operative(document, record)
         _review(document, record)
+    _legal_effect(document, record)
     _integrity(document, record)
 
     document.add_heading("Natureza deste documento", level=1)
-    _add_callout(document, "Decisão não vinculante", record.get("legal_notice") or "", warning=True)
+    effect = record.get("legal_effect") or {}
+    _add_callout(
+        document,
+        effect.get("instrument_label") or "Decisão não vinculante",
+        record.get("legal_notice") or "",
+        warning=not (record.get("outcome") or {}).get("binding"),
+    )
 
     closing = document.add_paragraph()
     closing.alignment = WD_ALIGN_PARAGRAPH.CENTER

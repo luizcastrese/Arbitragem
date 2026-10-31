@@ -1,38 +1,75 @@
 # Valinor
 
-Procedimento privado, voluntário e prévio ao Judiciário para disputas
-documentais de serviços digitais entre empresas e profissionais — sites,
-software simples sob encomenda, design, marketing, conteúdo, audiovisual,
-consultoria e automação —, criado para reduzir drasticamente o custo de
-resolvê-las sem sacrificar contraditório, transparência ou integridade. Não é
-arbitragem e não atende relações de consumo.
+**Missão: tirar conflitos da Justiça.** A Valinor é uma alternativa mais
+barata e mais rápida ao processo judicial. Primeiro ela propõe o acordo. Se o
+acordo não sair, a IA arbitra, sempre com o raciocínio e os cálculos visíveis.
 
-A IA busca primeiro o acordo. Sem acordo, profere uma decisão fundamentada que
-**não obriga as partes**. Qualquer que seja o desfecho, a saída é o **auto da
-decisão**: documento final assinado e verificável, com as partes qualificadas,
-o percurso do procedimento, o acordo ou a fundamentação e o dispositivo, que a
-parte pode levar a um advogado ou usar como base de uma ação judicial.
+Ela atua em dois momentos:
 
-MVP operacional de uma infraestrutura de auditoria decisória de disputas
-documentais por IA.
+- **antes do processo:** o conflito chega direto à Valinor e nem vira ação;
+- **com processo já ajuizado:** as partes trocam a via judicial pela Valinor,
+  e o resultado pode encerrar o processo, seja por acordo homologado, seja por
+  sentença arbitral.
+
+**Primeiro setor: disputas bancárias de massa** (cobranças e descontos não
+reconhecidos, tarifas, juros, consignados, fraude de terceiro). São casos de
+alto volume, processo lento e mérito pouco subjetivo. O núcleo continua
+genérico, e um setor novo entra como outro framework de matéria.
+
+Princípios:
+
+- **acordo antes de decisão;**
+- **transparência total:** provas citadas, regras aplicadas e, para cada
+  valor, fórmula, entradas e documento de origem;
+- **adesão voluntária:** a arbitragem só existe se as duas partes a
+  escolherem;
+- **abstenção quando houver dúvida:** sem base segura, o caso termina sem
+  decisão de mérito, com o motivo explicado.
+
+Qualquer que seja o desfecho, a saída é o **auto da decisão**: documento final
+assinado e verificável, com as partes qualificadas, o percurso, o acordo ou a
+fundamentação, o dispositivo e uma seção de **efeito jurídico** que diz o que
+o documento é, se obriga as partes e como encerra o conflito ou o processo.
 
 O sistema cria um procedimento persistente e autônomo, fixa documentos com
 SHA-256, recupera evidências, conduz rodadas consensuais, organiza o registro,
 profere uma decisão computacional, verifica invariantes formais de forma
-determinística e executa uma auditoria automática por um segundo modelo. Não há
-julgador humano interno: quando o mérito não for seguro, o procedimento encerra
-como inconclusivo, inadmissível ou invalidado. Cada etapa é persistida e
-registrada em uma cadeia de auditoria encadeada por hashes.
+determinística e executa uma auditoria automática por um segundo modelo. Cada
+etapa é persistida e registrada em uma cadeia de auditoria encadeada por
+hashes.
 
-Hashes comprovam identidade e integridade; referências estruturadas comprovam
-correspondência com o manifesto; o verificador comprova invariantes formais; a
-auditoria avalia sustentação semântica. Nenhuma dessas camadas transforma a
-saída em sentença arbitral ou estatal.
+## Vias e limites legais
 
-> Este projeto é experimental. Ele profere uma decisão dentro do procedimento
-> configurado, mas essa decisão não obriga as partes e não constitui sentença
-> arbitral ou decisão estatal. O auto da decisão é prova documental do
-> procedimento, a ser avaliada livremente pelo juízo competente.
+| Desfecho | Antes do processo | Com processo ajuizado |
+|---|---|---|
+| Acordo | Transação (CC, art. 840); vira título executivo com duas testemunhas (CPC, art. 784, III) ou homologação (CPC, arts. 515, III, e 725, VIII) | Juntado aos autos para homologação: extingue o processo com resolução de mérito (CPC, art. 487, III, b), sem custas remanescentes (CPC, art. 90, §3º) |
+| Decisão, com arbitragem escolhida pelas duas partes | Sentença arbitral, com efeitos de sentença judicial (Lei 9.307/96, art. 31) | Compromisso nos autos (Lei 9.307/96, art. 9º, §1º) e extinção do processo (CPC, art. 485, VII) |
+| Decisão, sem a escolha das duas partes | Decisão fundamentada **não vinculante** | Idem; pode ser juntada como prova |
+| Abstenção | Conflito segue pela via que as partes escolherem | Processo retoma o curso (CPC, art. 313, II, se suspenso) |
+
+Limites respeitados pelo código (`app/domain/pathway.py`):
+
+- **Arbitragem só por escolha.** Cada parte escolhe, individualmente e dentro
+  do caso, se quer arbitragem caso não haja acordo (`elects_arbitration` no
+  aceite). Sem a escolha das duas, a trilha é não vinculante.
+- **Consumo.** Em relação de consumo, a arbitragem só vale se o consumidor a
+  escolher depois que o conflito surgiu (Lei 9.307/96, art. 4º, §2º; CDC,
+  art. 51, VII). A escolha é um ato da parte num caso já aberto, nunca uma
+  cláusula anterior. Ela fica registrada com a versão e o hash dos termos e é
+  congelada no manifesto. Escolha feita sob termos anteriores a `2026-10-31`
+  é recusada.
+- **Árbitro pessoa física.** A lei exige árbitro pessoa capaz e sentença
+  assinada por ele (Lei 9.307/96, arts. 13 e 26). A IA elabora a decisão; o
+  auto da trilha arbitral sai como **projeto de sentença arbitral**,
+  `binding: false`, até a assinatura do árbitro indicado no compromisso.
+  **Essa etapa de assinatura ainda não está implementada** (ver "Limites
+  antes de produção pública").
+- **Processo ajuizado.** O caso registra o número CNJ (com dígito verificador
+  conferido) e o juízo. Entrar na Valinor não suspende nem extingue o
+  processo por si só: isso depende de pedido das partes ao juízo.
+
+> Este projeto é experimental. Hashes, assinaturas e verificadores comprovam
+> integridade e invariantes formais, não a verdade material das alegações.
 
 ## O que funciona
 
@@ -101,8 +138,8 @@ saída em sentença arbitral ou estatal.
 ## Fluxo
 
 ```text
-caso
-  -> aceite bilateral
+caso (via: antes do processo | processo ajuizado nº CNJ; matéria)
+  -> aceite bilateral, com a escolha individual pela arbitragem (opcional)
   -> documentos e argumentos identificados por autor e finalidade
   -> ciência da contraparte
   -> resposta, contestação ou renúncia
@@ -116,9 +153,10 @@ caso
   -> (opcional) teste de estabilidade
   -> attestation assinada (opcional)
   -> recurso automático
-  -> auto da decisão (acordo, decisão ou encerramento sem mérito)
-  -> cada parte decide se cumpre (inclusive pagando pela plataforma, de forma
-     opcional) ou se leva o auto ao Judiciário
+  -> auto da decisão (acordo, decisão ou encerramento sem mérito), com o
+     efeito jurídico: acordo para homologar, projeto de sentença arbitral ou
+     decisão não vinculante
+  -> pagamento opcional pela plataforma (Stripe Connect)
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
@@ -128,13 +166,14 @@ percurso, e só trava o conjunto quando as duas partes declararam encerrada a
 própria apresentação. Uma parte não conduz a etapa da outra.
 
 O aceite registra a versão **e o hash SHA-256** do texto exibido às partes:
-natureza prévia ao Judiciário e não arbitral, escopo de serviços digitais entre
-profissionais (fora de relação de consumo), participação voluntária,
-qualificação por CPF/CNPJ, acesso a todo material, oportunidade de resposta,
-composição consensual, decisão por IA que não obriga as partes, auditoria
-automática, verificador determinístico, recurso automático e auto da decisão. O texto vive em `app/terms/<versão>.md` e é
-servido por `GET /terms`; versões publicadas nunca são editadas, e o caso não
-pode ser travado se o aceite de alguma parte não puder mais ser reproduzido.
+missão e dois momentos de atuação, matérias e exclusões, participação
+voluntária, qualificação por CPF/CNPJ, acesso a todo material, oportunidade de
+resposta, acordo primeiro, escolha opcional pela arbitragem (com a regra do
+consumidor), decisão por IA com raciocínio e cálculos visíveis, abstenção na
+dúvida, auditoria, recurso automático e auto da decisão. O texto vive em
+`app/terms/<versão>.md` e é servido por `GET /terms`; versões publicadas nunca
+são editadas, e o caso não pode ser travado se o aceite de alguma parte não
+puder mais ser reproduzido.
 
 Depois do lock, novos documentos não são aceitos. Cada rodada de composição
 considera as posições atualizadas das partes. A IA informa se vale continuar,
@@ -142,38 +181,25 @@ quantas rodadas adicionais parecem adequadas e qual deve ser o próximo foco.
 
 ## Usuários do produto
 
-- **reclamante:** quem abre o caso — o contratante que questiona a entrega ou o
-  prestador que cobra o pagamento; apresenta sua versão, documentos, pedidos e
-  respostas às propostas; deve compreender e aceitar o procedimento;
-- **reclamada:** a outra parte do contrato; apresenta defesa e documentos,
-  formula contrapropostas e acompanha exposição, acordos e decisões de forma
-  consistente;
+- **reclamante:** quem abre o caso — em geral o consumidor que contesta
+  uma cobrança, mas pode ser a instituição; apresenta sua versão, documentos,
+  pedidos e respostas às propostas;
+- **reclamada:** a outra parte; apresenta defesa e documentos e formula
+  contrapropostas;
 - **gestor:** uma IA do procedimento. Admite material, trava o conjunto e avança
   composição, organização, decisão e auditoria. Não fala por nenhuma parte e não
   julga o mérito;
-- **as próprias partes:** aceitam o rito, apresentam material, respondem ao
-  contraditório e às propostas, e declaram quando a sua apresentação encerrou;
-  uma não registra manifestação nem aceite de acordo em nome da outra;
-- **representantes e advogados:** podem apoiar qualquer parte na preparação e
-  manifestação dentro do caso.
+- **as próprias partes:** aceitam o rito, escolhem ou não a arbitragem,
+  apresentam material, respondem ao contraditório e às propostas; uma não
+  registra manifestação, aceite ou escolha em nome da outra;
+- **representantes e advogados:** podem apoiar qualquer parte, inclusive para
+  juntar o auto ao processo.
 
-O mercado de entrada são as disputas de serviços digitais entre empresas e
-profissionais (agências, software houses, estúdios, freelancers com atividade
-empresarial e quem os contrata): entrega, atraso, pagamento, alteração de
-escopo, aceite e rescisão. É o escopo do framework de matéria padrão
-(`digital_services_b2b_v1`), com as exclusões e o limite de valor que ele
-fixa no manifesto. Relações de consumo ficam fora: não há matéria com regras
-de consumidor e os termos pedem que a parte declare contratação profissional.
-
-O canal previsto é a adesão antes do conflito, por cláusula no contrato de
-prestação, que resolve o aceite bilateral. A composição é voluntária e não pode
-ser apresentada como imposição de uma parte à outra. O levantamento de mercado,
-concorrência e riscos está em
+O caso escolhe a matéria na abertura (`matter_framework_id`). A padrão é
+`consumer_banking_v1`; em matéria de consumo, o caso registra qual parte é o
+consumidor (`consumer_party`, padrão: a reclamante). `digital_services_b2b_v1`
+continua disponível. O levantamento anterior sobre serviços digitais está em
 [`docs/mercado-servicos-digitais.md`](docs/mercado-servicos-digitais.md).
-
-As partes são **reclamante** e **reclamada**, sem presumir quem é cliente ou
-fornecedor: no escopo B2B, quem abre o caso pode ser o contratante ou o
-prestador.
 
 ### Frameworks: abordagem e matéria
 
@@ -182,12 +208,15 @@ Todo caso trava no manifesto duas camadas de framework, que se somam:
 - **abordagem** (`commercial_balanced_v1`): como a IA trata qualquer caso —
   prioridade contratual, proporcionalidade, boa-fé, vedação ao enriquecimento
   injusto e análise contextual de atrasos;
-- **matéria** (`digital_services_b2b_v1`): as regras do assunto, com escopo,
-  exclusões e limite de valor próprios.
+- **matéria**: as regras do assunto, com escopo, exclusões e limite de valor
+  próprios. `consumer_banking_v1` (bancário de consumo, limite de
+  R$ 100.000,00) é a padrão; `digital_services_b2b_v1` segue disponível. A
+  matéria de consumo marca `consumer_relation`, que liga as salvaguardas da
+  via arbitral.
 
 A decisão declara a matéria e pode aplicar regras das duas camadas; o
 verificador determinístico confere contra a composição. Uma matéria nova (por
-exemplo, consumo) entra como outro framework de matéria, sem duplicar a
+exemplo, telecom ou planos de saúde) entra como outro framework de matéria, sem duplicar a
 abordagem. Os frameworks publicados são imutáveis: mudar o conteúdo exige um
 id novo. Manifestos travados antes da separação continuam resolvidos só pelo
 framework que fixaram.
@@ -267,7 +296,7 @@ Variáveis do arquivo `.env`:
 | `LLM_MAX_RETRIES` | Retries só para erros transitórios |
 | `LLM_ALLOWED_PROVIDERS` / `LLM_ALLOWED_MODELS` | Allowlists |
 | `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL` | Fallback explícito (nunca silencioso) |
-| `FRAMEWORK_ID` | Framework de **matéria** fixado no manifesto (padrão `digital_services_b2b_v1`) |
+| `FRAMEWORK_ID` | Framework de **matéria** padrão quando o caso não escolhe uma (padrão `consumer_banking_v1`) |
 | `APPROACH_FRAMEWORK_ID` | Framework de **abordagem** somado à matéria em todo caso (padrão `commercial_balanced_v1`). Trocar as camadas derruba o boot |
 | `DECISION_STABILITY_ENABLED` | Segunda execução controlada |
 | `DECISION_STABILITY_RUNS` / `DECISION_STABILITY_THRESHOLD` | Política de estabilidade |
@@ -360,7 +389,7 @@ críticos derrubam o boot em vez de virar aviso.
 
 | Endpoint | Função |
 |---|---|
-| `POST /cases` | Criar caso |
+| `POST /cases` | Criar caso, com via (`entry_point`, `lawsuit_number`, `court`), matéria e parte consumidora |
 | `POST /auth/register` | Criar conta e sessão |
 | `POST /auth/login` | Entrar e criar sessão expiráveis |
 | `POST /auth/logout` | Encerrar a sessão atual |
@@ -390,7 +419,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /stripe/webhook` | Confirmação do Stripe (assinada). Só o webhook marca o pagamento como pago |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
-| `POST /cases/{id}/consent` | Registrar aceite individual da parte, com o CPF/CNPJ dela |
+| `POST /cases/{id}/consent` | Registrar aceite individual da parte, com o CPF/CNPJ dela e a escolha opcional pela arbitragem (`elects_arbitration`) |
 | `POST /cases/{id}/conciliation/{round}/agreement` | Aceitar ou recusar individualmente a proposta da rodada; o acordo exige os dois aceites |
 | `POST /cases/{id}/documents/text` | Adicionar texto |
 | `POST /cases/{id}/documents/pdf` | Adicionar PDF |
@@ -524,9 +553,16 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   offline no CI; falta ampliar os cenários para disputas reais anonimizadas e
   rodar o modo live a cada troca de modelo;
 - o texto dos termos é versionado e endereçado por hash, mas ainda não passou
-  por validação jurídica. O recorte B2B precisa de atenção específica: pela
-  teoria finalista mitigada, um MEI ou pequena empresa vulnerável pode ser
-  tratado como consumidor;
+  por validação jurídica;
+- **a trilha arbitral ainda não tem a assinatura do árbitro.** A lei exige
+  árbitro pessoa física e sentença assinada por ele (Lei 9.307/96, arts. 13 e
+  26). Até existir essa etapa (indicação do árbitro no compromisso, leitura da
+  decisão elaborada pela IA, adoção ou recusa e assinatura), o auto arbitral é
+  projeto de sentença e não obriga. Também falta definir a instituição
+  arbitral e o regulamento que o compromisso adota;
+- a matéria bancária cita lei e jurisprudência como parâmetros (Súmulas 297,
+  382 e 479 do STJ, Tema 1061, EAREsp 676.608, REsp 1.061.530); elas precisam
+  de revisão jurídica e de acompanhamento de vigência;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
 - o rate limiting é em memória, adequado a uma instância; várias réplicas
   exigem um backend compartilhado (por exemplo Redis). Atrás de proxy,
@@ -537,6 +573,8 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   e a chamada pode ser repetida). Volume maior pede uma fila externa;
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
+- as rodadas de acordo e a decisão ainda não recebem a via do caso no prompt:
+  o efeito jurídico é calculado depois, no auto;
 - decisões inconclusivas, inadmissíveis ou invalidadas encerram o procedimento
   de forma autônoma; não há julgador humano interno.
 
@@ -556,9 +594,8 @@ migrar o rate limiting e a fila de etapas para backends compartilhados.
 
 ## Pagamento opcional da decisão
 
-A decisão continua não vinculante: ninguém é obrigado a pagar, e a plataforma
-nunca debita ou retém valores por força dela. O pagamento é uma saída que a
-parte reclamada pode escolher para encerrar o litígio.
+A plataforma nunca debita ou retém valores por força da decisão. O pagamento
+é uma saída que a parte reclamada pode escolher para cumprir o resultado.
 
 - **Quando existe oferta:** decisão de mérito verificada e atestada, a favor do
   reclamante (`claimant` ou `partial`), com `remedy_calculation` em minor units,
@@ -580,7 +617,7 @@ parte reclamada pode escolher para encerrar o litígio.
 - **Vínculo:** o pagamento é único por attestation. Uma correção em recurso gera
   nova attestation e, portanto, nova oferta. Cada passo entra na cadeia de
   auditoria.
-- **Termos:** a cláusula 9.1 (termos `2026-10-11`) descreve o pagamento e a taxa.
+- **Termos:** a cláusula 10.1 (termos `2026-10-31`) descreve o pagamento e a taxa.
   Como os textos ainda aguardam revisão jurídica, trate o enquadramento
   (intermediação de pagamento, tributação, Banco Central) como pendência antes
   da exposição pública.

@@ -148,7 +148,7 @@ def test_root_does_not_promise_human_review(client):
 def test_locked_manifest_records_independence_and_framework(client):
     case_id, _, locked = prepare_locked_case(client)
     manifest = locked.json()["manifest"]
-    assert manifest["framework_id"] == "digital_services_b2b_v1"
+    assert manifest["framework_id"] == "consumer_banking_v1"
     assert manifest["framework"]["approach"]["id"] == "commercial_balanced_v1"
     assert "commercial_balanced_v1:good_faith" in manifest["framework"]["rule_ids"]
     assert "framework_hash" in manifest

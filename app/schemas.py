@@ -70,6 +70,15 @@ class CreateCaseRequest(BaseModel):
     title: str = Field(min_length=3, max_length=200)
     claimant: str = Field(min_length=2, max_length=200)
     respondent: str = Field(min_length=2, max_length=200)
+    # Via do caso: antes do processo ou com processo já ajuizado, que as
+    # partes trocam pela Valinor. No segundo caso, número CNJ e juízo.
+    entry_point: str = Field(default="pre_litigation", max_length=40)
+    lawsuit_number: Optional[str] = Field(default=None, max_length=40)
+    court: Optional[str] = Field(default=None, max_length=200)
+    # Matéria (framework). Ausente, vale a matéria padrão da plataforma.
+    matter_framework_id: Optional[str] = Field(default=None, max_length=80)
+    # Em relação de consumo, qual parte é o consumidor.
+    consumer_party: Optional[str] = Field(default=None, max_length=20)
 
 
 class AddDocumentRequest(BaseModel):
@@ -112,6 +121,9 @@ class ConsentRequest(BaseModel):
     # CPF ou CNPJ da própria parte. Qualifica a parte no auto da decisão;
     # ausente, o auto registra que a qualificação não foi informada.
     tax_id: Optional[str] = Field(default=None, max_length=32)
+    # Escolha individual, feita depois do conflito, de submeter a disputa à
+    # arbitragem se não houver acordo. Ausente mantém a escolha anterior.
+    elects_arbitration: Optional[bool] = None
 
     @field_validator("party")
     @classmethod
