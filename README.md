@@ -43,7 +43,7 @@ hashes.
 | Desfecho | Antes do processo | Com processo ajuizado |
 |---|---|---|
 | Acordo | Transação (CC, art. 840); vira título executivo com duas testemunhas (CPC, art. 784, III) ou homologação (CPC, arts. 515, III, e 725, VIII) | Juntado aos autos para homologação: extingue o processo com resolução de mérito (CPC, art. 487, III, b), sem custas remanescentes (CPC, art. 90, §3º) |
-| Decisão, com arbitragem escolhida pelas duas partes | Sentença arbitral, com efeitos de sentença judicial (Lei 9.307/96, art. 31) | Compromisso nos autos (Lei 9.307/96, art. 9º, §1º) e extinção do processo (CPC, art. 485, VII) |
+| Decisão, com arbitragem escolhida pelas duas partes e árbitro designado | Sentença arbitral assinada pelo árbitro, com efeitos de sentença judicial (Lei 9.307/96, art. 31) | Compromisso nos autos (Lei 9.307/96, art. 9º, §1º) e extinção do processo (CPC, art. 485, VII) |
 | Decisão, sem a escolha das duas partes | Decisão fundamentada **não vinculante** | Idem; pode ser juntada como prova |
 | Abstenção | Conflito segue pela via que as partes escolherem | Processo retoma o curso (CPC, art. 313, II, se suspenso) |
 | Uma parte opta pela via judicial | Auto de encerramento com o histórico completo, para as duas partes auditarem e juntarem à petição | Idem; o processo retoma o curso |
@@ -59,12 +59,23 @@ Limites respeitados pelo código (`app/domain/pathway.py`):
   cláusula anterior. Ela fica registrada com a versão e o hash dos termos e é
   congelada no manifesto. Escolha feita sob termos anteriores a `2026-10-31`
   é recusada.
-- **Árbitro pessoa física.** A lei exige árbitro pessoa capaz e sentença
-  assinada por ele (Lei 9.307/96, arts. 13 e 26). A IA elabora a decisão; o
-  auto da trilha arbitral sai como **projeto de sentença arbitral**,
-  `binding: false`, até a assinatura do árbitro indicado no compromisso.
-  **Essa etapa de assinatura ainda não está implementada** (ver "Limites
-  antes de produção pública").
+- **Árbitro pessoa física.** A lei exige árbitro pessoa capaz, com a
+  confiança das partes, nomeado no compromisso e que assine a sentença (Lei
+  9.307/96, arts. 10, II, 13, 14 e 26). O percurso (`app/domain/arbitration.py`):
+  1. uma parte convida o árbitro (convite com papel `arbitrator`);
+  2. ele aceita a nomeação com nome, CPF e qualificação, declara
+     independência e revela o que houver (`POST /cases/{id}/arbitrator/accept`);
+     quem é parte no caso não pode ser árbitro;
+  3. cada parte que escolheu a arbitragem confirma **aquele** árbitro, com
+     **aquela** declaração (`POST /cases/{id}/arbitrator/confirm`, conferido por
+     hash); uma revelação nova zera as confirmações;
+  4. a designação fecha na trava e fica congelada no manifesto. Sem árbitro
+     designado, a decisão é não vinculante;
+  5. com a decisão final (auditada, sem recurso pendente e com o prazo de
+     recurso encerrado), o árbitro **adota e assina** a decisão como sentença
+     arbitral, informando o lugar, ou **recusa** (`POST /cases/{id}/arbitral-award`).
+     O auto é reemitido, encadeado ao anterior, com o hash do documento
+     adotado; assinado, ele passa a `binding: true`.
 - **Saída para a Justiça.** A adesão é voluntária nos dois sentidos: qualquer
   parte sai antes do desfecho, sozinha. O caso fica só para leitura, e o auto
   traz documentos, contraditório, rodadas de acordo e a trilha de auditoria
@@ -432,6 +443,9 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /stripe/webhook` | Confirmação do Stripe (assinada). Só o webhook marca o pagamento como pago |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
+| `POST /cases/{id}/arbitrator/accept` | O árbitro convidado aceita a nomeação, se qualifica e declara independência |
+| `POST /cases/{id}/arbitrator/confirm` | A parte que escolheu a arbitragem confirma o árbitro, antes da trava |
+| `POST /cases/{id}/arbitral-award` | O árbitro designado adota e assina a decisão final como sentença arbitral, ou recusa |
 | `POST /cases/{id}/withdraw-to-court` | A parte opta pela via judicial: encerra o caso e emite o auto com todo o histórico até ali |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte, com o CPF/CNPJ dela e a escolha opcional pela arbitragem (`elects_arbitration`) |
 | `POST /cases/{id}/conciliation/{round}/agreement` | Aceitar ou recusar individualmente a proposta da rodada; o acordo exige os dois aceites |
@@ -568,12 +582,17 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   rodar o modo live a cada troca de modelo;
 - o texto dos termos é versionado e endereçado por hash, mas ainda não passou
   por validação jurídica;
-- **a trilha arbitral ainda não tem a assinatura do árbitro.** A lei exige
-  árbitro pessoa física e sentença assinada por ele (Lei 9.307/96, arts. 13 e
-  26). Até existir essa etapa (indicação do árbitro no compromisso, leitura da
-  decisão elaborada pela IA, adoção ou recusa e assinatura), o auto arbitral é
-  projeto de sentença e não obriga. Também falta definir a instituição
-  arbitral e o regulamento que o compromisso adota;
+- **a via arbitral precisa de revisão jurídica antes do primeiro caso real:**
+  - a assinatura do árbitro é um ato autenticado na conta dele, aceito pelas
+    partes nos termos (MP 2.200-2/2001, art. 10, §2º). Avaliar se convém
+    exigir assinatura qualificada ICP-Brasil;
+  - o compromisso extrajudicial pede duas testemunhas ou instrumento público
+    (Lei 9.307/96, art. 9º, §2º) e os elementos do art. 10 (inclusive o lugar
+    da sentença, hoje informado na assinatura). O aceite eletrônico das
+    partes ainda não substitui essa formalidade;
+  - o árbitro só adota ou recusa a decisão da IA; uma sentença própria fica
+    fora da plataforma. Também faltam honorários do árbitro, a instituição
+    arbitral e o regulamento que o compromisso adota;
 - a matéria bancária cita lei e jurisprudência como parâmetros (Súmulas 297,
   382 e 479 do STJ, Tema 1061, EAREsp 676.608, REsp 1.061.530); elas precisam
   de revisão jurídica e de acompanhamento de vigência;

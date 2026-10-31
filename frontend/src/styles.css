@@ -1157,6 +1157,10 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
 .consent-party .election-choice span { text-transform: none; letter-spacing: normal; font-size: 12.5px; color: #5a6879; font-weight: 400; }
 .pathway-line { margin-top: 4px; color: var(--ink); font-weight: 600; }
 .withdraw-card .withdraw-reason { width: 320px; max-width: 100%; }
+.arbitrator-facts { display: grid; gap: 4px; font-size: 13.5px; color: #5a6879; }
+.arbitrator-facts strong { color: var(--ink); }
+.arbitrator-form { display: grid; gap: 8px; max-width: 640px; }
+.arbitrator-form textarea { min-height: 72px; }
 .pathway-list li { font-family: inherit; font-size: 16px; line-height: 1.55; }
 .tax-id-input {
   width: 150px;

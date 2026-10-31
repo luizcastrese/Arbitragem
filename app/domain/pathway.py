@@ -30,6 +30,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.domain.arbitration import arbitrator_designated, public_arbitrator
+
 PRE_LITIGATION = "pre_litigation"
 PENDING_LAWSUIT = "pending_lawsuit"
 ENTRY_POINTS = (PRE_LITIGATION, PENDING_LAWSUIT)
@@ -192,6 +194,7 @@ def public_pathway(pathway: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]
     track = resolution_track(pathway)
     data["resolution_track"] = track
     data["resolution_track_label"] = TRACK_LABELS[track]
+    data["arbitrator_designated"] = arbitrator_designated(pathway)
     return data
 
 
@@ -202,7 +205,11 @@ def _lawsuit_ref(pathway: Dict[str, Any]) -> str:
     return f"processo nº {number}" + (f", em trâmite em {court}" if court else "")
 
 
-def legal_effect(pathway: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]:
+def legal_effect(
+    pathway: Optional[Dict[str, Any]],
+    kind: str,
+    award: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """O que o documento final é e o que ele pode fazer com o conflito.
 
     ``kind`` é o desfecho do auto: ``agreement``, ``decision``,
@@ -248,13 +255,9 @@ def legal_effect(pathway: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]
                 "testemunhas ou pedir sua homologação judicial."
             )
     elif kind == "decision" and track == ARBITRATION:
-        instrument = "sentenca_arbitral"
-        label = "Projeto de sentença arbitral (aguarda assinatura do árbitro)"
-        # A lei exige árbitro pessoa capaz (art. 13) e sentença assinada por
-        # ele (art. 26). Sem essa assinatura, o documento não tem os efeitos
-        # do art. 31 e não é apresentado como vinculante.
-        binding = False
-        ends_lawsuit_by = "sentenca_arbitral" if pending_lawsuit else None
+        designated = arbitrator_designated(pathway)
+        arbitrator = pathway.get("arbitrator") or {}
+        name = arbitrator.get("display_name") or "o árbitro"
         basis += [
             "Lei 9.307/96, art. 31 (a sentença arbitral produz os efeitos da sentença judicial)",
             "CPC, art. 515, VII (sentença arbitral é título executivo judicial)",
@@ -266,26 +269,60 @@ def legal_effect(pathway: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]
                 "Lei 9.307/96, art. 4º, §2º, e CDC, art. 51, VII (arbitragem "
                 "de consumo só por escolha do consumidor depois do conflito)"
             )
-        pending.append(
-            "Assinatura do árbitro pessoa física indicado no compromisso "
-            "arbitral, que adota ou não a decisão elaborada pela IA. A Valinor "
-            "ainda não conduz essa etapa; até ela, o documento é projeto de "
-            "sentença e não obriga as partes."
-        )
-        if pending_lawsuit:
+        if award and award.get("adopted"):
+            instrument = "sentenca_arbitral"
+            label = "Sentença arbitral"
+            binding = True
+            ends_lawsuit_by = "sentenca_arbitral" if pending_lawsuit else None
+            basis.append(
+                "MP 2.200-2/2001, art. 10, §2º (assinatura eletrônica aceita "
+                "pelas partes nos termos do procedimento)"
+            )
+            steps.append(
+                f"{name} adotou a decisão e assinou a sentença arbitral em "
+                f"{award.get('place') or 'local não informado'}. Ela não "
+                "depende de homologação judicial e vale como título executivo."
+            )
+        elif award:
+            instrument = "decisao_nao_vinculante"
+            label = "Árbitro não adotou a decisão: não há sentença arbitral"
+            binding = False
+            steps.append(
+                f"{name} recusou adotar a decisão elaborada pela IA. Ela vale "
+                "só como decisão fundamentada não vinculante."
+            )
+            pending.append(
+                "O árbitro pode proferir sentença própria fora da plataforma, "
+                "no prazo do compromisso (Lei 9.307/96, arts. 11, III, e 23), "
+                "ou as partes seguem para a via judicial."
+            )
+        elif designated:
+            instrument = "sentenca_arbitral"
+            label = f"Projeto de sentença arbitral (aguarda a assinatura de {name})"
+            binding = False
+            ends_lawsuit_by = "sentenca_arbitral" if pending_lawsuit else None
+            pending.append(
+                f"Assinatura de {name}, árbitro designado pelas duas partes, que "
+                "adota ou recusa a decisão elaborada pela IA depois que ela se "
+                "torna final. Até lá, o documento não obriga as partes."
+            )
+        else:
+            instrument = "decisao_nao_vinculante"
+            label = "Decisão não vinculante: nenhum árbitro foi designado"
+            binding = False
+            pending.append(
+                "As partes escolheram a arbitragem, mas nenhum árbitro foi "
+                "aceito e confirmado pelas duas antes da trava (Lei 9.307/96, "
+                "art. 10, II). Sem árbitro, não há sentença arbitral."
+            )
+        if pending_lawsuit and instrument == "sentenca_arbitral":
             basis += [
                 "Lei 9.307/96, art. 9º, §1º (compromisso arbitral por termo nos autos)",
                 "CPC, art. 485, VII (convenção de arbitragem extingue o processo sem resolução de mérito)",
             ]
             steps.append(
-                f"Firmar o compromisso arbitral no {_lawsuit_ref(pathway)} e "
-                "pedir a extinção do processo; a sentença arbitral assinada "
-                "passa a ser o título do conflito."
-            )
-        else:
-            steps.append(
-                "Assinada pelo árbitro, a sentença arbitral encerra o conflito "
-                "sem ação judicial e pode ser executada como sentença."
+                f"Juntar o compromisso e a sentença ao {_lawsuit_ref(pathway)} "
+                "e pedir a extinção do processo."
             )
     elif kind == "decision":
         instrument = "decisao_nao_vinculante"
@@ -359,4 +396,6 @@ def legal_effect(pathway: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]
         "legal_basis": basis,
         "next_steps": steps,
         "pending": pending,
+        "arbitrator": public_arbitrator(pathway),
+        "arbitral_award": award if kind == "decision" and track == ARBITRATION else None,
     }

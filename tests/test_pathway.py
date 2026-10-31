@@ -49,6 +49,18 @@ def _pathway(entry="pre_litigation", consumer=True, **kwargs):
     )
 
 
+def _designate(pathway):
+    from app.domain.arbitration import record_acceptance, record_confirmation
+
+    pathway = record_acceptance(
+        pathway, user_id="u-arb", display_name="Ana Árbitra", tax_id="52998224725",
+        qualification="Advogada", disclosure="",
+    )
+    for party in ("claimant", "respondent"):
+        pathway = record_confirmation(pathway, party=party, terms_version="2026-11-02")
+    return pathway
+
+
 def _elect(pathway, *parties):
     for party in parties:
         pathway = record_election(
@@ -118,7 +130,8 @@ def test_agreement_in_pending_lawsuit_goes_to_homologation():
 
 def test_arbitral_decision_waits_for_the_human_arbitrator_signature():
     effect = legal_effect(
-        _elect(_pathway(entry="pending_lawsuit"), "claimant", "respondent"), "decision"
+        _designate(_elect(_pathway(entry="pending_lawsuit"), "claimant", "respondent")),
+        "decision",
     )
     assert effect["instrument"] == "sentenca_arbitral"
     assert effect["ends_lawsuit_by"] == "sentenca_arbitral"
@@ -142,7 +155,9 @@ def test_abstention_returns_the_conflict_to_court():
 
 def test_record_carries_legal_effect_and_matching_notice():
     case_data = _decided_case_data()
-    case_data["pathway"] = _elect(_pathway(entry="pending_lawsuit"), "claimant", "respondent")
+    case_data["pathway"] = _designate(
+        _elect(_pathway(entry="pending_lawsuit"), "claimant", "respondent")
+    )
     record = build_decision_record(case_data, audit_chain_head="e" * 64, audit_chain_length=3)
     assert record["legal_effect"]["instrument"] == "sentenca_arbitral"
     assert record["outcome"]["binding"] is False

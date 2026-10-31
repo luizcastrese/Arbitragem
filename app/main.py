@@ -143,6 +143,9 @@ from app.db.repository import (
     record_consent,
     record_submission_ready,
     record_withdrawal,
+    save_arbitral_award,
+    save_arbitrator_acceptance,
+    save_arbitrator_confirmation,
     register_contest,
     revert_contest,
     respond_to_document as persist_response,
@@ -171,7 +174,15 @@ from app.reports.decision_record import (
 )
 from app.reports.decision_record_docx import build_decision_record_docx
 from app.domain.frameworks import MATTER, framework_kind, get_framework, list_frameworks
+from app.domain.arbitration import (
+    ARBITRATOR_ROLE,
+    ArbitrationError,
+    arbitrator_designated,
+    decision_is_final,
+)
 from app.domain.pathway import (
+    ARBITRATION,
+    resolution_track,
     ARBITRATION_TERMS_SINCE,
     PathwayError,
     build_pathway,
@@ -215,6 +226,9 @@ from app.schemas import (
     RegisterRequest,
     SubmissionReadyRequest,
     WithdrawToCourtRequest,
+    ArbitralAwardRequest,
+    ArbitratorAcceptRequest,
+    ArbitratorConfirmRequest,
     VerifyEmailRequest,
 )
 
@@ -2079,6 +2093,145 @@ def declare_submission_ready(
         include_content=False,
         include_embeddings=False,
     )
+
+
+def _require_arbitrator(db: Session, case, token: str):
+    user = get_user_by_token(db, token)
+    if not user or not user_has_role(db, case.id, user.id, ARBITRATOR_ROLE):
+        raise HTTPException(
+            status_code=403, detail="Somente o árbitro convidado para o caso pode fazer isto"
+        )
+    _require_verified_email(user)
+    return user
+
+
+def _assert_arbitrator_designation_open(case) -> None:
+    _assert_procedure_open(case)
+    if not case.pathway_json:
+        raise HTTPException(
+            status_code=409,
+            detail="Este caso foi aberto antes da via arbitral e não tem árbitro",
+        )
+    if case.manifest_locked:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A designação do árbitro fecha na trava do caso: o compromisso "
+                "precisa nomear o árbitro antes da decisão"
+            ),
+        )
+
+
+@app.post("/cases/{case_id}/arbitrator/accept")
+def accept_arbitrator_nomination(
+    case_id: str,
+    payload: ArbitratorAcceptRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """O árbitro aceita a nomeação, se qualifica e revela o que houver
+    (Lei 9.307/96, arts. 13 e 14, §1º). Aceitar de novo zera as confirmações."""
+    case = _case_or_404(db, case_id)
+    user = _require_arbitrator(db, case, x_actor_token)
+    _assert_arbitrator_designation_open(case)
+    if any(user_has_role(db, case.id, user.id, party) for party in ("claimant", "respondent")):
+        raise HTTPException(
+            status_code=409,
+            detail="Quem é parte no caso não pode ser árbitro dele (Lei 9.307/96, art. 14)",
+        )
+    updated = save_arbitrator_acceptance(
+        db,
+        case,
+        user_id=user.id,
+        display_name=user.display_name,
+        tax_id=payload.tax_id,
+        qualification=payload.qualification,
+        disclosure=payload.disclosure,
+    )
+    return case_to_dict(updated, include_content=False, include_embeddings=False)["pathway"]
+
+
+@app.post("/cases/{case_id}/arbitrator/confirm")
+def confirm_arbitrator(
+    case_id: str,
+    payload: ArbitratorConfirmRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """A parte confirma o árbitro aceito, com a declaração que ele fez."""
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, payload.party)
+    _assert_arbitrator_designation_open(case)
+    pathway = case_to_dict(case, include_content=False, include_embeddings=False)["pathway"] or {}
+    election = (pathway.get("arbitration_elections") or {}).get(payload.party) or {}
+    if not election.get("elected"):
+        raise HTTPException(
+            status_code=409,
+            detail="Escolha a arbitragem no seu aceite antes de confirmar o árbitro",
+        )
+    try:
+        updated = save_arbitrator_confirmation(
+            db,
+            case,
+            party=payload.party,
+            terms_version=getattr(case, f"{payload.party}_terms_version") or "",
+        )
+    except ArbitrationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return case_to_dict(updated, include_content=False, include_embeddings=False)["pathway"]
+
+
+@app.post("/cases/{case_id}/arbitral-award")
+def sign_arbitral_award(
+    case_id: str,
+    payload: ArbitralAwardRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """O árbitro designado adota e assina a decisão final como sentença
+    arbitral, ou recusa adotá-la. Não há reescrita da decisão aqui dentro."""
+    case = _case_or_404(db, case_id)
+    user = _require_arbitrator(db, case, x_actor_token)
+    case_data = case_to_dict(case, include_content=False, include_embeddings=False)
+    locked = (case_data.get("locked_manifest") or {}).get("pathway") or {}
+    if (
+        resolution_track(locked) != ARBITRATION
+        or not arbitrator_designated(locked)
+        or (locked.get("arbitrator") or {}).get("user_id") != user.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Você não é o árbitro designado pelas duas partes neste caso",
+        )
+    if case_data.get("arbitral_award"):
+        raise HTTPException(status_code=409, detail="O árbitro já se manifestou neste caso")
+    if outcome_kind(case_data) != "decision":
+        raise HTTPException(status_code=409, detail="Não há decisão de mérito para assinar")
+    final, reason = decision_is_final(case_data)
+    if not final:
+        raise HTTPException(status_code=409, detail=reason)
+    current = _issue_decision_record(db, case_id)
+    if not current:
+        raise HTTPException(status_code=409, detail="O auto da decisão ainda não foi emitido")
+    arbitrator = locked.get("arbitrator") or {}
+    save_arbitral_award(
+        db,
+        get_case(db, case_id),
+        adopted=payload.adopt,
+        payload={
+            "arbitrator_user_id": user.id,
+            "arbitrator_name": arbitrator.get("display_name"),
+            "arbitrator_identity_sha256": arbitrator.get("identity_sha256"),
+            "place": payload.place,
+            "statement": payload.statement,
+            "adopted_record_hash": current.get("record_hash"),
+            "decision_hash": canonical_hash(case_data.get("decision") or {}),
+            "attestation_hash": (case_data.get("attestation") or {}).get("attestation_hash"),
+        },
+    )
+    db.expire_all()
+    return _issue_decision_record(db, case_id)
 
 
 @app.post("/cases/{case_id}/withdraw-to-court")
