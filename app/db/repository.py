@@ -24,6 +24,13 @@ from app.db.models import (
     LLMExecution,
 )
 from app.domain.legacy import public_decision_view, public_review_view
+from app.domain.arbitration import (
+    AWARD_DECLINED_EVENT,
+    AWARD_SIGNED_EVENT,
+    award_from_audit,
+    record_acceptance,
+    record_confirmation,
+)
 from app.domain.pathway import clear_election, public_pathway, record_election
 from app.documents.storage import (
     StorageError,
@@ -232,6 +239,13 @@ def case_to_dict(
         "stability": _json_load(case.stability_json),
         "procedure_conclusion": case.procedure_conclusion,
         "withdrawal": _withdrawal(case),
+        "arbitral_award": award_from_audit(
+            [
+                audit_to_dict(event)
+                for event in case.audit_events
+                if event.event_type in {AWARD_SIGNED_EVENT, AWARD_DECLINED_EVENT}
+            ]
+        ),
         "decision_runs": decision_runs,
         "review_runs": [_run_to_dict(item) for item in case.review_runs],
         "appeals": [_appeal_to_dict(item) for item in case.appeals],
@@ -393,6 +407,76 @@ def _case_query(db: Session):
         selectinload(Case.attestation_records),
         selectinload(Case.llm_executions),
     )
+
+
+def save_arbitrator_acceptance(
+    db: Session,
+    case: Case,
+    *,
+    user_id: str,
+    display_name: str,
+    tax_id: str,
+    qualification: str,
+    disclosure: str,
+) -> Case:
+    pathway = record_acceptance(
+        _json_load(case.pathway_json) or {},
+        user_id=user_id,
+        display_name=display_name,
+        tax_id=tax_id,
+        qualification=qualification,
+        disclosure=disclosure,
+    )
+    case.pathway_json = json.dumps(pathway, ensure_ascii=False)
+    arbitrator = pathway["arbitrator"]
+    # A trilha guarda o hash da identidade e da declaração, não o CPF.
+    append_audit(
+        db,
+        case,
+        "arbitrator_accepted",
+        {
+            "user_id": user_id,
+            "display_name": display_name,
+            "identity_sha256": arbitrator["identity_sha256"],
+            "disclosure_sha256": arbitrator["disclosure_sha256"],
+        },
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_arbitrator_confirmation(
+    db: Session, case: Case, *, party: str, terms_version: str
+) -> Case:
+    pathway = record_confirmation(
+        _json_load(case.pathway_json) or {}, party=party, terms_version=terms_version
+    )
+    case.pathway_json = json.dumps(pathway, ensure_ascii=False)
+    append_audit(
+        db,
+        case,
+        "arbitrator_confirmed",
+        {
+            "party": party,
+            "identity_sha256": pathway["arbitrator"]["identity_sha256"],
+            "terms_version": terms_version,
+        },
+    )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_arbitral_award(
+    db: Session, case: Case, *, adopted: bool, payload: Dict[str, Any]
+) -> Case:
+    append_audit(
+        db,
+        case,
+        AWARD_SIGNED_EVENT if adopted else AWARD_DECLINED_EVENT,
+        payload,
+    )
+    db.commit()
+    return get_case(db, case.id)
 
 
 WITHDRAWAL_EVENT = "withdrawn_to_court"

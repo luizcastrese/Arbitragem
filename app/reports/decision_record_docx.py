@@ -309,6 +309,27 @@ def _legal_effect(document: Document, record: Dict[str, Any]) -> None:
     if lawsuit:
         rows.append(("Processo", f"{lawsuit.get('number')} — {lawsuit.get('court')}"))
     _add_key_value_table(document, rows)
+    arbitrator = effect.get("arbitrator") or {}
+    if arbitrator:
+        document.add_heading("Árbitro", level=2)
+        award = effect.get("arbitral_award") or {}
+        rows = [
+            ("Nome", str(arbitrator.get("display_name") or "")),
+            ("CPF", str(arbitrator.get("tax_id") or "")),
+            ("Qualificação", str(arbitrator.get("qualification") or "")),
+            ("Designado pelas duas partes", "sim" if arbitrator.get("designated") else "não"),
+            ("Declaração de independência", str(arbitrator.get("disclosure") or "Nada a revelar")),
+        ]
+        if award:
+            rows += [
+                ("Sentença", "adotada e assinada" if award.get("adopted") else "não adotada"),
+                ("Data", _format_timestamp(award.get("recorded_at"))),
+                ("Lugar", str(award.get("place") or "")),
+                ("Auto adotado (hash)", str(award.get("adopted_record_hash") or "")),
+            ]
+            if award.get("statement"):
+                rows.append(("Manifestação do árbitro", str(award["statement"])))
+        _add_key_value_table(document, rows)
     if effect.get("next_steps"):
         document.add_heading("Próximos passos", level=2)
         _bullets(document, effect["next_steps"])

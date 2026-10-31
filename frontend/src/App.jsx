@@ -1479,6 +1479,18 @@ function CaseWorkspace({
         />
       )}
 
+      {caseData.pathway && (
+        <ArbitratorCard
+          caseData={caseData}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+          roles={roles}
+          isArbitrator={userHasRole(caseData, user, 'arbitrator')}
+        />
+      )}
+
       {caseData.decision_record && (
         <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
       )}
@@ -1507,6 +1519,137 @@ function saveBlob(blob, filename) {
   anchor.download = filename
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+function ArbitratorCard({ caseData, busy, run, request, actorHeaders, roles, isArbitrator }) {
+  const pathway = caseData.pathway || {}
+  const arbitrator = pathway.arbitrator
+  const elections = pathway.arbitration_elections || {}
+  const anyElection = Object.values(elections).some((item) => item?.elected)
+  const locked = caseData.manifest_locked
+  const award = caseData.arbitral_award
+  const recordKind = caseData.decision_record?.outcome?.kind
+  const [form, setForm] = useState({ tax_id: '', qualification: '', independent: false, disclosure: '' })
+  const [place, setPlace] = useState('')
+  const [statement, setStatement] = useState('')
+  if (!anyElection && !arbitrator && !isArbitrator) return null
+
+  function post(label, path, body, party) {
+    return run(label, () => request(`/cases/${caseData.id}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(party ? actorHeaders(caseData.id, party) : {}) },
+      body: JSON.stringify(body)
+    }))
+  }
+
+  const confirmations = arbitrator?.confirmations || {}
+  const currentIdentity = arbitrator?.identity_sha256
+  const confirmedBy = (party) => confirmations[party]?.identity_sha256 === currentIdentity && Boolean(currentIdentity)
+
+  return (
+    <section className="record-card arbitrator-card">
+      <div className="record-heading">
+        <span className="action-icon"><Scale size={22} /></span>
+        <div>
+          <span className="section-label">Árbitro pessoa física</span>
+          <h3>
+            {award
+              ? (award.adopted ? 'Sentença arbitral assinada' : 'O árbitro não adotou a decisão')
+              : pathway.arbitrator_designated
+                ? `Árbitro designado: ${arbitrator.display_name}`
+                : 'Designação do árbitro'}
+          </h3>
+          <p>
+            A lei exige árbitro pessoa física, com a confiança das duas partes, que assine a sentença
+            (Lei 9.307/96, arts. 13 e 26). A IA elabora a decisão; o árbitro a adota e assina, ou recusa.
+            A designação fecha quando o caso é travado.
+          </p>
+        </div>
+      </div>
+
+      {arbitrator ? (
+        <div className="arbitrator-facts">
+          <span><strong>{arbitrator.display_name}</strong> · {arbitrator.qualification}</span>
+          <span>Revelação: {arbitrator.disclosure || 'nada a revelar'}</span>
+          <span>
+            Confirmado pela reclamante: {confirmedBy('claimant') ? 'sim' : 'não'} ·
+            pela reclamada: {confirmedBy('respondent') ? 'sim' : 'não'}
+          </span>
+        </div>
+      ) : (
+        <p className="consent-note">
+          Nenhum árbitro aceitou a nomeação. Uma parte convida o árbitro em “Participantes e prazos”, com o papel Árbitro.
+        </p>
+      )}
+
+      {!locked && arbitrator && ['claimant', 'respondent'].filter((party) => roles[party] && !confirmedBy(party)).map((party) => (
+        <div className="record-actions" key={party}>
+          <button
+            className="button secondary"
+            disabled={busy || !elections[party]?.elected}
+            title={elections[party]?.elected ? undefined : 'Escolha a arbitragem no seu aceite antes'}
+            onClick={() => post('Confirmando o árbitro...', '/arbitrator/confirm', { party }, party)}
+          >
+            Confirmar {arbitrator.display_name} como árbitro
+          </button>
+        </div>
+      ))}
+
+      {isArbitrator && !locked && (
+        <form
+          className="arbitrator-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            post('Registrando o aceite da nomeação...', '/arbitrator/accept', form)
+          }}
+        >
+          <input className="tax-id-input" placeholder="Seu CPF" value={form.tax_id}
+            onChange={(e) => setForm({ ...form, tax_id: e.target.value })} required />
+          <input placeholder="Profissão e domicílio" value={form.qualification}
+            onChange={(e) => setForm({ ...form, qualification: e.target.value })} required minLength={5} />
+          <textarea placeholder="Revele qualquer fato que possa gerar dúvida sobre sua imparcialidade (art. 14, §1º). Deixe em branco se não houver."
+            value={form.disclosure} onChange={(e) => setForm({ ...form, disclosure: e.target.value })} />
+          <label className="election-choice">
+            <input type="checkbox" checked={form.independent}
+              onChange={(e) => setForm({ ...form, independent: e.target.checked })} />
+            <span>Declaro que sou independente e imparcial em relação às partes e à disputa.</span>
+          </label>
+          <button className="button primary" disabled={busy || !form.independent}>Aceitar a nomeação</button>
+        </form>
+      )}
+
+      {isArbitrator && locked && !award && recordKind === 'decision' && (
+        <div className="arbitrator-form">
+          <input placeholder="Lugar em que a sentença é proferida (ex.: São Paulo/SP)" value={place}
+            onChange={(e) => setPlace(e.target.value)} />
+          <textarea placeholder="Manifestação do árbitro (opcional)" value={statement}
+            onChange={(e) => setStatement(e.target.value)} />
+          <div className="record-actions">
+            <button className="button primary" disabled={busy || place.trim().length < 2}
+              onClick={() => window.confirm('Adotar a decisão e assiná-la como sentença arbitral? A assinatura obriga as partes.')
+                && post('Assinando a sentença arbitral...', '/arbitral-award', { adopt: true, place, statement })}>
+              Adotar e assinar a sentença
+            </button>
+            <button className="button secondary" disabled={busy || place.trim().length < 2}
+              onClick={() => window.confirm('Recusar adotar a decisão? Não haverá sentença arbitral na plataforma.')
+                && post('Registrando a recusa...', '/arbitral-award', { adopt: false, place, statement })}>
+              Recusar a decisão
+            </button>
+          </div>
+        </div>
+      )}
+
+      {award && (
+        <div className="blocking-note">
+          <Scale size={17} />
+          <span>
+            {award.adopted ? 'Adotada e assinada' : 'Recusada'} por {award.arbitrator_name} em {award.place}.
+            {' '}Documento adotado: {String(award.adopted_record_hash || '').slice(0, 16)}…
+          </span>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function WithdrawToCourtCard({ caseData, busy, run, request, actorHeaders, roles }) {
@@ -1745,6 +1888,7 @@ function OperationsCard({ caseData, busy, run, request, actorHeaders, user }) {
             <select name="role" defaultValue="respondent">
               <option value="claimant">Reclamante</option>
               <option value="respondent">Reclamada</option>
+              <option value="arbitrator">Árbitro</option>
             </select>
             <button className="button primary" disabled={busy}>Gerar convite</button>
           </form>}

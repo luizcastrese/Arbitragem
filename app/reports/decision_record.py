@@ -78,6 +78,17 @@ WITHDRAWN_NOTICE = (
     "origem do registro, não a verdade material das alegações."
 )
 
+SIGNED_AWARD_NOTICE = (
+    "As duas partes escolheram, depois de surgido o conflito, submeter a "
+    "disputa à arbitragem e designaram o árbitro identificado neste auto. A "
+    "decisão foi elaborada pela IA, com o raciocínio e os cálculos visíveis, "
+    "e o árbitro a adotou e assinou como sentença arbitral (Lei 9.307/96, "
+    "arts. 13 e 26). A sentença produz entre as partes os mesmos efeitos da "
+    "sentença judicial e é título executivo (Lei 9.307/96, art. 31; CPC, art. "
+    "515, VII); só pode ser anulada nas hipóteses do art. 32, em 90 dias. "
+    "Hashes e assinaturas comprovam integridade e origem do registro."
+)
+
 ARBITRAL_NOTICE = (
     "As duas partes escolheram, depois de surgido o conflito, submeter a "
     "disputa à arbitragem se não houvesse acordo. A decisão foi elaborada "
@@ -454,6 +465,8 @@ def record_basis(case_data: Dict[str, Any]) -> Dict[str, Any]:
     # Só casos com via entram com ela: os autos já emitidos mantêm a base.
     if case_data.get("pathway"):
         basis["pathway"] = case_data["pathway"]
+    if case_data.get("arbitral_award"):
+        basis["arbitral_award"] = case_data["arbitral_award"]
     return basis
 
 
@@ -473,11 +486,13 @@ def build_decision_record(
     agreement = _agreement(case_data) if kind == "agreement" else None
     organized = case_data.get("organized") or {}
     decision = case_data.get("decision") or {}
-    effect = legal_effect(case_data.get("pathway"), kind)
+    effect = legal_effect(case_data.get("pathway"), kind, case_data.get("arbitral_award"))
     if kind == "agreement":
         notice = AGREEMENT_NOTICE
     elif kind == "withdrawn":
         notice = WITHDRAWN_NOTICE
+    elif effect["instrument"] == "sentenca_arbitral" and effect["binding"]:
+        notice = SIGNED_AWARD_NOTICE
     elif effect["instrument"] == "sentenca_arbitral":
         notice = ARBITRAL_NOTICE
     else:

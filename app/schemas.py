@@ -40,7 +40,9 @@ class InvitationRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_must_be_valid(cls, value: str) -> str:
-        if value not in {"claimant", "respondent"}:
+        # O árbitro é convidado por uma parte e só atua depois de aceitar a
+        # nomeação e ser confirmado pelas duas.
+        if value not in {"claimant", "respondent", "arbitrator"}:
             raise ValueError("unsupported role")
         return value
 
@@ -187,6 +189,58 @@ class AgreementResponseRequest(BaseModel):
         if value not in {"claimant", "respondent"}:
             raise ValueError("party must be claimant or respondent")
         return value
+
+
+class ArbitratorAcceptRequest(BaseModel):
+    """O árbitro aceita a nomeação, se qualifica e declara independência."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    tax_id: str = Field(min_length=11, max_length=32)
+    qualification: str = Field(min_length=5, max_length=500)
+    independent: bool
+    disclosure: str = Field(default="", max_length=5_000)
+
+    @field_validator("tax_id")
+    @classmethod
+    def tax_id_must_be_cpf(cls, value: str) -> str:
+        try:
+            normalized = normalize_tax_id(value)
+        except InvalidTaxId as exc:
+            raise ValueError(str(exc)) from exc
+        if not normalized or len(normalized) != 11:
+            raise ValueError("o árbitro é pessoa física: informe um CPF")
+        return normalized
+
+    @field_validator("independent")
+    @classmethod
+    def must_declare_independence(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError(
+                "sem independência declarada, a nomeação não pode ser aceita"
+            )
+        return value
+
+
+class ArbitratorConfirmRequest(BaseModel):
+    party: str
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
+class ArbitralAwardRequest(BaseModel):
+    """O árbitro adota e assina a decisão como sentença, ou recusa adotá-la."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    adopt: bool
+    place: str = Field(min_length=2, max_length=200)
+    statement: str = Field(default="", max_length=10_000)
 
 
 class WithdrawToCourtRequest(BaseModel):
