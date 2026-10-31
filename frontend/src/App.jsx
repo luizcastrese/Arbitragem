@@ -118,6 +118,7 @@ function userHasRole(caseData, user, role) {
 }
 
 const statusLabels = {
+  withdrawn: 'Encerrado: opção pela via judicial',
   draft: 'Recebendo documentos',
   locked: 'Documentos protegidos',
   locking: 'Travando o manifesto',
@@ -1467,6 +1468,17 @@ function CaseWorkspace({
         user={user}
       />
 
+      {!caseData.decision_record && (roles.claimant || roles.respondent) && (
+        <WithdrawToCourtCard
+          caseData={caseData}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+          roles={roles}
+        />
+      )}
+
       {caseData.decision_record && (
         <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
       )}
@@ -1497,6 +1509,59 @@ function saveBlob(blob, filename) {
   URL.revokeObjectURL(url)
 }
 
+function WithdrawToCourtCard({ caseData, busy, run, request, actorHeaders, roles }) {
+  const [reason, setReason] = useState('')
+  const party = roles.claimant ? 'claimant' : 'respondent'
+  if (String(caseData.status || '').startsWith('processing')) return null
+
+  function withdraw() {
+    const confirmed = window.confirm(
+      'Optar pela via judicial encerra o caso na Valinor para as duas partes. '
+      + 'Não haverá acordo nem decisão aqui. As duas partes recebem o auto com '
+      + 'todo o histórico até agora. Deseja continuar?'
+    )
+    if (!confirmed) return
+    run('Encerrando o caso e emitindo o auto com o histórico...', () =>
+      request(`/cases/${caseData.id}/withdraw-to-court`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, party) },
+        body: JSON.stringify({ party, reason })
+      })
+    )
+  }
+
+  return (
+    <section className="record-card withdraw-card">
+      <div className="record-heading">
+        <span className="action-icon"><Scale size={22} /></span>
+        <div>
+          <span className="section-label">Adesão voluntária</span>
+          <h3>Prefere levar o conflito à Justiça?</h3>
+          <p>
+            Você pode sair a qualquer momento antes do desfecho, sem depender da outra parte.
+            O caso encerra e as duas partes recebem o auto com todo o histórico até aqui:
+            documentos, respostas, rodadas de acordo e a trilha de auditoria, para conferir
+            e, se quiserem, juntar ao processo.
+          </p>
+        </div>
+      </div>
+      <div className="record-actions">
+        <input
+          className="tax-id-input withdraw-reason"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Motivo (opcional)"
+          aria-label="Motivo da opção pela via judicial"
+          maxLength={2000}
+        />
+        <button className="button secondary" onClick={withdraw} disabled={busy}>
+          Optar pela via judicial
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function DecisionRecordCard({ caseData, busy, run }) {
   const record = caseData.decision_record
   const kind = record.outcome?.kind
@@ -1504,7 +1569,9 @@ function DecisionRecordCard({ caseData, busy, run }) {
     ? 'Termo de acordo'
     : kind === 'decision'
       ? 'Decisão proferida'
-      : 'Encerrado sem decisão de mérito'
+      : kind === 'withdrawn'
+        ? 'Encerrado por opção pela via judicial'
+        : 'Encerrado sem decisão de mérito'
   const baseName = `auto-valinor-${caseData.id.slice(0, 8)}-${record.record_number}`
 
   async function downloadDocx() {
@@ -2910,6 +2977,7 @@ function procedureLabel(caseData) {
   if (caseData.status?.startsWith('processing')) {
     return statusLabels[caseData.status] || 'Em processamento'
   }
+  if (conclusion === 'withdrawn') return statusLabels.withdrawn
   if (conclusion === 'inadmissible') return 'Caso inadmissível'
   if (conclusion === 'invalidated') return 'Decisão invalidada'
   if (conclusion === 'system_failure') return 'Falha do sistema'

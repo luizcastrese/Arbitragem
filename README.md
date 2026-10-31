@@ -46,6 +46,7 @@ hashes.
 | Decisão, com arbitragem escolhida pelas duas partes | Sentença arbitral, com efeitos de sentença judicial (Lei 9.307/96, art. 31) | Compromisso nos autos (Lei 9.307/96, art. 9º, §1º) e extinção do processo (CPC, art. 485, VII) |
 | Decisão, sem a escolha das duas partes | Decisão fundamentada **não vinculante** | Idem; pode ser juntada como prova |
 | Abstenção | Conflito segue pela via que as partes escolherem | Processo retoma o curso (CPC, art. 313, II, se suspenso) |
+| Uma parte opta pela via judicial | Auto de encerramento com o histórico completo, para as duas partes auditarem e juntarem à petição | Idem; o processo retoma o curso |
 
 Limites respeitados pelo código (`app/domain/pathway.py`):
 
@@ -64,6 +65,12 @@ Limites respeitados pelo código (`app/domain/pathway.py`):
   `binding: false`, até a assinatura do árbitro indicado no compromisso.
   **Essa etapa de assinatura ainda não está implementada** (ver "Limites
   antes de produção pública").
+- **Saída para a Justiça.** A adesão é voluntária nos dois sentidos: qualquer
+  parte sai antes do desfecho, sozinha. O caso fica só para leitura, e o auto
+  traz documentos, contraditório, rodadas de acordo e a trilha de auditoria
+  completa (cada evento com seu hash e o anterior). Propostas de acordo
+  constam como registro, não como confissão, e a confidencialidade pode
+  limitar o uso como prova (Lei 13.140/2015, art. 30; CPC, art. 166, §1º).
 - **Processo ajuizado.** O caso registra o número CNJ (com dígito verificador
   conferido) e o juízo. Entrar na Valinor não suspende nem extingue o
   processo por si só: isso depende de pedido das partes ao juízo.
@@ -157,6 +164,12 @@ caso (via: antes do processo | processo ajuizado nº CNJ; matéria)
      efeito jurídico: acordo para homologar, projeto de sentença arbitral ou
      decisão não vinculante
   -> pagamento opcional pela plataforma (Stripe Connect)
+
+a qualquer momento antes do desfecho:
+  -> uma parte opta pela via judicial (POST /cases/{id}/withdraw-to-court)
+  -> o caso encerra sem acordo nem decisão
+  -> auto de encerramento com todo o histórico e a trilha de auditoria,
+     igual para as duas partes
 ```
 
 Nenhum material entra silenciosamente na decisão. Tudo precisa ser atribuído a
@@ -419,6 +432,7 @@ críticos derrubam o boot em vez de virar aviso.
 | `POST /stripe/webhook` | Confirmação do Stripe (assinada). Só o webhook marca o pagamento como pago |
 | `GET /cases` | Listar casos |
 | `GET /cases/{id}` | Reabrir caso completo |
+| `POST /cases/{id}/withdraw-to-court` | A parte opta pela via judicial: encerra o caso e emite o auto com todo o histórico até ali |
 | `POST /cases/{id}/consent` | Registrar aceite individual da parte, com o CPF/CNPJ dela e a escolha opcional pela arbitragem (`elects_arbitration`) |
 | `POST /cases/{id}/conciliation/{round}/agreement` | Aceitar ou recusar individualmente a proposta da rodada; o acordo exige os dois aceites |
 | `POST /cases/{id}/documents/text` | Adicionar texto |
@@ -573,6 +587,9 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   e a chamada pode ser repetida). Volume maior pede uma fila externa;
 - a gestão de segredos ainda depende do ambiente, sem cofre dedicado;
 - não há validação jurídica dos frameworks;
+- a confidencialidade das tratativas de acordo (Lei 13.140/2015, art. 30)
+  precisa de definição jurídica: hoje o auto as registra para as partes, com
+  a ressalva de que não são confissão;
 - as rodadas de acordo e a decisão ainda não recebem a via do caso no prompt:
   o efeito jurídico é calculado depois, no auto;
 - decisões inconclusivas, inadmissíveis ou invalidadas encerram o procedimento
@@ -617,7 +634,7 @@ A plataforma nunca debita ou retém valores por força da decisão. O pagamento
 - **Vínculo:** o pagamento é único por attestation. Uma correção em recurso gera
   nova attestation e, portanto, nova oferta. Cada passo entra na cadeia de
   auditoria.
-- **Termos:** a cláusula 10.1 (termos `2026-10-31`) descreve o pagamento e a taxa.
+- **Termos:** a cláusula 10.1 (termos `2026-11-01`) descreve o pagamento e a taxa.
   Como os textos ainda aguardam revisão jurídica, trate o enquadramento
   (intermediação de pagamento, tributação, Banco Central) como pendência antes
   da exposição pública.

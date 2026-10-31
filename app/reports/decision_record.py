@@ -14,7 +14,9 @@ Desfechos possíveis (`outcome.kind`):
 - ``decision``: houve decisão de mérito, auditada e aprovada;
 - ``no_merit_decision``: o procedimento terminou sem decisão de mérito
   (inconclusivo, inadmissível, invalidado ou falha do sistema), e o auto diz
-  por quê.
+  por quê;
+- ``withdrawn``: uma parte optou pela via judicial antes do desfecho. O auto
+  traz o histórico completo até ali, para as duas partes auditarem.
 
 Cada auto tem ``record_hash`` (SHA-256 do conteúdo canônico) e assinatura:
 Ed25519 quando a chave da plataforma está configurada — verificável por
@@ -63,6 +65,19 @@ AGREEMENT_NOTICE = (
     "material das alegações."
 )
 
+WITHDRAWN_NOTICE = (
+    "Este auto registra o procedimento Valinor até o momento em que uma das "
+    "partes optou pela via judicial. Não houve acordo nem decisão: nada aqui "
+    "obriga as partes. O histórico completo — material apresentado, "
+    "contraditório, rodadas de composição e trilha de auditoria — fica "
+    "disponível às duas partes para auditoria. Propostas, posições e "
+    "manifestações feitas na busca de acordo constam como registro do "
+    "procedimento, não como reconhecimento de fato ou de direito, e sua "
+    "confidencialidade pode limitar o uso como prova (Lei 13.140/2015, art. "
+    "30; CPC, art. 166, §1º). Hashes e assinaturas comprovam integridade e "
+    "origem do registro, não a verdade material das alegações."
+)
+
 ARBITRAL_NOTICE = (
     "As duas partes escolheram, depois de surgido o conflito, submeter a "
     "disputa à arbitragem se não houvesse acordo. A decisão foi elaborada "
@@ -87,6 +102,7 @@ CONCLUSION_LABELS = {
     "inadmissible": "Inadmissível: a matéria está fora do escopo do procedimento",
     "invalidated": "Invalidado: a decisão não passou nas verificações de integridade",
     "system_failure": "Falha do sistema: a etapa decisória não pôde ser concluída",
+    "withdrawn": "Encerrado: uma parte optou pela via judicial",
 }
 
 ABSTENTION_LABELS = {
@@ -137,6 +153,8 @@ def _agreement(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def outcome_kind(case_data: Dict[str, Any]) -> Optional[str]:
     """Tipo de desfecho, ou None se o procedimento ainda não terminou."""
     status = str(case_data.get("status") or "")
+    if status == "withdrawn":
+        return "withdrawn"
     if status.startswith("processing"):
         return None
     conclusion = case_data.get("procedure_conclusion") or ""
@@ -347,6 +365,19 @@ def _appeal_section(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _summary(kind: str, case_data: Dict[str, Any], agreement: Optional[Dict[str, Any]]) -> str:
     claimant = case_data.get("claimant") or "a parte reclamante"
     respondent = case_data.get("respondent") or "a parte reclamada"
+    if kind == "withdrawn":
+        withdrawal = case_data.get("withdrawal") or {}
+        party = withdrawal.get("party")
+        who = case_data.get(party) if party in PARTIES else None
+        text = (
+            f"{who or 'Uma das partes'} optou pela via judicial"
+            + (f" em {_format_utc(withdrawal['recorded_at'])}" if withdrawal.get("recorded_at") else "")
+            + ". O procedimento encerrou sem acordo e sem decisão; o histórico "
+            "até esse momento está registrado neste auto."
+        )
+        if withdrawal.get("reason"):
+            text += f" Motivo informado: {withdrawal['reason']}"
+        return text
     if kind == "agreement" and agreement:
         return (
             f"{claimant} e {respondent} aceitaram, de forma independente, a proposta "
@@ -377,6 +408,16 @@ def _summary(kind: str, case_data: Dict[str, Any], agreement: Optional[Dict[str,
     if reasons:
         text += f" Motivos: {', '.join(reasons)}."
     return text
+
+
+def _format_utc(value: str) -> str:
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc)
+    return moment.strftime("%d/%m/%Y às %H:%M (UTC)")
 
 
 def format_money(minor_units: Any, currency: Optional[str]) -> str:
@@ -435,13 +476,15 @@ def build_decision_record(
     effect = legal_effect(case_data.get("pathway"), kind)
     if kind == "agreement":
         notice = AGREEMENT_NOTICE
+    elif kind == "withdrawn":
+        notice = WITHDRAWN_NOTICE
     elif effect["instrument"] == "sentenca_arbitral":
         notice = ARBITRAL_NOTICE
     else:
         notice = LEGAL_NOTICE
     conclusion = (
-        "agreement"
-        if kind == "agreement"
+        kind
+        if kind in {"agreement", "withdrawn"}
         else case_data.get("procedure_conclusion")
         or decision.get("procedure_conclusion")
         or ("decided" if kind == "decision" else "inconclusive")
@@ -477,9 +520,26 @@ def build_decision_record(
         },
         "legal_effect": effect,
         "agreement": agreement,
-        "decision": _decision_section(case_data, kind),
-        "review": _review_section(case_data) if kind != "agreement" else None,
-        "appeal": _appeal_section(case_data) if kind != "agreement" else None,
+        "withdrawal": case_data.get("withdrawal") if kind == "withdrawn" else None,
+        # Na saída para o Judiciário, o auto leva a trilha inteira: cada evento
+        # com seu hash e o hash anterior, para a parte conferir o encadeamento.
+        "audit_trail": (
+            [
+                {
+                    "event_type": item.get("event_type"),
+                    "timestamp_utc": item.get("timestamp_utc"),
+                    "previous_hash": item.get("previous_hash"),
+                    "event_hash": item.get("event_hash"),
+                }
+                for item in case_data.get("audit_log") or []
+            ]
+            if kind == "withdrawn"
+            else None
+        ),
+        # Sem desfecho, nenhuma decisão parcial ou não auditada é apresentada.
+        "decision": _decision_section(case_data, kind) if kind != "withdrawn" else None,
+        "review": _review_section(case_data) if kind not in {"agreement", "withdrawn"} else None,
+        "appeal": _appeal_section(case_data) if kind not in {"agreement", "withdrawn"} else None,
         "integrity": {
             "manifest_hash": manifest.get("manifest_hash"),
             "manifest_signature": manifest.get("platform_signature"),

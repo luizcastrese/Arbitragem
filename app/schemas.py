@@ -189,6 +189,26 @@ class AgreementResponseRequest(BaseModel):
         return value
 
 
+class WithdrawToCourtRequest(BaseModel):
+    """A parte deixa a Valinor e leva o conflito ao Judiciário.
+
+    É um ato só dela, possível a qualquer momento antes do desfecho. O caso
+    encerra e as duas partes recebem o auto com o histórico até ali.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    party: str
+    reason: str = Field(default="", max_length=2_000)
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
 class SubmissionReadyRequest(BaseModel):
     """A parte encerra ou reabre a própria apresentação. Não conduz o rito."""
 

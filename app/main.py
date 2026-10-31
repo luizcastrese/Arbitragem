@@ -142,6 +142,7 @@ from app.db.repository import (
     persist_attestation_record,
     record_consent,
     record_submission_ready,
+    record_withdrawal,
     register_contest,
     revert_contest,
     respond_to_document as persist_response,
@@ -153,6 +154,7 @@ from app.db.repository import (
 )
 from app.db.models import Deadline, Invitation
 from app.db.session import SessionLocal, get_db
+from app.domain.concurrency import TERMINAL_STATUSES as CONCURRENCY_TERMINAL_STATUSES
 from app.domain.concurrency import (
     PROCESSING_TTL,
     StageBusy,
@@ -212,6 +214,7 @@ from app.schemas import (
     PasswordResetRequest,
     RegisterRequest,
     SubmissionReadyRequest,
+    WithdrawToCourtRequest,
     VerifyEmailRequest,
 )
 
@@ -584,6 +587,18 @@ def _require_actor(db: Session, case, token: str, expected_party: str):
         status_code=403,
         detail=f"Credencial inválida para o papel {expected_party}",
     )
+
+
+def _assert_procedure_open(case) -> None:
+    """Depois da opção pela via judicial, o caso só pode ser lido e auditado."""
+    if case.status == "withdrawn":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O caso foi encerrado porque uma parte optou pela via judicial. "
+                "O histórico continua disponível no auto e na trilha de auditoria."
+            ),
+        )
 
 
 _STEWARD_CHAIN: set[str] = set()
@@ -1795,6 +1810,7 @@ def set_case_consent(
 ):
     case = _case_or_404(db, case_id)
     _require_actor(db, case, x_actor_token, payload.party)
+    _assert_procedure_open(case)
     if case.manifest_locked:
         raise HTTPException(
             status_code=409,
@@ -1856,6 +1872,7 @@ def add_text_document(
 ):
     case = _case_or_404(db, case_id)
     _require_actor(db, case, x_actor_token, payload.submitted_by)
+    _assert_procedure_open(case)
     document = _process_document(
         db,
         case,
@@ -1888,6 +1905,7 @@ async def upload_pdf(
     if material_type not in {"evidence", "argument"}:
         raise HTTPException(status_code=422, detail="Tipo de material inválido")
     _require_actor(db, case, x_actor_token, submitted_by)
+    _assert_procedure_open(case)
 
     file_bytes = await file.read(settings.max_upload_bytes + 1)
     if len(file_bytes) > settings.max_upload_bytes:
@@ -1968,6 +1986,7 @@ def acknowledge_evidence(
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
     _require_actor(db, case, x_actor_token, expected_party)
+    _assert_procedure_open(case)
     if payload.party != expected_party:
         raise HTTPException(
             status_code=403,
@@ -1996,6 +2015,7 @@ def respond_to_evidence(
     document = _document_or_404(db, case_id, document_id)
     expected_party = _counterparty(document)
     _require_actor(db, case, x_actor_token, expected_party)
+    _assert_procedure_open(case)
     if payload.party != expected_party:
         raise HTTPException(
             status_code=403,
@@ -2040,6 +2060,7 @@ def declare_submission_ready(
     """A parte encerra ou reabre a própria apresentação. O gestor conduz."""
     case = _case_or_404(db, case_id)
     _require_actor(db, case, x_actor_token, payload.party)
+    _assert_procedure_open(case)
     if case.manifest_locked:
         raise HTTPException(
             status_code=409,
@@ -2060,6 +2081,54 @@ def declare_submission_ready(
     )
 
 
+@app.post("/cases/{case_id}/withdraw-to-court")
+def withdraw_to_court(
+    case_id: str,
+    payload: WithdrawToCourtRequest,
+    x_actor_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """A parte deixa a Valinor e leva o conflito ao Judiciário.
+
+    Adesão voluntária vale nos dois sentidos: qualquer parte sai a qualquer
+    momento antes do desfecho, sem depender da outra. O caso encerra e o auto
+    com todo o histórico até ali fica disponível às duas partes, para auditar
+    e, se quiserem, juntar ao processo.
+    """
+    case = _case_or_404(db, case_id)
+    _require_actor(db, case, x_actor_token, payload.party)
+    if case.status == "withdrawn":
+        record = _issue_decision_record(db, case_id)
+        return {"status": "withdrawn", "decision_record": record}
+    if (case.status or "").startswith("processing") or case.status == "locking":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Há uma etapa em andamento. Aguarde a conclusão dela para "
+                "registrar a opção pela via judicial."
+            ),
+        )
+    case_data = case_to_dict(case, include_content=False, include_embeddings=False)
+    if case.status in {"agreement", *CONCURRENCY_TERMINAL_STATUSES} or outcome_kind(case_data):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O procedimento já tem um desfecho e um auto emitido. Para "
+                "levar o conflito ao Judiciário, use esse auto."
+            ),
+        )
+    updated = record_withdrawal(db, case, payload.party, payload.reason)
+    if updated is None:
+        raise HTTPException(
+            status_code=409,
+            detail="O caso mudou de estado agora. Recarregue e tente de novo.",
+        )
+    # A trilha carregada antes da saída está velha: o auto precisa do evento.
+    db.expire_all()
+    record = _issue_decision_record(db, case_id)
+    return {"status": "withdrawn", "decision_record": record}
+
+
 @app.post("/cases/{case_id}/documents/{document_id}/admit")
 def admit_evidence(
     case_id: str,
@@ -2068,6 +2137,7 @@ def admit_evidence(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_procedure_open(case)
     _assert_evidence_mutable(case)
     _require_steward_actuator(x_actor_token)
     document = _document_or_404(db, case_id, document_id)
@@ -2199,6 +2269,7 @@ def lock_manifest(
 ):
     """Atuador do gestor. A parte não trava o caso; declara a apresentação."""
     case = _case_or_404(db, case_id)
+    _assert_procedure_open(case)
     _require_steward_actuator(x_actor_token)
     if case.manifest_locked:
         _take_steward_chain(case_id)
@@ -2302,6 +2373,7 @@ def assess_case_conciliation(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_procedure_open(case)
     _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if not case.manifest_locked:
@@ -2438,6 +2510,7 @@ def respond_to_conciliation_agreement(
     """
     case = _case_or_404(db, case_id)
     _require_actor(db, case, x_actor_token, payload.party)
+    _assert_procedure_open(case)
     if case.organized_json or case.decision_json:
         raise HTTPException(
             status_code=409,
@@ -2525,6 +2598,7 @@ def file_conciliation_position(
     """Registra a posição de uma parte. O gestor decide o próximo passo."""
     case = _case_or_404(db, case_id)
     _require_actor(db, case, x_actor_token, payload.party)
+    _assert_procedure_open(case)
     if case.organized_json or case.decision_json:
         raise HTTPException(
             status_code=409,
@@ -2588,6 +2662,7 @@ def organize_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_procedure_open(case)
     _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if case_data.get("procedure_conclusion") == "agreement":
@@ -2669,6 +2744,7 @@ def decide_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_procedure_open(case)
     _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["organized"]:
@@ -2790,6 +2866,7 @@ def review_case(
     db: Session = Depends(get_db),
 ):
     case = _case_or_404(db, case_id)
+    _assert_procedure_open(case)
     _require_steward_actuator(x_actor_token)
     case_data = case_to_dict(case)
     if not case_data["decision"]:

@@ -231,6 +231,7 @@ def case_to_dict(
         "verification": _json_load(case.verification_json),
         "stability": _json_load(case.stability_json),
         "procedure_conclusion": case.procedure_conclusion,
+        "withdrawal": _withdrawal(case),
         "decision_runs": decision_runs,
         "review_runs": [_run_to_dict(item) for item in case.review_runs],
         "appeals": [_appeal_to_dict(item) for item in case.appeals],
@@ -392,6 +393,73 @@ def _case_query(db: Session):
         selectinload(Case.attestation_records),
         selectinload(Case.llm_executions),
     )
+
+
+WITHDRAWAL_EVENT = "withdrawn_to_court"
+
+
+def _withdrawal(case: Case) -> Optional[Dict[str, Any]]:
+    """Opção de uma parte pela via judicial, lida da trilha de auditoria.
+
+    A trilha é a fonte: o evento é encadeado por hash e não pode ser
+    reescrito, então não há coluna paralela que possa divergir dele.
+    """
+    if case.status != "withdrawn":
+        return None
+    for event in reversed(case.audit_events):
+        if event.event_type == WITHDRAWAL_EVENT:
+            payload = _json_load(event.payload_json, {})
+            return {
+                "party": payload.get("party"),
+                "reason": payload.get("reason") or "",
+                "previous_status": payload.get("previous_status"),
+                "recorded_at": event.timestamp_utc,
+            }
+    return None
+
+
+def record_withdrawal(
+    db: Session,
+    case: Case,
+    party: str,
+    reason: str,
+) -> Optional[Case]:
+    """Encerra o caso porque uma parte optou pela via judicial.
+
+    É um UPDATE condicional: só sai do estado em que estava se nenhuma etapa
+    entrou em processamento nesse meio-tempo. Devolve None se perdeu a corrida.
+    """
+    previous_status = case.status
+    updated = (
+        db.query(Case)
+        .filter(Case.id == case.id, Case.status == previous_status)
+        .update(
+            {
+                Case.status: "withdrawn",
+                Case.procedure_conclusion: "withdrawn",
+                Case.processing_started_at: None,
+                Case.row_version: Case.row_version + 1,
+            },
+            synchronize_session=False,
+        )
+    )
+    if not updated:
+        db.rollback()
+        return None
+    db.refresh(case)
+    append_audit(
+        db,
+        case,
+        WITHDRAWAL_EVENT,
+        {
+            "party": party,
+            "reason": reason,
+            "previous_status": previous_status,
+            "manifest_locked": bool(case.manifest_locked),
+        },
+    )
+    db.commit()
+    return get_case(db, case.id)
 
 
 def create_case(
