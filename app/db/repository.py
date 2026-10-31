@@ -24,6 +24,7 @@ from app.db.models import (
     LLMExecution,
 )
 from app.domain.legacy import public_decision_view, public_review_view
+from app.domain.pathway import clear_election, public_pathway, record_election
 from app.documents.storage import (
     StorageError,
     build_content_key,
@@ -172,6 +173,8 @@ def case_to_dict(
         "claimant": case.claimant,
         "respondent": case.respondent,
         "status": case.status,
+        "pathway": public_pathway(_json_load(case.pathway_json)),
+        "framework_id": (_json_load(case.pathway_json) or {}).get("matter_framework_id"),
         "consent": {
             "claimant": {
                 "accepted": case.claimant_consent,
@@ -399,6 +402,7 @@ def create_case(
     claimant_token_hash: str,
     respondent_token_hash: str,
     manager_token_hash: str,
+    pathway: Optional[Dict[str, Any]] = None,
 ) -> Case:
     case = Case(
         id=str(uuid.uuid4()),
@@ -409,10 +413,19 @@ def create_case(
         respondent_token_hash=respondent_token_hash,
         manager_token_hash=manager_token_hash,
         status="draft",
+        pathway_json=json.dumps(pathway, ensure_ascii=False) if pathway else None,
     )
     db.add(case)
     db.flush()
-    append_audit(db, case, "case_created", {"title": case.title})
+    created_payload: Dict[str, Any] = {"title": case.title}
+    if pathway:
+        created_payload["pathway"] = {
+            "entry_point": pathway.get("entry_point"),
+            "lawsuit": pathway.get("lawsuit"),
+            "matter_framework_id": pathway.get("matter_framework_id"),
+            "consumer_party": pathway.get("consumer_party"),
+        }
+    append_audit(db, case, "case_created", created_payload)
     db.commit()
     return get_case(db, case.id)
 
@@ -570,6 +583,7 @@ def record_consent(
     terms_version: str,
     terms_sha256: str,
     tax_id: Optional[str] = None,
+    elects_arbitration: Optional[bool] = None,
 ) -> Case:
     """Registra o aceite com a versão E o hash do texto exibido à parte. Sem o
     hash não há como provar depois o que foi aceito.
@@ -594,6 +608,22 @@ def record_consent(
     declared_tax_id = getattr(case, f"{party}_tax_id") if accepted else None
     if declared_tax_id:
         event_payload["tax_id_sha256"] = sha256_text(declared_tax_id)
+    pathway = _json_load(case.pathway_json)
+    if pathway is not None:
+        # A escolha pela arbitragem acompanha o aceite: retirado o aceite, a
+        # escolha cai junto. `None` mantém a escolha anterior.
+        if not accepted:
+            pathway = clear_election(pathway, party)
+        elif elects_arbitration is not None:
+            pathway = record_election(
+                pathway,
+                party=party,
+                elected=elects_arbitration,
+                terms_version=terms_version,
+                terms_sha256=terms_sha256,
+            )
+            event_payload["elects_arbitration"] = bool(elects_arbitration)
+        case.pathway_json = json.dumps(pathway, ensure_ascii=False)
     append_audit(
         db,
         case,

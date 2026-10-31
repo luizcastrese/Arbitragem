@@ -581,7 +581,7 @@ def get_settings() -> Settings:
         decision_stability_threshold=float(
             os.getenv("DECISION_STABILITY_THRESHOLD", "1.0")
         ),
-        framework_id=_env_or("FRAMEWORK_ID", "digital_services_b2b_v1"),
+        framework_id=_env_or("FRAMEWORK_ID", "consumer_banking_v1"),
         approach_framework_id=_env_or(
             "APPROACH_FRAMEWORK_ID", "commercial_balanced_v1"
         ),

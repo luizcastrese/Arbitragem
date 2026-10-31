@@ -500,7 +500,15 @@ export default function App() {
         body: JSON.stringify({
           title: form.get('title'),
           claimant: form.get('claimant'),
-          respondent: form.get('respondent')
+          respondent: form.get('respondent'),
+          matter_framework_id: form.get('matter_framework_id'),
+          entry_point: form.get('entry_point'),
+          ...(form.get('entry_point') === 'pending_lawsuit'
+            ? { lawsuit_number: form.get('lawsuit_number'), court: form.get('court') }
+            : {}),
+          ...(MATTERS.find((item) => item.id === form.get('matter_framework_id'))?.consumer
+            ? { consumer_party: form.get('consumer_party') }
+            : {})
         })
       })
       delete data.access_credentials
@@ -599,7 +607,7 @@ export default function App() {
             <span className="brand-mark"><ValinorMark size={44} tone="light" title="Valinor" /></span>
             <div>
               <strong>Valinor</strong>
-              <small>Decisão prévia ao Judiciário</small>
+              <small>Conflitos resolvidos fora da Justiça</small>
             </div>
           </div>
           <div className="topbar-actions">
@@ -642,12 +650,12 @@ export default function App() {
         {!user && (<>
         <section className="intro">
           <div>
-            <span className="eyebrow">Antes do processo, uma decisão fundamentada</span>
-            <h1>Resolva a disputa em dias, <em>não em anos</em> de processo.</h1>
+            <span className="eyebrow">Fora da Justiça, com as contas à vista</span>
+            <h1>Resolva o conflito em dias, <em>não em anos</em> de processo.</h1>
             <p>
-              Uma etapa voluntária e anterior ao Judiciário para conflitos entre empresas e
-              profissionais de serviços digitais. As duas partes apresentam suas provas; a IA
-              busca o acordo e, sem acordo, explica a decisão.
+              A Valinor é uma alternativa mais barata e mais rápida ao processo judicial. Primeiro
+              ela propõe o acordo. Sem acordo, a IA arbitra, com o raciocínio e os cálculos
+              visíveis. Funciona antes do processo e também em processo já ajuizado.
             </p>
             <div className="intro-actions">
               <button className="button gold" onClick={startNewCase}>
@@ -658,9 +666,10 @@ export default function App() {
           </div>
           <aside className="intro-art" aria-hidden="true"><HeroArt /></aside>
           <ul className="intro-guarantees">
-            <li><strong>Participação voluntária</strong><span>Ninguém é obrigado a aderir.</span></li>
-            <li><strong>Contraditório para as duas partes</strong><span>Cada prova é vista e respondida.</span></li>
-            <li><strong>Histórico lacrado e verificável</strong><span>Cada etapa é registrada com hash.</span></li>
+            <li><strong>Acordo antes de decisão</strong><span>A IA propõe o acordo primeiro.</span></li>
+            <li><strong>Transparência total</strong><span>Provas, regras e cálculos visíveis.</span></li>
+            <li><strong>Adesão voluntária</strong><span>Arbitragem só se as duas partes escolherem.</span></li>
+            <li><strong>Abstenção na dúvida</strong><span>Sem base segura, o sistema não decide.</span></li>
           </ul>
         </section>
 
@@ -668,12 +677,14 @@ export default function App() {
 
         <HowItWorks />
 
+        <PathwaysSection />
+
         <AudienceGuide onStart={startNewCase} onLogin={() => openAuth('login')} />
 
         <section className="closing-band">
           <div>
-            <h2>A decisão não obriga ninguém.</h2>
-            <p>Não é sentença judicial nem arbitral. O que sai do procedimento é o auto da decisão: um documento assinado que você pode levar a um advogado ou ao Judiciário.</p>
+            <h2>Um conflito a menos na Justiça.</h2>
+            <p>Todo caso termina num auto assinado que diz o que ele é e o que faz: acordo para homologar, sentença arbitral para assinatura do árbitro ou decisão não vinculante. Na dúvida, o sistema se abstém e diz por quê.</p>
           </div>
           <button className="button gold" onClick={startNewCase}>Abrir um caso</button>
         </section>
@@ -886,16 +897,16 @@ const AUDIENCE_PROFILES = [
   {
     id: 'reclamante',
     label: 'Abri a reclamação',
-    headline: 'Você quer resolver sem abrir um processo.',
-    body: 'Conte o que aconteceu, anexe os documentos e deixe a outra parte conhecer as regras antes de aceitar. Você acompanha cada etapa e entende por que cada proposta foi feita.',
+    headline: 'Você quer resolver sem processo, ou sair de um que não anda.',
+    body: 'Conte o que aconteceu, anexe extratos, faturas e contrato, e informe o número do processo se ele já existe. Você acompanha cada etapa e vê o cálculo de cada proposta.',
     cta: 'Abrir um caso',
     note: 'Leva alguns minutos para registrar.',
     steps: [
       'Descreva o caso e o que você espera receber.',
       'Convide a outra parte. Ela só participa se aceitar as regras.',
-      'Avalie as propostas de acordo ou siga para a decisão fundamentada.'
+      'Avalie as propostas de acordo. Sem acordo, escolha se quer arbitragem.'
     ],
-    result: 'você recebe o auto da decisão, assinado, para levar a um advogado se precisar.'
+    result: 'um auto assinado: acordo para homologar, sentença arbitral ou decisão fundamentada.'
   },
   {
     id: 'reclamada',
@@ -909,7 +920,7 @@ const AUDIENCE_PROFILES = [
       'Apresente sua defesa e seus documentos.',
       'Responda às rodadas de acordo: aceitar, recusar ou contrapropor.'
     ],
-    result: 'todo o histórico fica registrado e auditável para o seu jurídico.'
+    result: 'um desfecho rápido, auditável pelo seu jurídico, que pode encerrar o processo.'
   },
   {
     id: 'representante',
@@ -921,7 +932,7 @@ const AUDIENCE_PROFILES = [
     steps: [
       'Entre com sua conta e vincule-se ao caso.',
       'Organize as provas e apresente o caso pela parte.',
-      'Verifique o auto da decisão e a assinatura de forma independente.'
+      'Junte o auto aos autos: acordo para homologação ou compromisso arbitral.'
     ],
     result: 'um documento assinado, com partes qualificadas, percurso e dispositivo.'
   }
@@ -975,31 +986,36 @@ function AudienceGuide({ onStart, onLogin }) {
   )
 }
 
+// Matérias que o painel oferece na abertura do caso. O núcleo é genérico:
+// um setor novo entra como outro framework de matéria no backend.
+const MATTERS = [
+  { id: 'consumer_banking_v1', label: 'Disputa bancária (consumidor × banco)', consumer: true },
+  { id: 'digital_services_b2b_v1', label: 'Serviços digitais entre empresas', consumer: false }
+]
+
 const SCOPE_CATEGORIES = [
-  'Sites e desenvolvimento web',
-  'Software simples sob encomenda',
-  'Design',
-  'Marketing',
-  'Gestão de conteúdo',
-  'Produção audiovisual',
-  'Consultoria operacional',
-  'Automação não crítica'
+  'Cobrança ou desconto não reconhecido',
+  'Tarifas bancárias',
+  'Juros e encargos',
+  'Consignado não reconhecido',
+  'Operação contestada por fraude de terceiro',
+  'Restituição simples ou em dobro'
 ]
 
 const SCOPE_ISSUES = [
-  'Entrega', 'Atraso', 'Pagamento', 'Reembolso', 'Alteração de escopo',
-  'Aceite', 'Rescisão', 'Correção', 'Pagamento proporcional'
+  'Prova da contratação', 'Extratos e faturas', 'Tarifa prevista ou não',
+  'Taxa média do Bacen', 'Valor creditado', 'Repetição do indébito'
 ]
 
 const SCOPE_EXCLUDED = [
-  'Consumo (compra como destinatário final)',
-  'Dano corporal, saúde, trabalho, família',
-  'Fraude relevante e atividade criminal',
-  'Segurança crítica e vazamento de dados',
-  'Propriedade intelectual complexa',
-  'Disputas que exigem perícia técnica',
-  'Lucros cessantes elevados e urgência',
-  'Valor acima do limite fixado no caso'
+  'Autenticidade que dependa de perícia',
+  'Superendividamento (Lei 14.181/2021)',
+  'Dano moral sem parâmetro fixado pelas partes',
+  'Financiamento imobiliário',
+  'Tutela de urgência',
+  'Matéria suspensa por repetitivo ou IRDR',
+  'Ação coletiva e direito indisponível',
+  'Valor acima do limite fixado na matéria'
 ]
 
 function ScopeSection() {
@@ -1007,8 +1023,8 @@ function ScopeSection() {
     <section className="scope" id="escopo">
       <div className="value-heading">
         <span className="section-label">O que o Valinor trata</span>
-        <h2>Disputas de serviços digitais entre empresas e profissionais.</h2>
-        <p>Contratos de serviço firmados para a atividade profissional das partes, em qualquer destas áreas.</p>
+        <h2>Primeiro setor: disputas bancárias de massa.</h2>
+        <p>Alto volume, processo lento e mérito pouco subjetivo: o que se resolve com contrato, extrato e regra objetiva. Novos setores entram como novas matérias.</p>
       </div>
       <ul className="scope-categories">
         {SCOPE_CATEGORIES.map((item) => <li key={item}>{item}</li>)}
@@ -1022,8 +1038,8 @@ function ScopeSection() {
       <div className="scope-excluded">
         <div>
           <span className="eyebrow">Fora do escopo</span>
-          <h3>O que o procedimento não decide.</h3>
-          <p>Matéria fora do escopo encerra o caso como inadmissível, sem decisão de mérito.</p>
+          <h3>Na dúvida, o sistema se abstém.</h3>
+          <p>Matéria fora do escopo encerra o caso como inadmissível, sem decisão de mérito, e o conflito segue pela via que as partes escolherem.</p>
         </div>
         <ul>
           {SCOPE_EXCLUDED.map((item) => <li key={item}>{item}</li>)}
@@ -1033,27 +1049,49 @@ function ScopeSection() {
   )
 }
 
+function PathwaysSection() {
+  return (
+    <section className="scope" id="vias">
+      <div className="value-heading">
+        <span className="section-label">Dois momentos</span>
+        <h2>Antes do processo ou no lugar dele.</h2>
+      </div>
+      <ul className="scope-categories pathway-list">
+        <li><strong>Antes do processo.</strong> O conflito chega direto à Valinor e nem vira ação. O acordo vale como transação e pode ser homologado.</li>
+        <li><strong>Com processo ajuizado.</strong> As partes trocam a via judicial pela Valinor. O acordo é juntado aos autos para homologação; a sentença arbitral extingue o processo (CPC, art. 485, VII).</li>
+      </ul>
+      <div className="scope-excluded">
+        <div>
+          <span className="eyebrow">Limites legais</span>
+          <h3>Arbitragem só por escolha.</h3>
+          <p>Em relação de consumo, a arbitragem só vale se o consumidor a escolher depois que o conflito surgiu (Lei 9.307/96 e CDC, art. 51, VII). A lei exige árbitro pessoa física: a decisão da IA vira sentença arbitral com a assinatura dele.</p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function HowItWorks() {
   const steps = [
     {
       title: 'As duas partes aderem',
-      text: 'Reclamante e reclamada aceitam as mesmas regras, com convite e consentimento registrados.'
+      text: 'Antes do processo ou com processo já ajuizado. Adesão voluntária, com as mesmas regras para os dois lados.'
     },
     {
       title: 'Provas com contraditório',
       text: 'Cada documento enviado é visto e respondido pela outra parte antes de contar para qualquer coisa.'
     },
     {
-      title: 'A IA busca acordo primeiro',
-      text: 'Propostas de conciliação fundamentadas, que cada parte pode aceitar, recusar ou ajustar.'
+      title: 'Acordo primeiro',
+      text: 'A IA propõe o acordo, com o cálculo à vista. Cada parte aceita, recusa ou ajusta.'
     },
     {
-      title: 'Sem acordo, decisão fundamentada',
-      text: 'A IA decide citando provas verificáveis; um segundo modelo audita. O sistema pode se abster. A decisão não obriga as partes.'
+      title: 'Sem acordo, a IA arbitra',
+      text: 'Decisão com provas citadas, regras aplicadas e cálculos visíveis; um segundo modelo audita. Arbitragem só se as duas partes escolheram; senão, a decisão não obriga. Na dúvida, o sistema se abstém.'
     },
     {
-      title: 'Auto da decisão',
-      text: 'Todo caso termina num documento assinado com partes qualificadas, provas, acordo ou decisão. Serve de base para quem quiser ir ao Judiciário.'
+      title: 'Auto que encerra o conflito',
+      text: 'Documento assinado que diz o que ele é e o que faz: acordo para homologar, sentença arbitral ou decisão não vinculante.'
     }
   ]
   return (
@@ -1212,14 +1250,17 @@ function PasswordResetPanel({ busy, onSubmit, onCancel }) {
 }
 
 function CreateCase({ busy, error, onSubmit, onCancel }) {
+  const [matterId, setMatterId] = useState(MATTERS[0].id)
+  const [entryPoint, setEntryPoint] = useState('pre_litigation')
+  const matter = MATTERS.find((item) => item.id === matterId)
   return (
     <section className="surface create-surface">
       <div className="surface-header">
         <span className="number-badge">1</span>
         <div>
           <span className="section-label">Comece por aqui</span>
-          <h2>Qual reclamação será encaminhada?</h2>
-          <p>Identifique quem abre o caso e a outra parte do contrato, que responderá a ele.</p>
+          <h2>Qual conflito será resolvido?</h2>
+          <p>Identifique as partes, a matéria e se já existe processo na Justiça.</p>
         </div>
       </div>
 
@@ -1229,21 +1270,60 @@ function CreateCase({ busy, error, onSubmit, onCancel }) {
           <small>Use um título curto que ajude você a encontrá-lo depois.</small>
           <input
             name="title"
-            placeholder="Ex.: Atraso na entrega do site"
+            placeholder="Ex.: Desconto de consignado não reconhecido"
             required
             minLength="3"
           />
         </label>
         <label className="field">
           <span>Reclamante</span>
-          <small>Quem abre o caso: o contratante que questiona a entrega ou o prestador que cobra o pagamento.</small>
-          <input name="claimant" placeholder="Ex.: Estúdio Beta Ltda." required minLength="2" />
+          <small>Quem abre o caso.</small>
+          <input name="claimant" placeholder="Ex.: Maria da Silva" required minLength="2" />
         </label>
         <label className="field">
           <span>Reclamada</span>
-          <small>A outra parte do contrato, que responderá ao caso.</small>
-          <input name="respondent" placeholder="Ex.: Comercial Alfa Ltda." required minLength="2" />
+          <small>A outra parte, que responderá ao caso.</small>
+          <input name="respondent" placeholder="Ex.: Banco Exemplo S.A." required minLength="2" />
         </label>
+        <label className="field">
+          <span>Matéria</span>
+          <small>Define as regras aplicadas, as exclusões e o limite de valor.</small>
+          <select name="matter_framework_id" value={matterId} onChange={(event) => setMatterId(event.target.value)}>
+            {MATTERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+          </select>
+        </label>
+        {matter?.consumer && (
+          <label className="field">
+            <span>Quem é o consumidor?</span>
+            <small>Em consumo, a arbitragem só vale se o consumidor a escolher.</small>
+            <select name="consumer_party" defaultValue="claimant">
+              <option value="claimant">A reclamante</option>
+              <option value="respondent">A reclamada</option>
+            </select>
+          </label>
+        )}
+        <label className="field">
+          <span>Já existe processo?</span>
+          <small>A Valinor atua antes do processo ou no lugar de um processo já ajuizado.</small>
+          <select name="entry_point" value={entryPoint} onChange={(event) => setEntryPoint(event.target.value)}>
+            <option value="pre_litigation">Não, ainda não há processo</option>
+            <option value="pending_lawsuit">Sim, o processo já foi ajuizado</option>
+          </select>
+        </label>
+        {entryPoint === 'pending_lawsuit' && (
+          <>
+            <label className="field">
+              <span>Número do processo</span>
+              <small>Padrão CNJ: NNNNNNN-DD.AAAA.J.TR.OOOO.</small>
+              <input name="lawsuit_number" placeholder="0001234-71.2024.8.26.0100" required maxLength="30" />
+            </label>
+            <label className="field">
+              <span>Juízo</span>
+              <small>Vara ou juizado onde o processo tramita.</small>
+              <input name="court" placeholder="Ex.: 1ª Vara Cível de São Paulo" required minLength="3" />
+            </label>
+          </>
+        )}
 
         {error && <div className="full-row"><Message type="error" text={error} /></div>}
 
@@ -1466,9 +1546,12 @@ function DecisionRecordCard({ caseData, busy, run }) {
       <div className="blocking-note">
         <Scale size={17} />
         <span>
-          A decisão não obriga as partes. Este auto registra o procedimento, o
-          desfecho e a fundamentação, e pode servir de base para uma ação
-          judicial ou reclamação. Hash {String(record.record_hash || '').slice(0, 16)}… ·
+          {record.legal_effect
+            ? <>{record.legal_effect.instrument_label}. {record.legal_effect.next_steps?.join(' ')} {record.legal_effect.pending?.join(' ')} </>
+            : <>A decisão não obriga as partes. Este auto registra o procedimento, o
+              desfecho e a fundamentação, e pode servir de base para uma ação
+              judicial ou reclamação. </>}
+          Hash {String(record.record_hash || '').slice(0, 16)}… ·
           assinatura {record.signature_algorithm}. A versão JSON é a que se confere
           em <code>/decision-records/verify</code>.
         </span>
@@ -1982,6 +2065,9 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
   const [showTerms, setShowTerms] = useState(false)
   const [showPrivacy, setShowPrivacy] = useState(false)
   const [taxIds, setTaxIds] = useState({ claimant: '', respondent: '' })
+  const [elections, setElections] = useState({ claimant: false, respondent: false })
+  const pathway = caseData.pathway
+  const consumerParty = pathway?.consumer_relation ? pathway.consumer_party : null
   const entries = [
     {
       party: 'claimant',
@@ -2014,7 +2100,10 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
               <strong>{entry.name}</strong>
             </div>
             {entry.consent?.accepted ? (
-              <em><Check size={14} /> Aceitou</em>
+              <em>
+                <Check size={14} /> Aceitou
+                {pathway?.arbitration_elections?.[entry.party]?.elected ? ' · escolheu arbitragem' : ''}
+              </em>
             ) : roles[entry.party] ? (
               <span className="consent-action">
               <input
@@ -2025,6 +2114,19 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
                 aria-label={`CPF ou CNPJ de ${entry.name}`}
                 maxLength={20}
               />
+              {pathway && (
+                <label className="election-choice">
+                  <input
+                    type="checkbox"
+                    checked={elections[entry.party]}
+                    onChange={(event) => setElections({ ...elections, [entry.party]: event.target.checked })}
+                  />
+                  <span>
+                    Se não houver acordo, escolho a arbitragem (opcional).
+                    {consumerParty === entry.party ? ' Como consumidor, só você pode fazer esta escolha, e ela não altera nada no procedimento se você não a fizer.' : ''}
+                  </span>
+                </label>
+              )}
               <button
                 className="button secondary compact"
                 // Sem o texto carregado não há o que aceitar: o aceite grava o
@@ -2046,7 +2148,8 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
                       // Aceita-se a versão que esta tela exibiu, não a que o
                       // servidor considerar vigente no momento do clique.
                       terms_version: terms.version,
-                      tax_id: taxIds[entry.party]
+                      tax_id: taxIds[entry.party],
+                      ...(pathway ? { elects_arbitration: elections[entry.party] } : {})
                     })
                   })
                 )}
@@ -2062,7 +2165,14 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
       </div>
       <div className="terms-summary">
         <strong>Ao aceitar, cada parte confirma que compreendeu:</strong>
-        <span>procedimento voluntário e prévio ao Judiciário, que não é arbitragem; disputa de serviços digitais contratados no exercício de atividade profissional ou empresarial, fora de relação de consumo; acesso a todo material; oportunidade de resposta; composição somente por acordo; sem acordo, decisão por IA que não obriga as partes; auditoria e recurso automáticos; o sistema pode se abster; ao final, um auto da decisão assinado, com CPF/CNPJ das partes, que pode servir de base a uma ação judicial.</span>
+        <span>adesão voluntária, antes do processo ou com processo ajuizado; acesso a todo material e oportunidade de resposta; acordo primeiro, só com o aceite das duas partes; sem acordo, decisão da IA com raciocínio e cálculos visíveis, que só é arbitragem se as duas partes a escolherem (em consumo, por escolha do consumidor depois do conflito) e vira sentença arbitral com a assinatura do árbitro pessoa física; sem essa escolha, a decisão não obriga; auditoria e recurso automáticos; na dúvida, o sistema se abstém; ao final, um auto assinado que diz o efeito jurídico do resultado.</span>
+        {pathway && (
+          <span className="pathway-line">
+            {pathway.entry_label}
+            {pathway.lawsuit ? ` · processo ${pathway.lawsuit.number} (${pathway.lawsuit.court})` : ''}
+            {' · sem acordo: '}{pathway.resolution_track_label}
+          </span>
+        )}
         <button className="link-button" onClick={() => setShowTerms(!showTerms)}>
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>

@@ -38,7 +38,7 @@ def test_published_frameworks_keep_their_hashes():
 def test_case_framework_is_matter_plus_approach():
     matter = get_framework(MATTER_ID)
     approach = get_framework(APPROACH_ID)
-    composed = resolve_case_framework()
+    composed = resolve_case_framework(MATTER_ID)
 
     assert composed.id == matter.id
     assert composed.version == matter.version
@@ -66,7 +66,7 @@ def test_lock_without_approach_resolves_only_the_matter():
     assert legacy.approach is None
     assert legacy.hash() == get_framework(MATTER_ID).hash()
 
-    composed = resolve_case_framework()
+    composed = resolve_case_framework(MATTER_ID)
     assert framework_from_lock(composed.lock_summary()).hash() == composed.hash()
 
 
@@ -90,7 +90,7 @@ def test_verifier_accepts_approach_rule_only_on_composed_lock():
 
     decision = _decision_applying_good_faith()
     composed = verify_decision(
-        decision, _manifest(), _admitted(), _chunks(), resolve_case_framework()
+        decision, _manifest(), _admitted(), _chunks(), resolve_case_framework(MATTER_ID)
     )
     assert composed.valid is True, composed.errors
 

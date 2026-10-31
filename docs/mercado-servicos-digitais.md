@@ -1,5 +1,10 @@
 # Mercado de entrada: disputas de serviços digitais B2B
 
+> Atualização de 31/10/2026: o primeiro setor passou a ser o de disputas
+> bancárias de massa (`consumer_banking_v1`; ver o README). Serviços digitais
+> B2B seguem disponíveis como matéria (`digital_services_b2b_v1`), e este
+> levantamento fica como registro da decisão anterior.
+
 Levantamento de outubro de 2026 para decidir o primeiro mercado da Valinor.
 É pesquisa de mesa, feita em fontes públicas, e não uma pesquisa com clientes:
 os números servem para dimensionar o terreno, não para projetar receita.
