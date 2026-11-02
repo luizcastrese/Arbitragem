@@ -79,6 +79,7 @@ class Settings:
     platform_ed25519_private_key: str
     platform_ed25519_retired_public_keys: List[str]
     contest_window_days: int
+    acceptance_reflection_hours: int
     app_env: str
     cors_origins: List[str]
     max_upload_bytes: int
@@ -522,6 +523,7 @@ def get_settings() -> Settings:
             os.getenv("PLATFORM_ED25519_RETIRED_PUBLIC_KEYS", "")
         ),
         contest_window_days=int(os.getenv("CONTEST_WINDOW_DAYS", "7")),
+        acceptance_reflection_hours=int(os.getenv("ACCEPTANCE_REFLECTION_HOURS", "24")),
         app_env=app_env,
         cors_origins=_split_csv(
             os.getenv(

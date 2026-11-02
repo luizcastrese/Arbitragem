@@ -33,6 +33,7 @@ from app.api.context import (  # noqa: F401
     stage_runner,
 )
 from app.api.routes import (
+    acceptance,
     account,
     arbitration,
     attestation,
@@ -228,6 +229,7 @@ for module in (
     documents,
     procedure,
     arbitration,
+    acceptance,
     stages,
     attestation,
     payments,

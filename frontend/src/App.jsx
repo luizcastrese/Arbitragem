@@ -1491,6 +1491,19 @@ function CaseWorkspace({
         />
       )}
 
+      {caseData.decision_record?.outcome?.kind === 'decision'
+        && !caseData.arbitral_award?.adopted
+        && (roles.claimant || roles.respondent) && (
+        <AcceptDecisionCard
+          caseData={caseData}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+          roles={roles}
+        />
+      )}
+
       {caseData.decision_record && (
         <DecisionRecordCard caseData={caseData} busy={busy} run={run} />
       )}
@@ -1645,6 +1658,90 @@ function ArbitratorCard({ caseData, busy, run, request, actorHeaders, roles, isA
           <span>
             {award.adopted ? 'Adotada e assinada' : 'Recusada'} por {award.arbitrator_name} em {award.place}.
             {' '}Documento adotado: {String(award.adopted_record_hash || '').slice(0, 16)}…
+          </span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles }) {
+  const [state, setState] = useState(null)
+  const [confirmed, setConfirmed] = useState(false)
+  const caseId = caseData.id
+  const version = caseData.updated_at
+
+  useEffect(() => {
+    let cancelled = false
+    request(`/cases/${caseId}/decision-acceptance`)
+      .then((data) => { if (!cancelled) setState(data) })
+      .catch(() => { if (!cancelled) setState(null) })
+    return () => { cancelled = true }
+  }, [caseId, version])
+
+  if (!state) return null
+  const parties = ['claimant', 'respondent'].filter((party) => roles[party])
+  const label = { claimant: 'reclamante', respondent: 'reclamada' }
+  const both = state.complete
+  const reflectionEnds = state.reflection_ends_utc ? new Date(state.reflection_ends_utc) : null
+
+  function accept(party) {
+    return run('Registrando o acatamento da decisão...', () => request(`/cases/${caseId}/accept-decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...actorHeaders(caseId, party) },
+      body: JSON.stringify({ party, confirm: true })
+    }))
+  }
+
+  return (
+    <section className="record-card accept-decision-card">
+      <div className="record-heading">
+        <span className="action-icon"><ShieldCheck size={22} /></span>
+        <div>
+          <span className="section-label">Acatar a decisão</span>
+          <h3>{both ? 'Decisão acatada: vale como acordo entre as partes' : 'Adotar a decisão da IA como acordo'}</h3>
+          <p>
+            Não precisa de árbitro. Se as duas partes acatarem, a decisão passa a valer como acordo
+            (Código Civil, art. 840), nos termos do dispositivo, e o pagamento pode ser feito sem esperar
+            o prazo de recurso. O ato é irrevogável e afasta o recurso de quem acatou.
+          </p>
+        </div>
+      </div>
+
+      <div className="arbitrator-facts">
+        {['claimant', 'respondent'].map((party) => (
+          <span key={party}>
+            Parte {label[party]}: {state.parties[party]
+              ? `acatou em ${new Date(state.parties[party].accepted_at).toLocaleString('pt-BR')}`
+              : 'ainda não acatou'}
+          </span>
+        ))}
+      </div>
+
+      {!both && state.can_accept && parties.some((party) => !state.parties[party]) && (
+        <>
+          <p className="muted">{state.statement.text}</p>
+          <label className="election-choice">
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+            <span>Li a decisão e a declaração acima e quero acatar a decisão, ciente de que não poderei voltar atrás nem recorrer.</span>
+          </label>
+          <div className="record-actions">
+            {parties.filter((party) => !state.parties[party]).map((party) => (
+              <button key={party} className="button primary" disabled={busy || !confirmed}
+                onClick={() => accept(party)}>
+                Acatar como parte {label[party]}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!both && !state.can_accept && state.blocked_code === 'reflection_period' && reflectionEnds && (
+        <div className="blocking-note">
+          <ShieldCheck size={17} />
+          <span>
+            Prazo de reflexão: o acatamento abre em {reflectionEnds.toLocaleString('pt-BR')}.
+            Até lá, leia a decisão com calma.
           </span>
         </div>
       )}

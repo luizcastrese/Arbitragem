@@ -24,6 +24,7 @@ from app.db.models import (
     LLMExecution,
 )
 from app.domain.legacy import public_decision_view, public_review_view
+from app.domain.acceptance import ACCEPTED_EVENT, acceptances_from_audit
 from app.domain.arbitration import (
     AWARD_DECLINED_EVENT,
     AWARD_SIGNED_EVENT,
@@ -244,6 +245,13 @@ def case_to_dict(
                 audit_to_dict(event)
                 for event in case.audit_events
                 if event.event_type in {AWARD_SIGNED_EVENT, AWARD_DECLINED_EVENT}
+            ]
+        ),
+        "decision_acceptances": acceptances_from_audit(
+            [
+                audit_to_dict(event)
+                for event in case.audit_events
+                if event.event_type == ACCEPTED_EVENT
             ]
         ),
         "decision_runs": decision_runs,
@@ -475,6 +483,16 @@ def save_arbitral_award(
         AWARD_SIGNED_EVENT if adopted else AWARD_DECLINED_EVENT,
         payload,
     )
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_decision_acceptance(
+    db: Session, case: Case, *, payload: Dict[str, Any]
+) -> Case:
+    """Grava o acatamento da decisão por uma parte. Só a trilha o guarda: ela
+    é encadeada por hash e não há coluna paralela que possa divergir dela."""
+    append_audit(db, case, ACCEPTED_EVENT, payload)
     db.commit()
     return get_case(db, case.id)
 

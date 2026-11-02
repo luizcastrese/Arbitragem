@@ -209,12 +209,18 @@ def legal_effect(
     pathway: Optional[Dict[str, Any]],
     kind: str,
     award: Optional[Dict[str, Any]] = None,
+    acceptance: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """O que o documento final é e o que ele pode fazer com o conflito.
 
     ``kind`` é o desfecho do auto: ``agreement``, ``decision``,
     ``no_merit_decision`` ou ``withdrawn``. Casos anteriores à via são tratados como antes do
     processo e sem escolha de arbitragem.
+
+    ``acceptance`` é o acatamento da decisão pelas duas partes
+    (``acceptance_status``). Completo, a decisão da IA vale como acordo entre
+    elas, sem árbitro, e a sentença arbitral deixa de ser possível. Sentença
+    arbitral já assinada prevalece: o acatamento não a desfaz.
     """
     pathway = pathway or {}
     entry = pathway.get("entry_point") or PRE_LITIGATION
@@ -224,13 +230,22 @@ def legal_effect(
     steps: List[str] = []
     pending: List[str] = []
     ends_lawsuit_by: Optional[str] = None
+    accepted = bool(
+        kind == "decision"
+        and (acceptance or {}).get("complete")
+        and not (award or {}).get("adopted")
+    )
 
-    if kind == "agreement":
+    if kind == "agreement" or accepted:
         binding = True
         basis.append("Código Civil, art. 840 (transação)")
         if pending_lawsuit:
             instrument = "termo_de_acordo_para_homologacao"
-            label = "Termo de acordo para homologação judicial"
+            label = (
+                "Termo de acordo para homologação judicial, pela adoção da decisão"
+                if accepted
+                else "Termo de acordo para homologação judicial"
+            )
             ends_lawsuit_by = "homologacao_de_acordo"
             basis += [
                 "CPC, art. 487, III, b (homologação da transação resolve o mérito)",
@@ -244,7 +259,11 @@ def legal_effect(
             )
         else:
             instrument = "termo_de_acordo_extrajudicial"
-            label = "Termo de acordo extrajudicial"
+            label = (
+                "Termo de acordo extrajudicial, pela adoção da decisão"
+                if accepted
+                else "Termo de acordo extrajudicial"
+            )
             basis += [
                 "CPC, art. 784, III (título executivo extrajudicial com assinatura do devedor e de duas testemunhas)",
                 "CPC, arts. 515, III, e 725, VIII (homologação judicial de autocomposição extrajudicial)",
@@ -253,6 +272,14 @@ def legal_effect(
                 "O acordo obriga as partes como transação. Para executá-lo "
                 "diretamente, as partes podem assinar o termo com duas "
                 "testemunhas ou pedir sua homologação judicial."
+            )
+        if accepted:
+            steps.insert(
+                0,
+                "As duas partes acataram a decisão elaborada pela IA e a "
+                "adotaram como seu acordo, nos termos do dispositivo. Não há "
+                "sentença arbitral nem árbitro: o que obriga as partes é a "
+                "transação que elas próprias fizeram.",
             )
     elif kind == "decision" and track == ARBITRATION:
         designated = arbitrator_designated(pathway)
@@ -397,5 +424,19 @@ def legal_effect(
         "next_steps": steps,
         "pending": pending,
         "arbitrator": public_arbitrator(pathway),
-        "arbitral_award": award if kind == "decision" and track == ARBITRATION else None,
+        "arbitral_award": (
+            award if kind == "decision" and track == ARBITRATION and not accepted else None
+        ),
+        "decision_acceptance": (
+            {
+                "attestation_hash": acceptance.get("attestation_hash"),
+                "accepted_at": {
+                    party: (item or {}).get("recorded_at")
+                    for party, item in (acceptance.get("parties") or {}).items()
+                },
+                "statement_version": acceptance.get("statement_version"),
+            }
+            if accepted
+            else None
+        ),
     }

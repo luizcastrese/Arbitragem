@@ -330,6 +330,18 @@ def _legal_effect(document: Document, record: Dict[str, Any]) -> None:
             if award.get("statement"):
                 rows.append(("Manifestação do árbitro", str(award["statement"])))
         _add_key_value_table(document, rows)
+    acceptance = effect.get("decision_acceptance") or {}
+    if acceptance:
+        document.add_heading("Acatamento da decisão", level=2)
+        accepted_at = acceptance.get("accepted_at") or {}
+        _add_key_value_table(
+            document,
+            [
+                ("Parte reclamante acatou em", _format_timestamp(accepted_at.get("claimant"))),
+                ("Parte reclamada acatou em", _format_timestamp(accepted_at.get("respondent"))),
+                ("Decisão acatada (attestation)", str(acceptance.get("attestation_hash") or "")),
+            ],
+        )
     if effect.get("next_steps"):
         document.add_heading("Próximos passos", level=2)
         _bullets(document, effect["next_steps"])
