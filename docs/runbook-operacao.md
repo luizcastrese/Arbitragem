@@ -172,10 +172,9 @@ todos como um cliente só: `TRUSTED_PROXY_IPS` não cobre o proxy.
 Se aceitar, qualquer cliente escolhe a própria chave de rate limit mandando um
 `X-Forwarded-For`.
 
-O limitador é por processo e vive em memória: com mais de uma réplica, cada
-uma aplica o limite separadamente. Para várias réplicas, troque o
-armazenamento de `SlidingWindowRateLimiter` por um backend compartilhado
-mantendo a interface `allow`.
+Por padrão o limitador é por processo e vive em memória: com mais de uma
+réplica, cada uma aplica o limite separadamente. Para várias réplicas, use
+`RATE_LIMIT_BACKEND=redis` com `REDIS_URL` (ver `docs/escalar-replicas.md`).
 
 ---
 

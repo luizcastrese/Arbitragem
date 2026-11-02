@@ -349,6 +349,9 @@ Variáveis do arquivo `.env`:
 | `RATE_LIMIT_ENABLED` | Liga o rate limiting por IP; padrão ligado em produção |
 | `RATE_LIMIT_MAX_REQUESTS` | Requisições permitidas por janela e por IP |
 | `RATE_LIMIT_WINDOW_SECONDS` | Tamanho da janela de rate limiting em segundos |
+| `RATE_LIMIT_BACKEND` | `memory` (padrão, uma réplica) ou `redis` (compartilhado entre réplicas) |
+| `REDIS_URL` | Conexão do Redis, obrigatória com `RATE_LIMIT_BACKEND=redis` |
+| `STEWARD_RECOVERY_INTERVAL_SECONDS` | Intervalo da varredura que retoma etapas interrompidas por reinício (0 desliga) |
 | `PUBLIC_BASE_URL` | URL pública usada no link de aceite do convite |
 | `SMTP_HOST` / `SMTP_PORT` | Servidor de e-mail transacional para convites |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | Credenciais SMTP |
@@ -523,6 +526,22 @@ curl -X POST ".../cases/$ID/decide?wait=120"
 
 As etapas rodam no processo da aplicação (`STAGE_WORKERS` controla quantas em
 paralelo). Um caso preso em `processing_*` é liberado pelo TTL de 10 minutos.
+Quando quem abriu a etapa foi o gestor, a intenção de seguir para a próxima
+fica no banco (`cases.steward_chain_armed_at`): se o processo reiniciar no
+meio, uma varredura periódica devolve o caso ao status anterior e o gestor
+retoma a condução. Ver `docs/escalar-replicas.md`.
+
+### Organização do código da API
+
+`app/main.py` só monta a aplicação: middlewares, ciclo de vida e roteadores.
+
+| Módulo | Conteúdo |
+| --- | --- |
+| `app/api/context.py` | Configurações, limitadores e fila de etapas do processo |
+| `app/api/common.py` | Guardas de autorização e utilidades das rotas |
+| `app/api/background.py` | Agendamento das etapas de modelo e recuperação de falhas |
+| `app/api/steward.py` | Condução do gestor, trava do manifesto e varredura de retomada |
+| `app/api/routes/*.py` | Rotas por área: `auth`, `cases`, `documents`, `procedure`, `arbitration`, `stages`, `attestation`, `payments`, `records`, `account`, `meta` |
 
 ## Testes
 
@@ -597,8 +616,9 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   382 e 479 do STJ, Tema 1061, EAREsp 676.608, REsp 1.061.530); elas precisam
   de revisão jurídica e de acompanhamento de vigência;
 - a assinatura HMAC prova integridade dentro da plataforma, não autoria externa;
-- o rate limiting é em memória, adequado a uma instância; várias réplicas
-  exigem um backend compartilhado (por exemplo Redis). Atrás de proxy,
+- o rate limiting é em memória por padrão, adequado a uma instância; para
+  várias réplicas use `RATE_LIMIT_BACKEND=redis` (ver
+  `docs/escalar-replicas.md`). Atrás de proxy,
   `TRUSTED_PROXY_IPS` precisa estar configurado, senão todos os clientes
   compartilham a mesma chave de limite;
 - as etapas de modelo rodam em segundo plano no próprio processo, sem fila
@@ -620,7 +640,7 @@ de e-mail depende de entrega confiável), obter a revisão jurídica do rito, do
 termos e da política de privacidade, subir o ambiente de produção com TLS,
 executar pelo menos uma restauração de backup de verdade
 (`docs/runbook-operacao.md`) e montar monitoramento. Com mais de uma réplica,
-migrar o rate limiting e a fila de etapas para backends compartilhados.
+seguir `docs/escalar-replicas.md` (Redis no rate limit e S3 nos documentos).
 
 ## Referências OpenRouter
 

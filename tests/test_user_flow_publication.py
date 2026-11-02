@@ -16,7 +16,7 @@ from tests.test_api import (  # noqa: F401 - a fixture `client` vem daqui
     register_user,
 )
 
-import app.main as main
+from app.api import context
 
 
 def open_case_between(client, claimant, respondent_email):
@@ -45,11 +45,11 @@ def open_case_between(client, claimant, respondent_email):
 def test_invitation_token_stays_off_the_api_in_production(client, monkeypatch):
     """Em produção o convite chega só por e-mail; a API não devolve o token."""
     monkeypatch.setattr(
-        main,
+        context,
         "settings",
-        replace(main.settings, app_env="production", auth_required=True),
+        replace(context.settings, app_env="production", auth_required=True),
     )
-    assert main.settings.allow_role_tokens is False
+    assert context.settings.allow_role_tokens is False
 
     claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
     _, invitation = open_case_between(client, claimant, "empresa@example.com")
@@ -148,9 +148,9 @@ def test_counterparty_can_read_the_material_it_must_answer(client):
 
 def test_material_content_is_restricted_to_the_case(client, monkeypatch):
     monkeypatch.setattr(
-        main,
+        context,
         "settings",
-        replace(main.settings, app_env="production", auth_required=True),
+        replace(context.settings, app_env="production", auth_required=True),
     )
     claimant = register_user(client, "Cliente Carlos", "cliente@example.com")
     case_id, _invitation = open_case_between(client, claimant, "empresa@example.com")

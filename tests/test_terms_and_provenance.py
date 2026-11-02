@@ -32,6 +32,7 @@ from app.core.prompt_registry import (  # noqa: E402
 from app.db.models import Base  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app import main  # noqa: E402
+from app.api import background, steward  # noqa: E402
 
 
 CASE_CREDENTIALS = {}
@@ -249,7 +250,7 @@ def test_lock_is_blocked_when_the_accepted_text_no_longer_reproduces(
         text=original.text + "\ncláusula acrescentada depois do aceite\n",
         sha256="0" * 64,
     )
-    monkeypatch.setattr(main, "get_terms", lambda version=None: adulterated)
+    monkeypatch.setattr(steward, "get_terms", lambda version=None: adulterated)
     for party in ("claimant", "respondent"):
         client.post(
             f"/cases/{case['id']}/submission-ready",
@@ -366,7 +367,7 @@ def test_drift_is_annotated_on_the_executed_stage(client, monkeypatch):
     client.post(f"/cases/{case['id']}/lock", headers=steward_headers())
 
     monkeypatch.setattr(
-        main,
+        background,
         "detect_drift",
         lambda manifest, agent: {
             "agent": agent,

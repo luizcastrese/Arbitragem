@@ -31,6 +31,7 @@ def _upgrade_sqlite_schema():
         "claimant_submission_ready_at": "TEXT",
         "respondent_submission_ready_at": "TEXT",
         "steward_json": "TEXT",
+        "steward_chain_armed_at": "TEXT",
         "procedure_conclusion": "TEXT",
         "row_version": "INTEGER NOT NULL DEFAULT 1",
         "processing_started_at": "TEXT",

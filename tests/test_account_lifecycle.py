@@ -22,6 +22,7 @@ config.get_settings.cache_clear()
 from app.db.models import Base, User  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app import main  # noqa: E402
+from app.api import context  # noqa: E402
 
 
 PASSWORD = "senha-bem-comprida-1"
@@ -32,8 +33,8 @@ def override_settings(monkeypatch, **changes):
     troca-se a instância inteira nos pontos que a leem."""
     from app.db import access_repository
 
-    replaced = dataclasses.replace(main.settings, **changes)
-    monkeypatch.setattr(main, "settings", replaced)
+    replaced = dataclasses.replace(context.settings, **changes)
+    monkeypatch.setattr(context, "settings", replaced)
     monkeypatch.setattr(config, "get_settings", lambda: replaced)
     monkeypatch.setattr(access_repository, "get_settings", lambda: replaced)
     return replaced
