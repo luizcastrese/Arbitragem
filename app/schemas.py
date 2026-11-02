@@ -243,6 +243,28 @@ class ArbitralAwardRequest(BaseModel):
     statement: str = Field(default="", max_length=10_000)
 
 
+class AcceptDecisionRequest(BaseModel):
+    """A parte acata a decisão da IA como seu acordo. Ato irrevogável e só dela:
+    exige a confirmação expressa de que leu a declaração exibida."""
+
+    party: str
+    confirm: bool
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+    @field_validator("confirm")
+    @classmethod
+    def confirm_must_be_true(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("é preciso confirmar a declaração para acatar a decisão")
+        return value
+
+
 class WithdrawToCourtRequest(BaseModel):
     """A parte deixa a Valinor e leva o conflito ao Judiciário.
 

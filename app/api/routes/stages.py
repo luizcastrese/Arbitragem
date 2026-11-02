@@ -44,6 +44,7 @@ from app.db.repository import (
     save_steward_state,
 )
 from app.db.session import get_db
+from app.domain.acceptance import acceptance_status
 from app.domain.concurrency import StageBusy, claim_case_stage
 from app.domain.jobs import COMPLETED, FAILED, RUNNING
 from app.domain.legacy import public_decision_view
@@ -735,6 +736,15 @@ def contest_case(
         raise HTTPException(
             status_code=409,
             detail="Não há attestation emitida para contestar",
+        )
+    accepted = acceptance_status(case_data)
+    if accepted["parties"].get(actor_role) or accepted["complete"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A decisão foi acatada como acordo. O acatamento é irrevogável e "
+                "afasta o recurso automático."
+            ),
         )
     if case_data["contest"]["contested"] or case.contested_at:
         existing = find_appeal_by_idempotency(db, case.id, idempotency_key)

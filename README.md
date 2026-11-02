@@ -45,6 +45,7 @@ hashes.
 | Acordo | Transação (CC, art. 840); vira título executivo com duas testemunhas (CPC, art. 784, III) ou homologação (CPC, arts. 515, III, e 725, VIII) | Juntado aos autos para homologação: extingue o processo com resolução de mérito (CPC, art. 487, III, b), sem custas remanescentes (CPC, art. 90, §3º) |
 | Decisão, com arbitragem escolhida pelas duas partes e árbitro designado | Sentença arbitral assinada pelo árbitro, com efeitos de sentença judicial (Lei 9.307/96, art. 31) | Compromisso nos autos (Lei 9.307/96, art. 9º, §1º) e extinção do processo (CPC, art. 485, VII) |
 | Decisão, sem a escolha das duas partes | Decisão fundamentada **não vinculante** | Idem; pode ser juntada como prova |
+| Decisão **acatada pelas duas partes**, sem árbitro | Acordo (transação, CC, art. 840), com os mesmos efeitos do acordo acima | Idem: juntado aos autos para homologação |
 | Abstenção | Conflito segue pela via que as partes escolherem | Processo retoma o curso (CPC, art. 313, II, se suspenso) |
 | Uma parte opta pela via judicial | Auto de encerramento com o histórico completo, para as duas partes auditarem e juntarem à petição | Idem; o processo retoma o curso |
 
@@ -76,6 +77,23 @@ Limites respeitados pelo código (`app/domain/pathway.py`):
      arbitral, informando o lugar, ou **recusa** (`POST /cases/{id}/arbitral-award`).
      O auto é reemitido, encadeado ao anterior, com o hash do documento
      adotado; assinado, ele passa a `binding: true`.
+- **Acatamento sem árbitro.** A decisão da IA, mesmo não vinculante, pode ser
+  adotada pelas partes como seu acordo (`app/domain/acceptance.py`):
+  1. depois do aviso da decisão (attestation) e de um **prazo de reflexão**
+     (`ACCEPTANCE_REFLECTION_HOURS`, padrão 24 h), cada parte acata por ato
+     próprio (`POST /cases/{id}/accept-decision`), confirmando a declaração
+     exibida em `GET /cases/{id}/decision-acceptance`. O hash da declaração, o
+     da decisão e o da attestation vão para a trilha de auditoria;
+  2. o acatamento é **irrevogável** e preso à attestation lida: quem acatou não
+     recorre, e se um recurso de outra via corrigir a decisão, é preciso
+     acatar de novo;
+  3. com as **duas** partes, a decisão vale como acordo: o auto é reemitido,
+     encadeado ao anterior, como termo de acordo (extrajudicial ou para
+     homologação, conforme a via), e o pagamento opcional deixa de esperar o
+     prazo de recurso. Pagar sozinho **não** conta como acatar;
+  4. acatamento e sentença arbitral são desfechos excludentes: vale o que se
+     completar primeiro. Com as duas partes tendo acatado, o árbitro não
+     assina mais; com a sentença assinada, ninguém mais acata.
 - **Saída para a Justiça.** A adesão é voluntária nos dois sentidos: qualquer
   parte sai antes do desfecho, sozinha. O caso fica só para leitura, e o auto
   traz documentos, contraditório, rodadas de acordo e a trilha de auditoria
@@ -171,6 +189,8 @@ caso (via: antes do processo | processo ajuizado nº CNJ; matéria)
   -> (opcional) teste de estabilidade
   -> attestation assinada (opcional)
   -> recurso automático
+     (ou, após o prazo de reflexão, acatamento da decisão pelas duas partes
+      como acordo, sem árbitro: irrevogável e sem recurso)
   -> auto da decisão (acordo, decisão ou encerramento sem mérito), com o
      efeito jurídico: acordo para homologar, projeto de sentença arbitral ou
      decisão não vinculante
@@ -336,6 +356,7 @@ Variáveis do arquivo `.env`:
 | `PLATFORM_SIGNING_SECRET` | Assina manifestos com HMAC-SHA256 e os links de download |
 | `PLATFORM_ED25519_PRIVATE_KEY` | Seed de 32 bytes (base64) que assina as Decision Attestations e o auto da decisão; vazia desabilita as attestations e o auto passa a HMAC |
 | `CONTEST_WINDOW_DAYS` | Dias do prazo de recurso automático após a emissão da attestation |
+| `ACCEPTANCE_REFLECTION_HOURS` | Horas após a attestation em que as partes ainda não podem acatar a decisão como acordo (padrão 24) |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula |
 | `MAX_UPLOAD_BYTES` | Limite de upload de PDF |
 | `AUTH_REQUIRED` | Exige conta e participação; padrão `true` e obrigatório em produção |
@@ -656,6 +677,8 @@ A plataforma nunca debita ou retém valores por força da decisão. O pagamento
 - **Quando existe oferta:** decisão de mérito verificada e atestada, a favor do
   reclamante (`claimant` ou `partial`), com `remedy_calculation` em minor units,
   sem recurso pendente e depois do fim do prazo de contestação (ou do recurso).
+  Se as duas partes acataram a decisão como acordo, o prazo de contestação não
+  é esperado.
   Sem valor verificado, não há oferta. A decisão a favor do reclamado não gera
   pagamento.
 - **Fluxo:** o reclamante faz o cadastro de recebedor

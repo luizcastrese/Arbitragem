@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from app.core.config import get_settings
+from app.domain.acceptance import acceptance_status
 
 # Decisões que reconhecem valor a favor do reclamante. Quando o reclamado
 # vence, nada é devido: o sistema não modela pedido contraposto.
@@ -53,7 +54,9 @@ def settlement_offer(
     """Calcula a oferta a partir do caso serializado (`case_to_dict`).
 
     Só há oferta quando a decisão é de mérito, verificada, atestada, favorável
-    ao reclamante com valor calculado, e a fase de contestação terminou.
+    ao reclamante com valor calculado, e a fase de contestação terminou. Se as
+    duas partes acataram a decisão como acordo, a fase de contestação não é
+    esperada: ninguém mais vai recorrer.
     """
     now = now or datetime.now(timezone.utc)
     decision = case_data.get("decision") or {}
@@ -84,9 +87,10 @@ def settlement_offer(
     appeals = case_data.get("appeals") or []
     if any(not item.get("completed_at") for item in appeals):
         return _unavailable("appeal_pending")
+    accepted = acceptance_status(case_data)["complete"]
     window_ends = _parse_utc(attestation.get("contest_window_ends_utc"))
     window_open = window_ends is None or now < window_ends
-    if window_open and not appeals:
+    if window_open and not appeals and not accepted:
         return _unavailable(
             "contest_window_open",
             opens_at=window_ends.isoformat() if window_ends else None,
@@ -104,4 +108,5 @@ def settlement_offer(
         "net_to_payee_minor_units": amount - fee,
         "currency": currency,
         "voluntary": True,
+        "accepted_by_both_parties": accepted,
     }

@@ -23,6 +23,7 @@ from app.db.repository import (
     save_arbitrator_confirmation,
 )
 from app.db.session import get_db
+from app.domain.acceptance import acceptance_status
 from app.domain.arbitration import (
     ARBITRATOR_ROLE,
     ArbitrationError,
@@ -155,6 +156,15 @@ def sign_arbitral_award(
         raise HTTPException(status_code=409, detail="O árbitro já se manifestou neste caso")
     if outcome_kind(case_data) != "decision":
         raise HTTPException(status_code=409, detail="Não há decisão de mérito para assinar")
+    if acceptance_status(case_data)["complete"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "As duas partes já acataram a decisão como acordo. Acatamento e "
+                "sentença arbitral são desfechos excludentes: vale o que se "
+                "completou primeiro."
+            ),
+        )
     final, reason = decision_is_final(case_data)
     if not final:
         raise HTTPException(status_code=409, detail=reason)

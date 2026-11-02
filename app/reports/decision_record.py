@@ -36,6 +36,7 @@ from app.core.canonical import canonical_hash, canonical_json
 from app.core.config import get_settings
 from app.core.signing import sign_payload
 from app.core.tax_id import describe_tax_id
+from app.domain.acceptance import acceptance_status
 from app.domain.pathway import legal_effect
 
 RECORD_VERSION = "1.0"
@@ -76,6 +77,17 @@ WITHDRAWN_NOTICE = (
     "confidencialidade pode limitar o uso como prova (Lei 13.140/2015, art. "
     "30; CPC, art. 166, §1º). Hashes e assinaturas comprovam integridade e "
     "origem do registro, não a verdade material das alegações."
+)
+
+ACCEPTED_DECISION_NOTICE = (
+    "A decisão foi elaborada pela IA, com o raciocínio e os cálculos visíveis. "
+    "As duas partes, cada uma por ato próprio e depois do prazo de reflexão, a "
+    "acataram e a adotaram como seu acordo. Não há sentença arbitral nem "
+    "árbitro: o que obriga as partes é a transação que elas mesmas fizeram "
+    "(Código Civil, art. 840), nos termos do dispositivo, e o acatamento é "
+    "irrevogável. A seção de efeito jurídico indica como ele encerra o conflito "
+    "ou o processo. Hashes e assinaturas comprovam integridade e origem do "
+    "registro, não a verdade material das alegações."
 )
 
 SIGNED_AWARD_NOTICE = (
@@ -159,6 +171,17 @@ def _agreement(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 },
             }
     return None
+
+
+def _effective_acceptance(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Acatamento das duas partes que faz a decisão valer como acordo.
+
+    Sentença arbitral já adotada prevalece, e só decisão de mérito é acatada.
+    """
+    if (case_data.get("arbitral_award") or {}).get("adopted"):
+        return None
+    status = acceptance_status(case_data)
+    return status if status["complete"] else None
 
 
 def outcome_kind(case_data: Dict[str, Any]) -> Optional[str]:
@@ -399,6 +422,12 @@ def _summary(kind: str, case_data: Dict[str, Any], agreement: Optional[Dict[str,
     if kind == "decision":
         outcome = OUTCOME_LABELS.get(decision.get("outcome") or "", "")
         text = f"Sem acordo entre as partes, a Valinor proferiu decisão: {outcome}."
+        accepted = _effective_acceptance(case_data)
+        if accepted:
+            text += (
+                f" {claimant} e {respondent} acataram a decisão e a adotaram "
+                "como acordo, de forma independente."
+            )
         if decision.get("outcome") == "partial" and decision.get("partial_claimant_bps") is not None:
             percent = int(decision["partial_claimant_bps"]) / 100
             text += f" Proporção reconhecida à parte reclamante: {percent:.2f}%."
@@ -467,6 +496,19 @@ def record_basis(case_data: Dict[str, Any]) -> Dict[str, Any]:
         basis["pathway"] = case_data["pathway"]
     if case_data.get("arbitral_award"):
         basis["arbitral_award"] = case_data["arbitral_award"]
+    # Só o acatamento completo muda o que o auto diz; antes disso nada é reemitido.
+    accepted = _effective_acceptance(case_data) if basis["kind"] == "decision" else None
+    if accepted:
+        basis["decision_acceptance"] = {
+            "attestation_hash": accepted["attestation_hash"],
+            "parties": {
+                party: {
+                    "accepted_at": (item or {}).get("recorded_at"),
+                    "statement_sha256": (item or {}).get("statement_sha256"),
+                }
+                for party, item in accepted["parties"].items()
+            },
+        }
     return basis
 
 
@@ -486,9 +528,14 @@ def build_decision_record(
     agreement = _agreement(case_data) if kind == "agreement" else None
     organized = case_data.get("organized") or {}
     decision = case_data.get("decision") or {}
-    effect = legal_effect(case_data.get("pathway"), kind, case_data.get("arbitral_award"))
+    acceptance = _effective_acceptance(case_data) if kind == "decision" else None
+    effect = legal_effect(
+        case_data.get("pathway"), kind, case_data.get("arbitral_award"), acceptance
+    )
     if kind == "agreement":
         notice = AGREEMENT_NOTICE
+    elif acceptance:
+        notice = ACCEPTED_DECISION_NOTICE
     elif kind == "withdrawn":
         notice = WITHDRAWN_NOTICE
     elif effect["instrument"] == "sentenca_arbitral" and effect["binding"]:
