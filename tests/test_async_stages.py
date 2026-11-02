@@ -190,7 +190,7 @@ def test_etapa_que_falha_devolve_o_caso_ao_estado_anterior(
 ):
     """Sem a recuperação, o caso ficaria em processing_decision até o TTL de
     10 minutos, sem ninguém conseguir repetir a etapa."""
-    from app import main
+    from app.api.routes import stages
 
     case_id, _document, _ = prepare_locked_case(client)
     for stage in ("conciliation", "organize"):
@@ -205,7 +205,7 @@ def test_etapa_que_falha_devolve_o_caso_ao_estado_anterior(
     def explode(*_args, **_kwargs):
         raise RuntimeError("provedor fora do ar")
 
-    monkeypatch.setattr(main, "generate_and_verify_decision", explode)
+    monkeypatch.setattr(stages, "generate_and_verify_decision", explode)
 
     accepted = client.post(
         f"/cases/{case_id}/decide",
@@ -236,7 +236,7 @@ def test_etapa_que_falha_devolve_o_caso_ao_estado_anterior(
 
 
 def test_falha_com_wait_vira_500_com_o_motivo(client, monkeypatch):
-    from app import main
+    from app.api.routes import stages
 
     case_id, _document, _ = prepare_locked_case(client)
     for stage in ("conciliation", "organize"):
@@ -248,7 +248,7 @@ def test_falha_com_wait_vira_500_com_o_motivo(client, monkeypatch):
     def explode(*_args, **_kwargs):
         raise RuntimeError("provedor fora do ar")
 
-    monkeypatch.setattr(main, "generate_and_verify_decision", explode)
+    monkeypatch.setattr(stages, "generate_and_verify_decision", explode)
 
     response = client.post(
         f"/cases/{case_id}/decide?wait=60",
@@ -259,19 +259,19 @@ def test_falha_com_wait_vira_500_com_o_motivo(client, monkeypatch):
 
 
 def test_rodada_de_composicao_simultanea_e_recusada(client, monkeypatch):
-    from app import main
+    from app.api.routes import stages
 
     case_id, _document, _ = prepare_locked_case(client)
 
     liberar = __import__("threading").Event()
 
-    original = main.assess_conciliation
+    original = stages.assess_conciliation
 
     def lenta(context, round_number):
         liberar.wait(timeout=10)
         return original(context, round_number)
 
-    monkeypatch.setattr(main, "assess_conciliation", lenta)
+    monkeypatch.setattr(stages, "assess_conciliation", lenta)
 
     primeira = client.post(
         f"/cases/{case_id}/conciliation",

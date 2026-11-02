@@ -94,6 +94,10 @@ class Settings:
     auth_rate_limit_max_requests: int
     auth_rate_limit_window_seconds: int
     rate_limit_max_keys: int
+    # "memory" (padrão, uma réplica) ou "redis" (limite compartilhado entre
+    # réplicas, exige REDIS_URL e o pacote `redis`).
+    rate_limit_backend: str
+    redis_url: str
     trusted_proxy_ips: List[str]
     document_retention_days: int
     privacy_contact_email: str
@@ -361,6 +365,17 @@ def validate_runtime_policy(settings: Settings) -> None:
             "direitos (art. 9º e 18 da LGPD)."
         )
 
+    if settings.rate_limit_backend not in {"memory", "redis"}:
+        raise RuntimeError(
+            "RATE_LIMIT_BACKEND deve ser 'memory' ou 'redis', não "
+            f"{settings.rate_limit_backend!r}."
+        )
+    if settings.rate_limit_backend == "redis" and not settings.redis_url:
+        raise RuntimeError(
+            "RATE_LIMIT_BACKEND=redis exige REDIS_URL (por exemplo "
+            "redis://usuario:senha@host:6379/0)."
+        )
+
     if settings.is_production and not settings.email_enabled:
         raise RuntimeError(
             "SMTP_HOST e SMTP_FROM são obrigatórios em produção: a confirmação "
@@ -535,6 +550,9 @@ def get_settings() -> Settings:
             os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "300")
         ),
         rate_limit_max_keys=int(os.getenv("RATE_LIMIT_MAX_KEYS", "100000")),
+        rate_limit_backend=os.getenv("RATE_LIMIT_BACKEND", "memory").strip().lower()
+        or "memory",
+        redis_url=os.getenv("REDIS_URL", "").strip(),
         trusted_proxy_ips=_split_csv(os.getenv("TRUSTED_PROXY_IPS", "")),
         document_retention_days=int(os.getenv("DOCUMENT_RETENTION_DAYS", "365")),
         privacy_contact_email=os.getenv("PRIVACY_CONTACT_EMAIL", "").strip(),

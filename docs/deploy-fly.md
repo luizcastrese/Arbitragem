@@ -227,6 +227,7 @@ fly scale show -a valinor
 fly secrets list -a valinor
 ```
 
-Escala para 2+ só depois de migrar rate limit e fila de etapas para um
-backend compartilhado (Redis ou similar). Com o código de hoje, a segunda
-réplica é um bug de produto, não um ganho de disponibilidade.
+Escala para 2+ só depois de seguir `docs/escalar-replicas.md`: rate limit no
+Redis (`RATE_LIMIT_BACKEND=redis`) e documentos no S3. O encadeamento do
+gestor e a retomada de etapas interrompidas já ficam no banco. Sem Redis e S3,
+a segunda réplica é um bug de produto, não um ganho de disponibilidade.

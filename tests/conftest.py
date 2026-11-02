@@ -19,6 +19,9 @@ os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("PLATFORM_SIGNING_SECRET", "test-signing-secret")
 # Modo local: os testes usam tokens por papel além das contas.
 os.environ.setdefault("AUTH_REQUIRED", "false")
+# A varredura de recuperação do gestor roda numa thread a cada minuto; nos
+# testes ela é chamada diretamente, sem relógio de fundo.
+os.environ.setdefault("STEWARD_RECOVERY_INTERVAL_SECONDS", "0")
 
 from app.core.config import get_settings  # noqa: E402
 

@@ -80,8 +80,8 @@ resposta da API. Por isso a aplicação recusa o boot sem SMTP básico configura
 - [ ] Criar monitor externo para `/health` e alerta de erro 5xx.
 - [ ] Alertar para falha de backup, falta de espaço e e-mail não entregue.
 - [ ] Verificar casos presos em `processing_*` por mais de 10 minutos.
-- [ ] Começar com uma réplica: o rate limit e as etapas assíncronas vivem no
-      processo e não são compartilhados entre réplicas.
+- [ ] Começar com uma réplica. Para escalar, seguir
+      `docs/escalar-replicas.md` (Redis no rate limit, S3 nos documentos).
 - [ ] Definir um canal humano para suporte, privacidade e incidente.
 - [ ] Obter revisão jurídica mínima dos termos e da política antes da exposição
       pública.

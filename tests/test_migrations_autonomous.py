@@ -9,10 +9,10 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 
 
-def test_alembic_head_is_the_case_pathway_revision():
+def test_alembic_head_is_the_steward_chain_revision():
     cfg = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "a7d3e5f9c2b1"
+    assert script.get_current_head() == "b3e7f1a9c5d2"
 
 
 def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):
@@ -34,6 +34,7 @@ def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):
         assert "procedure_conclusion" in columns
         assert "claimant_submission_ready" in columns
         assert "steward_json" in columns
+        assert "steward_chain_armed_at" in columns
         assert "decision_records_json" in columns
         assert "claimant_tax_id" in columns
         assert "settlement_payments" in tables

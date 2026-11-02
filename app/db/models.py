@@ -39,6 +39,11 @@ class Case(Base):
     claimant_submission_ready_at = Column(String, nullable=True)
     respondent_submission_ready_at = Column(String, nullable=True)
     steward_json = Column(Text, nullable=True)
+    # Momento em que o gestor abriu uma etapa de modelo e pediu para seguir
+    # sozinho quando ela concluir. Fica no banco (e não na memória do
+    # processo) para sobreviver a um reinício e valer entre réplicas: quem
+    # zera a marca com um UPDATE condicional é quem continua a condução.
+    steward_chain_armed_at = Column(DateTime(timezone=True), nullable=True)
     # Via do caso (antes do processo ou com processo ajuizado), matéria e a
     # escolha individual de cada parte pela arbitragem. Ver app.domain.pathway.
     pathway_json = Column(Text, nullable=True)
