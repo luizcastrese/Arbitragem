@@ -40,6 +40,7 @@ import {
 } from './shared.js'
 import CalculationCard, { CALCULATION_MATTERS, MemoryTable, ProposalPanel } from './Calculation.jsx'
 import { AttachChecklist, BatchContradictory, RefuseProposal } from './Pilot.jsx'
+import Markdown from './Markdown.jsx'
 import { LiveMessage, LoadingState, Term } from './ui.jsx'
 
 // Casca do workspace: lista de casos à esquerda e, à direita, a abertura de um
@@ -1458,13 +1459,17 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>
         {showTerms && (
-          <pre className="terms-text">{terms?.text || 'Carregando os termos...'}</pre>
+          <div className="terms-scroll" tabIndex={0}>
+            {terms?.text ? <Markdown source={terms.text} /> : <p>Carregando os termos...</p>}
+          </div>
         )}
         <button className="link-button" onClick={() => setShowPrivacy(!showPrivacy)}>
           {showPrivacy ? 'Ocultar a política de privacidade' : 'Ler a política de privacidade'}
         </button>
         {showPrivacy && (
-          <pre className="terms-text">{privacy?.text || 'Carregando a política de privacidade...'}</pre>
+          <div className="terms-scroll" tabIndex={0}>
+            {privacy?.text ? <Markdown source={privacy.text} /> : <p>Carregando a política de privacidade...</p>}
+          </div>
         )}
       </div>
       <small>

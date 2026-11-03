@@ -76,6 +76,9 @@ export function ProcessingCard({ title, detail, startedAt }) {
   )
 }
 
+// Pilha de diálogos abertos: só o de cima prende o foco e responde ao Esc.
+const trapStack = []
+
 const FOCUSABLE = [
   'a[href]', 'button:not([disabled])', 'input:not([disabled])', 'select:not([disabled])',
   'textarea:not([disabled])', '[tabindex]:not([tabindex="-1"])'
@@ -93,12 +96,14 @@ export function useFocusTrap(active, onEscape) {
     if (!active) return undefined
     const container = containerRef.current
     const previous = document.activeElement
+    trapStack.push(container)
     const items = () => Array.from(container?.querySelectorAll(FOCUSABLE) || [])
       .filter((node) => node.offsetParent !== null || node === document.activeElement)
     const target = container?.querySelector('input:not([disabled])') || items()[0] || container
     target?.focus()
 
     function onKey(event) {
+      if (trapStack[trapStack.length - 1] !== container) return
       if (event.key === 'Escape') {
         escapeRef.current?.()
         return
@@ -122,6 +127,8 @@ export function useFocusTrap(active, onEscape) {
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('keydown', onKey)
+      const position = trapStack.lastIndexOf(container)
+      if (position >= 0) trapStack.splice(position, 1)
       if (previous && typeof previous.focus === 'function') previous.focus()
     }
   }, [active])

@@ -1197,3 +1197,36 @@ a.button { text-decoration: none; }
 .term-button { padding: 0; color: inherit; background: none; border: 0; border-bottom: 1px dotted currentColor; font: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; cursor: help; }
 .term-tip { position: absolute; z-index: 20; left: 0; top: calc(100% + 6px); width: max-content; max-width: min(280px, calc(100vw - 40px)); padding: 10px 12px; color: var(--paper); background: var(--green-950); border-radius: 10px; box-shadow: var(--shadow-raised); font-size: 12.5px; font-weight: 500; line-height: 1.5; letter-spacing: normal; text-transform: none; text-align: left; }
 .term-tip.right { left: auto; right: 0; }
+
+/* Termos e política: leitor em markdown */
+.legal-card { display: grid; gap: 14px; max-height: calc(100vh - 48px); }
+.legal-head { display: grid; gap: 4px; padding-right: 40px; }
+.legal-head h2 { margin: 0; font-family: var(--font-display); font-size: 26px; font-weight: 400; }
+.legal-head small { color: var(--muted); font-size: 12px; }
+.legal-scroll, .terms-scroll { overflow: auto; padding: 4px 6px 4px 2px; border-radius: 10px; }
+.legal-scroll { max-height: calc(100vh - 220px); }
+.terms-scroll { max-height: 360px; margin-top: 8px; padding: 12px 14px; background: #fffdf7; border: 1px solid var(--line); }
+.legal-scroll:focus-visible, .terms-scroll:focus-visible, .md-table:focus-visible { outline: 2px solid var(--green-700); outline-offset: 2px; }
+.markdown { color: #17211b; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.markdown h2, .markdown h3, .markdown h4, .markdown h5 { margin: 1.6em 0 .5em; color: var(--ink); font-family: var(--font-display); font-weight: 500; line-height: 1.25; }
+.markdown h2 { font-size: 22px; }
+.markdown h3 { font-size: 18px; }
+.markdown h4, .markdown h5 { font-size: 16px; }
+.markdown > :first-child { margin-top: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote { margin: 0 0 1em; }
+.markdown ul, .markdown ol { padding-left: 1.4em; display: grid; gap: .4em; }
+.markdown strong { color: var(--ink); }
+.markdown a { color: #5d4410; text-decoration: underline; text-underline-offset: 2px; }
+.markdown code { padding: 1px 5px; background: #f1ecdb; border-radius: 5px; font-size: .92em; }
+.markdown hr { margin: 1.4em 0; border: 0; border-top: 1px solid var(--line); }
+.markdown blockquote { padding: 10px 14px; color: #3b2a07; background: var(--warning-bg); border-left: 3px solid #d7a53c; border-radius: 0 10px 10px 0; }
+.markdown blockquote p:last-child { margin-bottom: 0; }
+.md-table { margin: 0 0 1em; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+.markdown table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
+.markdown th, .markdown td { padding: 9px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--line); }
+.markdown thead th { color: var(--ink); background: #f6edd2; border-top: 0; }
+@media (max-width: 520px) {
+  .legal-card { max-height: calc(100vh - 32px); }
+  .legal-scroll { max-height: calc(100vh - 200px); }
+  .markdown { font-size: 14.5px; }
+}

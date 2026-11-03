@@ -11,10 +11,21 @@ import {
   statusLabels
 } from './shared.js'
 import { InviteDialog, LeadDialog } from './Dialogs.jsx'
+import Markdown from './Markdown.jsx'
 import { LiveMessage, LoadingState, Modal, ProcessingCard } from './ui.jsx'
 
 // A landing e o workspace são chunks separados: quem chega sem conta só baixa a
 // apresentação, e quem já está logado não baixa a landing.
+// Termos e política abrem em modal e têm endereço próprio (/ui/termos e
+// /ui/privacidade); o servidor devolve o index para esses caminhos.
+const LEGAL_SLUGS = { terms: 'termos', privacy: 'privacidade' }
+
+function legalFromPath() {
+  const match = window.location.pathname.match(/\/(termos|privacidade)\/?$/)
+  if (!match) return null
+  return match[1] === 'termos' ? 'terms' : 'privacy'
+}
+
 const Landing = lazy(() => import('./Landing.jsx'))
 const Workspace = lazy(() => import('./Workspace.jsx'))
 
@@ -62,9 +73,15 @@ export default function App() {
   const [privacy, setPrivacy] = useState(null)
   const [authNotice, setAuthNotice] = useState('')
   const [showAccount, setShowAccount] = useState(false)
-  const [legalView, setLegalView] = useState(null)
+  const [legalView, setLegalViewState] = useState(legalFromPath)
   const [pendingStart, setPendingStart] = useState(false)
   const workspaceRef = useRef(null)
+
+  function setLegalView(kind) {
+    setLegalViewState(kind)
+    const path = kind ? `${import.meta.env.BASE_URL}${LEGAL_SLUGS[kind]}` : import.meta.env.BASE_URL
+    if (window.location.pathname !== path) window.history.pushState({}, '', path)
+  }
 
   const isPending = (key) => key in pending
   const busy = Object.values(pending).some(Boolean)
@@ -291,6 +308,12 @@ export default function App() {
     const target = selectId || caseData?.id || items[0]?.id
     if (target) await loadCase(target)
   }
+
+  useEffect(() => {
+    const onPop = () => setLegalViewState(legalFromPath())
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   useEffect(() => {
     // Remove credentials left by versions that stored bearer tokens in the browser.
@@ -961,17 +984,21 @@ function LegalReader({ kind, terms, privacy, onClose }) {
   const doc = kind === 'privacy' ? privacy : terms
   const title = kind === 'privacy' ? 'Política de privacidade' : 'Termos do procedimento'
   return (
-    <section className="legal-reader">
-      <div className="legal-reader-heading">
-        <div>
+    <Modal onClose={onClose} labelledBy="legal-title">
+      <section className="dialog-card legal-card">
+        <button type="button" className="dialog-close" onClick={onClose} aria-label="Fechar">×</button>
+        <header className="legal-head">
           <span className="section-label">{title}</span>
-          <h2>{doc?.version ? `Versão ${doc.version}` : title}</h2>
+          <h2 id="legal-title">{doc?.version ? `Versão ${doc.version}` : title}</h2>
           {doc?.sha256 && <small>SHA-256 {doc.sha256.slice(0, 16)}…</small>}
+        </header>
+        <div className="legal-scroll" tabIndex={0}>
+          {doc?.text
+            ? <Markdown source={doc.text} />
+            : <p>Não foi possível carregar este texto agora.</p>}
         </div>
-        <button type="button" className="button ghost compact" onClick={onClose}>Fechar</button>
-      </div>
-      <pre className="terms-text">{doc?.text || 'Não foi possível carregar este texto agora.'}</pre>
-    </section>
+      </section>
+    </Modal>
   )
 }
 

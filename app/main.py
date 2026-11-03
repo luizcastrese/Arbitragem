@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # Os prompts do seletor e do gestor entram no registro de prompts no import.
@@ -242,6 +242,24 @@ for module in (
     app.include_router(module.router)
 
 
+# Caminhos da interface que o front resolve no cliente. Sem estas rotas, abrir
+# /ui/termos direto (link compartilhado, F5) cairia num 404 do StaticFiles.
+FRONTEND_CLIENT_ROUTES = ("termos", "privacidade")
+
+
+def mount_frontend(application: FastAPI, dist: Path) -> None:
+    index_file = dist / "index.html"
+
+    def serve_index():
+        return FileResponse(index_file)
+
+    for slug in FRONTEND_CLIENT_ROUTES:
+        application.add_api_route(
+            f"/ui/{slug}", serve_index, methods=["GET"], include_in_schema=False
+        )
+    application.mount("/ui", StaticFiles(directory=dist, html=True), name="ui")
+
+
 frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 if frontend_dist.exists():
-    app.mount("/ui", StaticFiles(directory=frontend_dist, html=True), name="ui")
+    mount_frontend(app, frontend_dist)
