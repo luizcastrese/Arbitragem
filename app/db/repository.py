@@ -648,6 +648,10 @@ def append_audit(
     )
     db.add(record)
     db.flush()
+    # Avisa por e-mail quem precisa agir por causa deste ato, na mesma transação.
+    from app.notifications.rules import on_audit_event
+
+    on_audit_event(db, case, record, payload)
     return record
 
 

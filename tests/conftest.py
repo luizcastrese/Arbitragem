@@ -22,6 +22,11 @@ os.environ.setdefault("AUTH_REQUIRED", "false")
 # A varredura de recuperação do gestor roda numa thread a cada minuto; nos
 # testes ela é chamada diretamente, sem relógio de fundo.
 os.environ.setdefault("STEWARD_RECOVERY_INTERVAL_SECONDS", "0")
+# O despachante de e-mails também não roda sozinho nos testes: eles chamam
+# `dispatch_pending` e `scan_reminders` diretamente.
+os.environ.setdefault("NOTIFICATION_DISPATCH_INTERVAL_SECONDS", "0")
+# Conta da operação usada pelos testes do painel de operação.
+os.environ.setdefault("ADMIN_EMAILS", "ops@valinor.test")
 
 from app.core.config import get_settings  # noqa: E402
 

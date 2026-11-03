@@ -213,3 +213,34 @@ Depois de configurar o provedor:
 Uma resposta com `delivery.delivered=false` em produção é falha operacional e
 deve gerar alerta, mesmo que a operação que criou o token tenha respondido com
 sucesso.
+
+
+## 7. Avisos por e-mail e painel de operação
+
+**Como funciona.** Cada ato registrado na trilha de auditoria que exige ação
+de alguém gera um aviso em `email_outbox`, na mesma transação do ato. O
+despachante (`app/notifications/worker.py`, sobe com a aplicação) envia a fila a
+cada `NOTIFICATION_DISPATCH_INTERVAL_SECONDS`. Falha de SMTP vira nova tentativa
+em 2, 4, 8 e 16 minutos; na quinta falha o aviso fica `failed` e aparece no
+painel. Sem SMTP, o aviso vira `logged`.
+
+**Lembretes.** A cada `REMINDER_SCAN_INTERVAL_SECONDS` a varredura cobra: fim do
+prazo de recurso (48 h antes), fim do prazo de reflexão, prazos a vencer (24 h) e
+vencidos, material sem resposta (`REMINDER_STALLED_HOURS`) e convite perto de
+expirar. Cada fato tem uma chave de deduplicação: rodar de novo não repete.
+
+**E-mails falhos.** `/ui/admin` > E-mails > filtro "Falhou". Corrija a causa
+(credencial SMTP, domínio sem SPF/DKIM) e use "Reenviar" ou "Enviar fila agora".
+
+**Etapa presa.** Caso em `processing_*` há mais de 10 minutos: `/ui/admin` >
+Casos > o caso > "Liberar etapa presa" (volta ao status anterior) e, se preciso,
+"Retomar condução". Os dois exigem motivo, vão para `admin_actions` e para a
+trilha de auditoria do caso (`operations_released_stage`,
+`operations_resumed_steward`), visível às partes.
+
+**Privacidade da operação.** O painel mostra metadados, nunca peças, documentos,
+propostas ou decisões. Cada abertura de caso é gravada (`case_viewed`). Quem
+sai da equipe: remova o e-mail de `ADMIN_EMAILS` e reinicie.
+
+**Eliminação de conta.** A anonimização limpa o endereço, o assunto e o corpo dos
+avisos da conta em `email_outbox`.

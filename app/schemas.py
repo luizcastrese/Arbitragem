@@ -445,3 +445,29 @@ class CalculationInputsRequest(CalculationExtractRequest):
     average_rate_source: Optional[RateSourceInput] = None
     interest_adjustment_applies: Optional[bool] = None
     fees: Optional[List[FeeInput]] = Field(default=None, max_length=30)
+
+
+class AdminReasonRequest(BaseModel):
+    """Intervenção da operação: sempre com motivo, que fica no registro."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class AdminLeadUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    status: Optional[str] = Field(default=None, max_length=20)
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+    @field_validator("status")
+    @classmethod
+    def status_must_be_known(cls, value):
+        if value is not None and value not in {"new", "contacted", "qualified", "discarded"}:
+            raise ValueError("situação de lead desconhecida")
+        return value
+
+
+class AdminUserActiveRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    active: bool
+    reason: str = Field(min_length=5, max_length=500)

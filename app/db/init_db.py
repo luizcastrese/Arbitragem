@@ -13,6 +13,15 @@ def _upgrade_sqlite_schema():
         column["name"] for column in inspect(engine).get_columns("documents")
     }
     user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    lead_columns = {
+        column["name"] for column in inspect(engine).get_columns("pilot_leads")
+    }
+    lead_additions = {
+        "status": "TEXT NOT NULL DEFAULT 'new'",
+        "notes": "TEXT NOT NULL DEFAULT ''",
+        "handled_by_user_id": "TEXT",
+        "updated_at": "TEXT",
+    }
     case_additions = {
         "conciliation_json": "TEXT",
         "claimant_consent": "BOOLEAN NOT NULL DEFAULT 1",
@@ -84,6 +93,11 @@ def _upgrade_sqlite_schema():
             if name not in user_columns:
                 connection.exec_driver_sql(
                     f"ALTER TABLE users ADD COLUMN {name} {definition}"
+                )
+        for name, definition in lead_additions.items():
+            if name not in lead_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE pilot_leads ADD COLUMN {name} {definition}"
                 )
         if document_additions.keys() - document_columns:
             connection.exec_driver_sql(

@@ -1,0 +1,89 @@
+/* Painel de operação (/ui/admin). Usa os tokens de styles.css. */
+.adm { display: grid; gap: 20px; }
+.adm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.adm-head h1 { margin: 4px 0 6px; display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-size: 30px; font-weight: 400; letter-spacing: -.01em; }
+.adm-head p { margin: 0; max-width: 62ch; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.adm h2 { margin: 6px 0 0; font-family: var(--font-display); font-size: 22px; font-weight: 400; }
+.adm h3 { margin: 6px 0 0; font-size: 15px; }
+.adm h3 small { font-weight: 400; }
+
+.adm-tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.adm-tabs button { padding: 10px 14px; color: var(--muted); font-size: 14px; font-weight: 600; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.adm-tabs button:hover { color: var(--ink); }
+.adm-tabs button.active { color: var(--ink); border-bottom-color: var(--gold); }
+
+.adm-stack { display: grid; gap: 14px; min-width: 0; }
+.adm-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.adm-row.between { justify-content: space-between; }
+.adm-row.end { justify-content: flex-end; }
+.adm-muted { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.adm-ok { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 16px; color: #2d5a3d; background: #eef6f0; border: 1px solid #cfe3d5; border-radius: 12px; font-size: 14px; }
+.adm-error { color: var(--danger); }
+
+.adm-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.adm-card { display: grid; gap: 4px; align-content: start; padding: 16px; text-align: left; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-card); }
+.adm-card strong { font-family: var(--font-display); font-size: 32px; font-weight: 400; line-height: 1; }
+.adm-card span { font-size: 14px; font-weight: 600; }
+.adm-card small { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+button.adm-card { cursor: pointer; transition: transform .2s var(--ease), border-color .2s var(--ease); }
+button.adm-card:hover { transform: translateY(-2px); border-color: var(--gold); }
+.adm-card.attention { background: var(--warning-bg); border-color: #eeddb7; }
+.adm-card.attention strong { color: var(--warning); }
+
+.adm-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.adm-chip { display: inline-flex; gap: 6px; align-items: center; padding: 6px 12px; font-size: 13px; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 999px; }
+.adm-chip b { color: var(--green-700); }
+.adm-chip.on, .adm-chip:hover { border-color: var(--gold); background: var(--green-50); }
+
+.adm-badge { display: inline-block; margin: 2px 6px 2px 0; padding: 2px 9px; font-size: 12px; font-weight: 600; border-radius: 999px; background: var(--mist); color: var(--green-900); white-space: nowrap; }
+.adm-badge.ok { background: #e3f1e7; color: #2d5a3d; }
+.adm-badge.warn { background: var(--warning-bg); color: var(--warning); }
+.adm-badge.bad { background: var(--danger-bg); color: var(--danger); }
+
+.adm-table-wrap { overflow-x: auto; background: white; border: 1px solid var(--line); border-radius: 14px; }
+.adm-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.adm-table th { padding: 10px 14px; text-align: left; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; background: var(--green-50); white-space: nowrap; }
+.adm-table td { padding: 11px 14px; vertical-align: top; border-top: 1px solid var(--line); }
+.adm-table td small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.adm-table.clickable tbody tr { cursor: pointer; }
+.adm-table.clickable tbody tr:hover, .adm-table.clickable tbody tr:focus-visible { background: var(--green-50); }
+.adm-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.adm-link { display: block; margin-top: 3px; padding: 0; color: var(--green-700); font-size: 12px; text-decoration: underline; background: none; border: 0; }
+
+.adm-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.adm-filters input, .adm-filters select, .adm-lead-work select, .adm-lead-work textarea, .adm-reason textarea {
+  padding: 9px 12px; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 10px; font-size: 14px;
+}
+.adm-filters input { min-width: 260px; flex: 1 1 260px; }
+.adm-pager { padding-top: 4px; }
+
+.adm-checks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.adm-checks li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: white; border: 1px solid var(--line); border-radius: 12px; }
+.adm-checks li > div { flex: 1; display: grid; gap: 2px; }
+.adm-checks li small { color: var(--muted); font-size: 12.5px; }
+.adm-checks li.ok svg { color: #2d7a4f; }
+.adm-checks li.bad svg { color: var(--warning); }
+
+.adm-timeline { display: grid; gap: 4px; max-height: 340px; margin: 0; padding: 12px 14px; overflow-y: auto; list-style: none; background: white; border: 1px solid var(--line); border-radius: 14px; font-size: 13px; }
+.adm-timeline li { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.adm-timeline time { min-width: 150px; color: var(--muted); font-size: 12px; }
+.adm-timeline li.bad code { color: var(--danger); font-weight: 700; }
+.adm-timeline span { color: var(--muted); }
+
+.adm-lead { display: grid; grid-template-columns: 1fr minmax(260px, 340px); gap: 16px; padding: 16px; background: white; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-card); }
+.adm-lead h3 { margin: 0 0 4px; font-size: 17px; }
+.adm-lead p { margin: 2px 0; font-size: 14px; }
+.adm-lead-work { display: grid; gap: 8px; align-content: start; }
+.adm-lead-work textarea { width: 100%; resize: vertical; }
+
+.adm-reason { display: grid; gap: 14px; }
+.adm-reason h2 { margin: 0; }
+.adm-reason p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.adm-reason textarea { width: 100%; resize: vertical; }
+
+@media (max-width: 760px) {
+  .adm-head h1 { font-size: 24px; }
+  .adm-lead { grid-template-columns: 1fr; }
+  .adm-filters input { min-width: 0; }
+  .adm-timeline time { min-width: 0; width: 100%; }
+}

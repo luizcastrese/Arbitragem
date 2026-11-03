@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
@@ -153,10 +153,38 @@ class Settings:
     # Quem recebe o aviso de novo lead do piloto. Vazio, vale o e-mail de
     # privacidade; sem nenhum dos dois o lead só é gravado.
     lead_notification_email: str = ""
+    # Contas com acesso ao painel de operação (/ui/admin). Lista de e-mails; a
+    # conta precisa existir e, em produção, ter o e-mail confirmado.
+    admin_emails: List[str] = field(default_factory=list)
+    # Destino dos alertas operacionais (etapa que falhou, verificação reprovada).
+    # Vazio: valem os e-mails de admin.
+    ops_alert_email: str = ""
+    # Avisos por e-mail dos atos e prazos do procedimento. Desligar só faz
+    # sentido em desenvolvimento: sem eles a parte não sabe que é a sua vez.
+    notifications_enabled: bool = True
+    # Intervalo (s) do despacho da fila de e-mails; 0 desliga o despachante.
+    notification_dispatch_interval_seconds: int = 30
+    # Intervalo (s) da varredura de lembretes por prazo; 0 desliga.
+    reminder_scan_interval_seconds: int = 900
+    # Horas sem resposta ao material apresentado antes do lembrete à parte.
+    reminder_stalled_hours: int = 72
+    # Dias que a fila guarda e-mails já enviados antes do expurgo.
+    outbox_retention_days: int = 90
 
     @property
     def lead_recipient(self) -> str:
         return self.lead_notification_email or self.privacy_contact_email
+
+    @property
+    def ops_recipients(self) -> List[str]:
+        if self.ops_alert_email:
+            return [self.ops_alert_email]
+        return list(self.admin_emails)
+
+    def is_admin_email(self, email: str) -> bool:
+        return (email or "").strip().lower() in {
+            item.lower() for item in self.admin_emails
+        }
 
     @property
     def payments_enabled(self) -> bool:
@@ -624,6 +652,19 @@ def get_settings() -> Settings:
         ),
         expose_api_docs=_env_flag("EXPOSE_API_DOCS", not is_production),
         lead_notification_email=os.getenv("LEAD_NOTIFICATION_EMAIL", "").strip(),
+        admin_emails=[
+            item.lower() for item in _split_csv(os.getenv("ADMIN_EMAILS", ""))
+        ],
+        ops_alert_email=os.getenv("OPS_ALERT_EMAIL", "").strip(),
+        notifications_enabled=_env_flag("NOTIFICATIONS_ENABLED", True),
+        notification_dispatch_interval_seconds=int(
+            os.getenv("NOTIFICATION_DISPATCH_INTERVAL_SECONDS", "30")
+        ),
+        reminder_scan_interval_seconds=int(
+            os.getenv("REMINDER_SCAN_INTERVAL_SECONDS", "900")
+        ),
+        reminder_stalled_hours=int(os.getenv("REMINDER_STALLED_HOURS", "72")),
+        outbox_retention_days=int(os.getenv("OUTBOX_RETENTION_DAYS", "90")),
         stripe_secret_key=os.getenv("STRIPE_SECRET_KEY", "").strip(),
         stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", "").strip(),
         platform_fee_bps=min(

@@ -48,6 +48,13 @@ monitoramento.
 - [ ] Confirmar entrega real de cadastro, convite e redefinição de senha.
 - [ ] Confirmar que todos os links recebidos usam o domínio HTTPS público.
 
+- [ ] Confirmar que os avisos do procedimento saem: aceitar um convite, anexar
+      um material e conferir o e-mail recebido pela outra parte (o link deve
+      abrir o caso em `/ui/?case=<id>`). A fila é visível em `/ui/admin` > E-mails.
+- [ ] Manter `NOTIFICATIONS_ENABLED=true` e o despachante ligado
+      (`NOTIFICATION_DISPATCH_INTERVAL_SECONDS` > 0). Com várias réplicas, todas
+      podem rodá-lo: o envio é reivindicado por UPDATE condicional.
+
 Em produção a verificação de e-mail é obrigatória e os tokens não aparecem na
 resposta da API. Por isso a aplicação recusa o boot sem SMTP básico configurado.
 
@@ -77,9 +84,16 @@ resposta da API. Por isso a aplicação recusa o boot sem SMTP básico configura
 
 ## 6. Operação do piloto
 
+- [ ] Definir `ADMIN_EMAILS` (contas da operação, com e-mail confirmado) e
+      `OPS_ALERT_EMAIL` (alerta por e-mail de etapa que falhou). Entrar em
+      `/ui/admin` e conferir a aba "Configuração" da visão geral.
+- [ ] Rotina diária: abrir a visão geral e zerar o que pede atenção (etapas
+      presas, e-mails falhos, casos sem decisão de mérito, leads novos).
 - [ ] Criar monitor externo para `/health` e alerta de erro 5xx.
-- [ ] Alertar para falha de backup, falta de espaço e e-mail não entregue.
-- [ ] Verificar casos presos em `processing_*` por mais de 10 minutos.
+- [ ] Alertar para falha de backup e falta de espaço (e-mail não entregue já
+      aparece no painel como "falhou").
+- [ ] Casos presos em `processing_*` por mais de 10 minutos aparecem no painel;
+      libere a etapa com motivo (fica na trilha do caso).
 - [ ] Começar com uma réplica. Para escalar, seguir
       `docs/escalar-replicas.md` (Redis no rate limit, S3 nos documentos).
 - [ ] Definir um canal humano para suporte, privacidade e incidente.
