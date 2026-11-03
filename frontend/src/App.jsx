@@ -332,6 +332,24 @@ export default function App() {
           setPrivacy(await request('/privacy'))
         } catch { /* a política é informativa aqui; o aceite não depende dela */ }
 
+        // Retorno do provedor de pagamento (só existe com pagamentos habilitados).
+        if (root.payments_enabled) {
+          const params = new URLSearchParams(window.location.search)
+          const notices = {
+            'connect=return': 'Cadastro de recebimento enviado. A situação aparece no caso.',
+            'settlement=success': 'Pagamento iniciado. A confirmação chega do provedor em instantes.',
+            'settlement=cancelled': 'Pagamento cancelado. Nada foi cobrado.'
+          }
+          const hit = Object.keys(notices).find((entry) => {
+            const [key, value] = entry.split('=')
+            return params.get(key) === value
+          })
+          if (hit) {
+            setAuthNotice(notices[hit])
+            window.history.replaceState({}, '', window.location.pathname)
+          }
+        }
+
         const verifyToken = new URLSearchParams(window.location.search).get('verify')
         if (verifyToken) {
           try {
@@ -821,6 +839,7 @@ export default function App() {
               privacy={privacy}
               showTechnical={showTechnical}
               setShowTechnical={setShowTechnical}
+              paymentsEnabled={system?.payments_enabled === true}
               user={user}
             />
           </Suspense>

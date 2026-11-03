@@ -38,6 +38,7 @@ import {
   steps,
   userHasRole
 } from './shared.js'
+import PaymentCard from './Payment.jsx'
 import CalculationCard, { CALCULATION_MATTERS, MemoryTable, ProposalPanel } from './Calculation.jsx'
 import { AttachChecklist, BatchContradictory, RefuseProposal } from './Pilot.jsx'
 import Markdown from './Markdown.jsx'
@@ -284,6 +285,7 @@ function CaseWorkspace({
   privacy,
   showTechnical,
   setShowTechnical,
+  paymentsEnabled = false,
   user
 }) {
   // Modo piloto "acordo rápido": disputa bancária de consumo, acordo primeiro,
@@ -427,6 +429,7 @@ function CaseWorkspace({
         && !caseData.arbitral_award?.adopted
         && (roles.claimant || roles.respondent) && (
         <AcceptDecisionCard
+          paymentsEnabled={paymentsEnabled}
           caseData={caseData}
           busy={busy}
           run={run}
@@ -438,6 +441,16 @@ function CaseWorkspace({
 
       {caseData.decision_record && (
         <DecisionRecordCard caseData={caseData} isPending={isPending} run={run} />
+      )}
+
+      {paymentsEnabled && caseData.decision_record && (
+        <PaymentCard
+          caseData={caseData}
+          roles={roles}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+        />
       )}
 
       {(caseData.decision?.calculation || caseData.decision_record?.agreement?.calculation) && (
@@ -625,7 +638,7 @@ function ArbitratorCard({ caseData, busy, run, request, actorHeaders, roles, isA
   )
 }
 
-function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles }) {
+function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles, paymentsEnabled = false }) {
   const [state, setState] = useState(null)
   const [confirmed, setConfirmed] = useState(false)
   const caseId = caseData.id
@@ -662,8 +675,8 @@ function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles 
           <h3>{both ? 'Decisão acatada: vale como acordo entre as partes' : 'Adotar a decisão da IA como acordo'}</h3>
           <p>
             Não precisa de árbitro. Se as duas partes acatarem, a decisão passa a valer como acordo
-            (Código Civil, art. 840), nos termos do dispositivo, e o pagamento pode ser feito sem esperar
-            o prazo de recurso. O ato é irrevogável e afasta o recurso de quem acatou.
+            (Código Civil, art. 840), nos termos do dispositivo{paymentsEnabled ? ', e o pagamento pode ser feito sem esperar o prazo de recurso' : ''}.
+            {' '}O ato é irrevogável e afasta o recurso de quem acatou.
           </p>
         </div>
       </div>

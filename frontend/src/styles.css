@@ -1230,3 +1230,11 @@ a.button { text-decoration: none; }
   .legal-scroll { max-height: calc(100vh - 200px); }
   .markdown { font-size: 14.5px; }
 }
+
+/* Pagamento opcional */
+.payment-card { display: grid; gap: 14px; padding: 22px; background: linear-gradient(135deg, #fffdf7, #f8f3e4); border: 1px solid #e4dcc8; border-radius: 22px; box-shadow: var(--shadow-card); }
+.payment-card h3 { margin: 4px 0 6px; font-family: var(--font-display); font-size: 22px; font-weight: 400; }
+.payment-card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.payment-step { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.payment-step p { flex: 1 1 100%; }
+@media (max-width: 520px) { .payment-step .button { flex: 1 1 100%; } }
