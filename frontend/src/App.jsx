@@ -3,8 +3,10 @@ import ValinorMark from './ValinorMark.jsx'
 import { Info, LogIn, LogOut, Mail, Plus, UserRound } from 'lucide-react'
 import {
   API_BASE,
+  CONTACT_EMAIL,
   MATTERS,
   STAGE_PROCESSING_STATUS,
+  canSeeSystemBadge,
   formatApiDetail,
   statusLabels
 } from './shared.js'
@@ -544,10 +546,12 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <span className={`system-status ${llmReady(system) ? 'online' : 'demo'}`}>
-              <span />
-              {llmReady(system) ? 'Chave de IA configurada' : 'Modo demonstração'}
-            </span>
+            {canSeeSystemBadge(user) && (
+              <span className={`system-status ${llmReady(system) ? 'online' : 'demo'}`}>
+                <span />
+                {llmReady(system) ? 'Chave de IA configurada' : 'Modo demonstração'}
+              </span>
+            )}
             {user ? (
               <div className="account-menu-wrap">
                 <span className="account-chip">
@@ -588,7 +592,7 @@ export default function App() {
       <main className="page">
         {!user && (
           <Suspense fallback={<div className="landing-fallback" aria-busy="true" />}>
-            <Landing onStart={startNewCase} contactEmail={privacy?.controller?.contact_email} />
+            <Landing onStart={startNewCase} />
           </Suspense>
         )}
 
@@ -737,11 +741,11 @@ export default function App() {
         )}
       </main>
       <footer className="legal-footer">
-        <button type="button" onClick={() => setLegalView('terms')}>Termos do procedimento</button>
-        <button type="button" onClick={() => setLegalView('privacy')}>Política de privacidade</button>
-        {privacy?.controller?.contact_email && (
-          <span>Privacidade: {privacy.controller.contact_email}</span>
-        )}
+        <div className="legal-footer-inner">
+          <button type="button" onClick={() => setLegalView('terms')}>Termos do procedimento</button>
+          <button type="button" onClick={() => setLegalView('privacy')}>Política de privacidade</button>
+          <span>Contato e privacidade: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></span>
+        </div>
       </footer>
 
       {activity && (

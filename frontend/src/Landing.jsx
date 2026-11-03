@@ -9,6 +9,7 @@ import {
   Scale,
   X
 } from 'lucide-react'
+import { CONTACT_EMAIL } from './shared.js'
 import './landing.css'
 
 // ---------------------------------------------------------------------------
@@ -16,13 +17,12 @@ import './landing.css'
 // conferidos entre si (parcela, diferença, total); mude todos juntos.
 // ---------------------------------------------------------------------------
 
-// Valor cobrado do banco ou escritório por caso resolvido. Deixe `null` para
-// mostrar o placeholder "R$ [valor]"; use um texto como 'R$ 490' para publicar.
+// Valor cobrado do banco ou escritório por caso resolvido. Com `null`, a página
+// mostra "Sob consulta"; use um texto como 'R$ 490' para publicar o preço.
 const PRICE_PER_RESOLVED_CASE = null
 
-// Contato do piloto: VITE_PILOT_EMAIL no build, senão o e-mail de privacidade
-// que o backend já publica (PRIVACY_CONTACT_EMAIL).
-const PILOT_EMAIL = import.meta.env.VITE_PILOT_EMAIL || ''
+// Contato do piloto: VITE_PILOT_EMAIL, senão o e-mail de contato do site.
+const PILOT_EMAIL = (import.meta.env.VITE_PILOT_EMAIL || '').trim() || CONTACT_EMAIL
 
 const EXAMPLE = {
   principal: 'R$ 10.000,00',
@@ -127,11 +127,8 @@ const HERO_FACTS = [
   { value: '1', label: 'auto assinado ao final' }
 ]
 
-export default function Landing({ onStart, contactEmail }) {
-  const pilotEmail = PILOT_EMAIL || contactEmail || ''
-  const pilotHref = pilotEmail
-    ? `mailto:${pilotEmail}?subject=${encodeURIComponent('Piloto Valinor')}&body=${encodeURIComponent('Olá! Quero testar a Valinor com os meus processos.')}`
-    : null
+export default function Landing({ onStart }) {
+  const pilotHref = `mailto:${PILOT_EMAIL}?subject=${encodeURIComponent('Piloto Valinor')}&body=${encodeURIComponent('Olá! Quero testar a Valinor com os meus processos.')}`
 
   return (
     <div className="landing">
@@ -143,7 +140,7 @@ export default function Landing({ onStart, contactEmail }) {
       <ScopeCompare />
       <Cost />
       <Principles />
-      <PilotBand href={pilotHref} onFallback={onStart} />
+      <PilotBand href={pilotHref} />
     </div>
   )
 }
@@ -352,7 +349,11 @@ function ScopeCompare() {
       </div>
       <div className="scope-compare">
         <div className="scope-col scope-in">
-          <h3><span className="scope-count">{SCOPE_CATEGORIES.length}</span> o que a Valinor trata</h3>
+          <h3>
+            <span className="scope-icon" aria-hidden="true"><Check size={20} /></span>
+            <span>O que a Valinor trata</span>
+            <span className="scope-meta">{SCOPE_CATEGORIES.length} temas</span>
+          </h3>
           <p className="scope-lead">Primeiro setor: disputas bancárias de massa, que se resolvem com contrato, extrato e regra objetiva.</p>
           <ul>
             {SCOPE_CATEGORIES.map((item) => (
@@ -361,7 +362,11 @@ function ScopeCompare() {
           </ul>
         </div>
         <div className="scope-col scope-out">
-          <h3><span className="scope-count">{SCOPE_EXCLUDED.length}</span> o que fica de fora</h3>
+          <h3>
+            <span className="scope-icon" aria-hidden="true"><X size={20} /></span>
+            <span>O que fica de fora</span>
+            <span className="scope-meta">{SCOPE_EXCLUDED.length} exclusões</span>
+          </h3>
           <p className="scope-lead">Aqui o sistema se abstém e diz por quê, em vez de arriscar um palpite.</p>
           <ul>
             {SCOPE_EXCLUDED.map((item) => (
@@ -389,9 +394,7 @@ function Cost() {
         </article>
         <article className="cost-card cost-main">
           <span className="cost-who">Banco ou escritório</span>
-          <strong className="cost-value" data-placeholder={PRICE_PER_RESOLVED_CASE ? undefined : 'true'}>
-            {PRICE_PER_RESOLVED_CASE || 'R$ [valor]'}
-          </strong>
+          <strong className="cost-value">{PRICE_PER_RESOLVED_CASE || 'Sob consulta'}</strong>
           <p>O banco ou escritório paga por caso resolvido.</p>
         </article>
       </div>
@@ -419,7 +422,7 @@ function Principles() {
   )
 }
 
-function PilotBand({ href, onFallback }) {
+function PilotBand({ href }) {
   return (
     <section className="closing-band" id="piloto" aria-labelledby="pilot-title">
       <div>
@@ -429,15 +432,9 @@ function PilotBand({ href, onFallback }) {
           vista e um auto que diz o que é e o que faz.
         </p>
       </div>
-      {href ? (
-        <a className="button gold" href={href}>
-          <Mail size={17} /> Falar sobre o piloto
-        </a>
-      ) : (
-        <button type="button" className="button gold" onClick={onFallback}>
-          <ArrowRight size={17} /> Falar sobre o piloto
-        </button>
-      )}
+      <a className="button gold" href={href}>
+        <Mail size={17} /> Falar sobre o piloto
+      </a>
     </section>
   )
 }
