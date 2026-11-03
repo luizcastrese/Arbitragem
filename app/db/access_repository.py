@@ -31,8 +31,20 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def is_admin_user(user: User) -> bool:
+    """Conta da operação: está em ADMIN_EMAILS e, quando a confirmação de
+    e-mail é exigida, comprovou o endereço."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.is_admin_email(user.email):
+        return False
+    return bool(user.email_verified_at) or not settings.email_verification_required
+
+
 def user_to_dict(user: User) -> dict:
     return {
+        "is_admin": is_admin_user(user),
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,

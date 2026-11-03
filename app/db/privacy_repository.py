@@ -31,6 +31,7 @@ from app.db.models import (
     Case,
     CaseMember,
     Document,
+    EmailOutbox,
     Invitation,
     Notification,
     User,
@@ -164,6 +165,7 @@ def export_user_data(db: Session, user: User) -> Dict[str, Any]:
     invitations = (
         db.query(Invitation).filter(Invitation.email == user.email).all()
     )
+    emails = db.query(EmailOutbox).filter(EmailOutbox.user_id == user.id).all()
 
     return {
         "generated_at_utc": _utc_now().isoformat(),
@@ -193,6 +195,17 @@ def export_user_data(db: Session, user: User) -> Dict[str, Any]:
                 "created_at": _iso(item.created_at),
             }
             for item in notifications
+        ],
+        "emails_enviados": [
+            {
+                "id": item.id,
+                "case_id": item.case_id,
+                "assunto": item.subject,
+                "situacao": item.status,
+                "criado_em": _iso(item.created_at),
+                "enviado_em": _iso(item.sent_at),
+            }
+            for item in emails
         ],
         "invitations": [
             {
@@ -247,6 +260,9 @@ def anonymize_user(db: Session, user: User) -> Dict[str, Any]:
     db.query(Notification).filter(Notification.user_id == user.id).delete(
         synchronize_session=False
     )
+    from app.notifications.outbox import erase_for_user
+
+    erase_for_user(db, user.id)
 
     user.email = f"{digest}@{ANONYMIZED_DOMAIN}"
     user.display_name = ANONYMIZED_NAME

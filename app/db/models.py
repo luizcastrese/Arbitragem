@@ -506,3 +506,59 @@ class PilotLead(Base):
     # Resultado do aviso por e-mail ao time (delivered, logged, failed).
     notification_status = Column(String, nullable=True)
     notified_at = Column(DateTime(timezone=True), nullable=True)
+    # Acompanhamento comercial feito no painel de operação.
+    status = Column(String, nullable=False, default="new", index=True)
+    notes = Column(Text, nullable=False, default="")
+    handled_by_user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class EmailOutbox(Base):
+    """Fila de e-mails transacionais do procedimento.
+
+    O ato que gera o aviso e a linha da fila são gravados na mesma transação:
+    ou o caso avançou e o aviso existe, ou nenhum dos dois aconteceu. O envio
+    SMTP roda fora do request (app.notifications.worker), com nova tentativa e
+    registro do erro, de modo que o painel de operação enxerga o que não saiu.
+    """
+
+    __tablename__ = "email_outbox"
+
+    id = Column(String, primary_key=True)
+    case_id = Column(String, nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    to_email = Column(String, nullable=False)
+    # Evento que originou o aviso (ex.: evidence_disclosed, reminder_contest_closing).
+    kind = Column(String, nullable=False, index=True)
+    audience = Column(String, nullable=False, default="party")  # party | ops
+    subject = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    # Impede aviso duplicado para o mesmo fato (lembretes e reprocessamentos).
+    dedupe_key = Column(String, nullable=True, unique=True)
+    # pending | sending | sent | logged | failed
+    status = Column(String, nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(String, nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+
+class AdminAction(Base):
+    """Registro de tudo o que o time de operação consultou ou alterou.
+
+    Casos são confidenciais: quem opera pode ver metadados, e cada acesso ou
+    intervenção fica aqui, com autor e momento.
+    """
+
+    __tablename__ = "admin_actions"
+
+    id = Column(String, primary_key=True)
+    admin_user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    admin_email = Column(String, nullable=False)
+    action = Column(String, nullable=False, index=True)
+    target_type = Column(String, nullable=False, default="")
+    target_id = Column(String, nullable=True, index=True)
+    detail = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)

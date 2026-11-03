@@ -35,6 +35,7 @@ from app.api.context import (  # noqa: F401
 from app.api.routes import (
     acceptance,
     account,
+    admin,
     arbitration,
     attestation,
     auth,
@@ -49,6 +50,7 @@ from app.api.routes import (
     stages,
 )
 from app.api.steward import StewardRecoveryLoop
+from app.notifications.worker import NotificationWorker
 from app.core.client_ip import resolve_client_ip
 from app.db.init_db import init_db
 
@@ -71,9 +73,17 @@ async def lifespan(_app: FastAPI):
     init_db()
     recovery = StewardRecoveryLoop(ctx.STEWARD_RECOVERY_INTERVAL_SECONDS)
     recovery.start()
+    notifier = NotificationWorker(
+        ctx.settings.notification_dispatch_interval_seconds
+        if ctx.settings.notifications_enabled
+        else 0,
+        ctx.settings.reminder_scan_interval_seconds,
+    )
+    notifier.start()
     try:
         yield
     finally:
+        notifier.stop()
         recovery.stop()
         # Dreno: uma etapa cortada no meio deixaria o caso em processing_* até
         # o TTL de 10 minutos.
@@ -226,6 +236,7 @@ async def security_headers(request: Request, call_next):
 for module in (
     meta,
     auth,
+    admin,
     calculation,
     cases,
     account,
@@ -244,7 +255,7 @@ for module in (
 
 # Caminhos da interface que o front resolve no cliente. Sem estas rotas, abrir
 # /ui/termos direto (link compartilhado, F5) cairia num 404 do StaticFiles.
-FRONTEND_CLIENT_ROUTES = ("termos", "privacidade")
+FRONTEND_CLIENT_ROUTES = ("termos", "privacidade", "admin")
 
 
 def mount_frontend(application: FastAPI, dist: Path) -> None:

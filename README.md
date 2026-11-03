@@ -162,6 +162,8 @@ Limites respeitados pelo código (`app/domain/pathway.py`):
 - modo seguro sem chave de modelo, sempre inconclusivo e encerrado de forma autônoma;
 - relatório final Word com o histórico completo, decisão, auditoria e hashes;
 - convites por e-mail transacional (SMTP) com fallback para log quando não configurado; convite pendente pode ser reenviado, o que revoga o token anterior;
+- **avisos por e-mail dos atos e prazos** (`app/notifications/`): cada ato da trilha de auditoria que exige ação da outra parte vira um aviso (convite aceito, material para responder, rodada de conciliação, decisão com prazo de recurso, acatamento, árbitro, saída para a Justiça, prazos). O aviso nasce na mesma transação do ato, entra numa fila (`email_outbox`) e um despachante em segundo plano o envia com nova tentativa e espera crescente. Lembretes por inércia cobram o fim do prazo de recurso, o fim do prazo de reflexão, prazos vencendo ou vencidos, material sem resposta e convite perto de expirar. O e-mail nunca leva o teor do caso: diz o que houve, o que fazer, até quando, e aponta para `/ui/?case=<id>`;
+- **painel de operação** (`/ui/admin`, só `ADMIN_EMAILS`): visão geral do que pede atenção (etapas presas ou falhas, e-mails que não saíram, casos sem decisão de mérito, parados, leads novos), casos com linha do tempo e chamadas de modelo, fila de e-mails com reenvio, leads do piloto com situação e anotações, usuários (reenviar confirmação, desbloquear, suspender) e o registro de tudo o que a operação consultou ou alterou. Mostra metadados, nunca o teor dos casos; liberar uma etapa presa ou retomar a condução exige motivo e entra na trilha de auditoria do caso, visível às partes;
 - a contraparte lê o teor do material no painel (e o original, quando houver) antes de confirmar ciência e responder;
 - a conta exporta seus dados e pede eliminação por anonimização a partir do painel;
 - autenticação obrigatória em todas as rotas quando `APP_ENV=production`, sem o atalho de tokens por papel;
@@ -377,6 +379,13 @@ Variáveis do arquivo `.env`:
 | `SMTP_HOST` / `SMTP_PORT` | Servidor de e-mail transacional para convites |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | Credenciais SMTP |
 | `SMTP_FROM` | Remetente dos convites |
+| `ADMIN_EMAILS` | Contas com acesso ao painel de operação (`/ui/admin`), separadas por vírgula. Em produção exige e-mail confirmado |
+| `OPS_ALERT_EMAIL` | Destino dos alertas de operação (etapa que falhou). Vazio, valem os `ADMIN_EMAILS` |
+| `NOTIFICATIONS_ENABLED` | Liga os avisos por e-mail dos atos e prazos (padrão `true`) |
+| `NOTIFICATION_DISPATCH_INTERVAL_SECONDS` | Intervalo do despacho da fila de e-mails (padrão 30; 0 desliga) |
+| `REMINDER_SCAN_INTERVAL_SECONDS` | Intervalo da varredura de lembretes (padrão 900; 0 desliga) |
+| `REMINDER_STALLED_HOURS` | Horas sem resposta a um material até o lembrete (padrão 72) |
+| `OUTBOX_RETENTION_DAYS` | Dias que a fila guarda e-mails já enviados (padrão 90) |
 | `LEAD_NOTIFICATION_EMAIL` | Quem recebe o aviso de cada contato do piloto (`POST /leads`). Vazio, vale `PRIVACY_CONTACT_EMAIL`; sem nenhum, o lead só é gravado em `pilot_leads` |
 | `SMTP_USE_TLS` | Usa STARTTLS na conexão SMTP |
 | `DOCUMENT_STORAGE_BACKEND` | `local`, `s3` ou `memory` (testes) |

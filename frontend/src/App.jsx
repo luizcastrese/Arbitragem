@@ -26,8 +26,13 @@ function legalFromPath() {
   return match[1] === 'termos' ? 'terms' : 'privacy'
 }
 
+function adminFromPath() {
+  return /\/admin\/?$/.test(window.location.pathname)
+}
+
 const Landing = lazy(() => import('./Landing.jsx'))
 const Workspace = lazy(() => import('./Workspace.jsx'))
+const Admin = lazy(() => import('./Admin.jsx'))
 
 function llmReady(system) {
   if (!system) return false
@@ -74,12 +79,21 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState('')
   const [showAccount, setShowAccount] = useState(false)
   const [legalView, setLegalViewState] = useState(legalFromPath)
+  const [adminView, setAdminViewState] = useState(adminFromPath)
+  // Link de aviso por e-mail (?case=<id>): abre o caso certo depois do login.
+  const deepLinkCase = useRef(new URLSearchParams(window.location.search).get('case') || '')
   const [pendingStart, setPendingStart] = useState(false)
   const workspaceRef = useRef(null)
 
   function setLegalView(kind) {
     setLegalViewState(kind)
     const path = kind ? `${import.meta.env.BASE_URL}${LEGAL_SLUGS[kind]}` : import.meta.env.BASE_URL
+    if (window.location.pathname !== path) window.history.pushState({}, '', path)
+  }
+
+  function setAdminView(open) {
+    setAdminViewState(open)
+    const path = open ? `${import.meta.env.BASE_URL}admin` : import.meta.env.BASE_URL
     if (window.location.pathname !== path) window.history.pushState({}, '', path)
   }
 
@@ -302,15 +316,32 @@ export default function App() {
     setConciliationUpdate('')
   }
 
+  // O caso apontado pelo link do e-mail, se a conta participa dele. Vale uma vez.
+  function takeDeepLinkCase(items) {
+    const wanted = deepLinkCase.current
+    if (!wanted) return ''
+    deepLinkCase.current = ''
+    const params = new URLSearchParams(window.location.search)
+    if (params.has('case') && !adminFromPath()) {
+      params.delete('case')
+      const rest = params.toString()
+      window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
+    }
+    return items.some((item) => item.id === wanted) ? wanted : ''
+  }
+
   async function loadCases(selectId) {
     const items = await request('/cases')
     setCases(items)
-    const target = selectId || caseData?.id || items[0]?.id
+    const target = selectId || takeDeepLinkCase(items) || caseData?.id || items[0]?.id
     if (target) await loadCase(target)
   }
 
   useEffect(() => {
-    const onPop = () => setLegalViewState(legalFromPath())
+    const onPop = () => {
+      setLegalViewState(legalFromPath())
+      setAdminViewState(adminFromPath())
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
@@ -368,7 +399,8 @@ export default function App() {
           setUser(await request('/auth/me'))
           const items = await request('/cases')
           setCases(items)
-          if (items[0]) await loadCase(items[0].id)
+          const first = takeDeepLinkCase(items) || items[0]?.id
+          if (first) await loadCase(first)
           else setShowCreate(true)
         } catch (err) {
           // Sem sessão: o visitante vê a apresentação e entra quando quiser.
@@ -652,6 +684,7 @@ export default function App() {
                 {showAccount && (
                   <AccountPanel
                     user={user}
+                    onOpenAdmin={user.is_admin ? () => { setShowAccount(false); setAdminView(true) } : null}
                     exporting={isPending('account-export')}
                     erasing={isPending('account-erase')}
                     onClose={() => setShowAccount(false)}
@@ -759,6 +792,17 @@ export default function App() {
           />
         )}
 
+        {!user && deepLinkCase.current && !inviteToken && (
+          <div className="invite-banner" role="status">
+            <Mail size={20} />
+            <div>
+              <strong>Entre para abrir o caso do aviso que você recebeu</strong>
+              <span>Use a conta cadastrada com o mesmo e-mail em que o aviso chegou.</span>
+            </div>
+            <button type="button" className="button primary" onClick={() => openAuth('login')}>Entrar</button>
+          </div>
+        )}
+
         {inviteToken && (
           <div className="invite-banner">
             <Mail size={20} />
@@ -795,7 +839,13 @@ export default function App() {
           text={error && !caseData && !showCreate && !showAuth ? error : ''}
         />
 
-        {user && (
+        {user && adminView && user.is_admin && (
+          <Suspense fallback={<LoadingState />}>
+            <Admin request={request} user={user} onBack={() => setAdminView(false)} />
+          </Suspense>
+        )}
+
+        {user && !(adminView && user.is_admin) && (
           <Suspense fallback={<LoadingState />}>
             <Workspace
               workspaceRef={workspaceRef}
@@ -978,11 +1028,16 @@ function AuthPanel({ mode, context = 'default', setMode, busy, error, onSubmit, 
   )
 }
 
-function AccountPanel({ user, exporting, erasing, onClose, onExport, onErase, onOpenLegal }) {
+function AccountPanel({ user, exporting, erasing, onClose, onExport, onErase, onOpenLegal, onOpenAdmin }) {
   return (
     <div className="account-panel">
       <strong>{user.display_name}</strong>
       <span>{user.email}</span>
+      {onOpenAdmin && (
+        <button type="button" className="button secondary compact" onClick={onOpenAdmin}>
+          Painel de operação
+        </button>
+      )}
       <button type="button" className="button ghost compact" onClick={onExport} disabled={exporting}>
         Baixar meus dados
       </button>

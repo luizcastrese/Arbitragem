@@ -187,6 +187,21 @@ def _session_user_or_401(db: Session, x_session_token: str):
     return user
 
 
+def _require_admin(db: Session, x_session_token: str):
+    """Painel de operação: conta listada em ADMIN_EMAILS, com sessão válida e
+    (quando a confirmação é exigida) e-mail confirmado. Não há token por papel
+    nem atalho de desenvolvimento: sem sessão, não entra."""
+    user = _session_user_or_401(db, x_session_token)
+    if not ctx.settings.is_admin_email(user.email):
+        raise HTTPException(status_code=403, detail="Acesso restrito à operação")
+    if ctx.settings.email_verification_required and not user.email_verified_at:
+        raise HTTPException(
+            status_code=403,
+            detail="Confirme o e-mail da conta antes de usar o painel de operação",
+        )
+    return user
+
+
 def _require_case_view(db: Session, case, x_session_token: str):
     if not ctx.settings.auth_required:
         return get_user_by_token(db, x_session_token)
