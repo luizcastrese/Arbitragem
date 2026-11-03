@@ -179,7 +179,12 @@ def test_unknown_framework_fails_closed_at_lock():
 def test_frontend_exposes_autonomous_states():
     from pathlib import Path
 
-    source = Path("frontend/src/App.jsx").read_text(encoding="utf-8")
+    # O front é dividido em vários módulos (App, Workspace, shared); os rótulos
+    # podem estar em qualquer um deles.
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(Path("frontend/src").glob("*.js*"))
+    )
     for label in (
         "Decisão em processamento",
         "Auditoria automática",
