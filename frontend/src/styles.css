@@ -973,7 +973,8 @@ pre { max-height: 430px; overflow: auto; margin: 0; padding: 15px; color: #dce8d
 
 @media (max-width: 520px) {
   .brand strong { font-size: 14px; }
-  .button.compact { width: 38px; padding: 0; font-size: 0; }
+  /* Só os botões do topo viram ícone; os demais compactos mantêm o texto. */
+  .topbar-actions .button.compact { width: 38px; padding: 0; font-size: 0; }
   .surface, .process-card, .next-action, .conclusion { padding: 19px; }
   .case-heading h2 { font-size: 25px; }
   .next-action-heading { align-items: flex-start; }
@@ -1238,3 +1239,33 @@ a.button { text-decoration: none; }
 .payment-step { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .payment-step p { flex: 1 1 100%; }
 @media (max-width: 520px) { .payment-step .button { flex: 1 1 100%; } }
+
+/* Memória de cálculo no celular: cada linha vira um cartão, com o valor sempre visível */
+@media (max-width: 640px) {
+  .memory-scroll { overflow: visible; border: 0; }
+  .memory table, .memory tbody { display: block; }
+  .memory thead { display: none; }
+  .memory tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: white;
+  }
+  .memory tbody tr.memory-total { background: var(--green-50); border-color: #e4dcc8; }
+  .memory th, .memory td { padding: 0; border: 0; background: transparent; min-width: 0; }
+  .memory tbody th { grid-column: 1; grid-row: 1; font-size: 13.5px; }
+  .memory td.memory-value { grid-column: 2; grid-row: 1; font-size: 15px; }
+  .memory tbody tr > td:not(.memory-value) { grid-column: 1 / -1; grid-row: 2; margin-top: 4px; }
+  .memory-total th, .memory-total td { background: transparent; }
+}
+
+/* Ajustes de celular dos diálogos e do formulário de caso */
+.dialog-body .section-label { padding-right: 44px; }
+@media (max-width: 520px) {
+  .form-actions { flex-direction: column-reverse; }
+  .form-actions .button { width: 100%; }
+}

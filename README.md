@@ -377,6 +377,7 @@ Variáveis do arquivo `.env`:
 | `SMTP_HOST` / `SMTP_PORT` | Servidor de e-mail transacional para convites |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | Credenciais SMTP |
 | `SMTP_FROM` | Remetente dos convites |
+| `LEAD_NOTIFICATION_EMAIL` | Quem recebe o aviso de cada contato do piloto (`POST /leads`). Vazio, vale `PRIVACY_CONTACT_EMAIL`; sem nenhum, o lead só é gravado em `pilot_leads` |
 | `SMTP_USE_TLS` | Usa STARTTLS na conexão SMTP |
 | `DOCUMENT_STORAGE_BACKEND` | `local`, `s3` ou `memory` (testes) |
 | `DOCUMENT_STORAGE_DIR` | Diretório do backend local |
@@ -432,6 +433,35 @@ primeiro caso real:
 `GET /` lista avisos de configuração pendente (segredo de desenvolvimento,
 proxy não declarado, controlador de dados ausente). Em produção, os itens
 críticos derrubam o boot em vez de virar aviso.
+
+### Variáveis do front (build)
+
+| Variável | Uso |
+|---|---|
+| `VITE_CONTACT_EMAIL` | E-mail de contato e privacidade exibido no site e no botão do piloto (padrão `alugai.adm@gmail.com`) |
+| `VITE_PILOT_EMAIL` | Sobrescreve o e-mail do piloto, se for diferente do de contato |
+| `VITE_ADMIN_EMAILS` | E-mails (separados por vírgula) que veem o selo de ambiente. Só exibição |
+| `VITE_API_BASE` | URL da API quando o front roda separado |
+
+## Cálculo auditável (revisional bancária)
+
+Para a matéria `consumer_banking_v1`, nenhum número da proposta nasce da IA:
+
+1. `POST /cases/{id}/calculation/extract`: o agente extrator lê os documentos
+   admitidos e devolve valor financiado, prazo, taxa, parcelas pagas, tarifas
+   e seguros, cada um com documento, página e trecho. O servidor confere cada
+   trecho contra o texto e corrige a página. Fora do escopo, a IA se abstém.
+2. `PUT /cases/{id}/calculation/inputs`: as partes corrigem o que foi lido e
+   informam a **taxa média do Bacen com fonte e data** (a IA nunca a preenche).
+3. `app/domain/calculation.py` (puro, `Decimal`, centavos) gera a memória linha
+   a linha (parcela contratada, parcela à taxa média, diferença paga, tarifas a
+   restituir, total) com fórmula, entradas, fonte e hash.
+4. Na conciliação, a cláusula monetária é escrita pelo servidor a partir da
+   memória; valores e percentuais que a IA escrever fora dela são removidos e
+   registrados em `number_guard`. A concessão entre rodadas é um percentual
+   (50 a 100) aplicado pelo módulo. O aceite fica preso ao hash da memória.
+5. A decisão e o auto (JSON e Word) carregam a memória; remédio divergente é
+   sinalizado e prevalece o valor do módulo.
 
 ## Endpoints principais
 
