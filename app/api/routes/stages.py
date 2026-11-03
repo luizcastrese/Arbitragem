@@ -23,6 +23,7 @@ from app.api.background import (
 from app.api.common import (
     _assert_procedure_open,
     _case_or_404,
+    _model_stages_enabled,
     _require_actor,
     _require_case_view,
     _require_steward_actuator,
@@ -230,10 +231,16 @@ def respond_to_conciliation_agreement(
     case_id: str,
     round_number: int,
     payload: AgreementResponseRequest,
+    wait: float = Query(0, ge=0, le=ctx.MAX_STAGE_WAIT_SECONDS),
     x_actor_token: str = Header(default=""),
+    x_steward_run_models: str = Header(default="1"),
     db: Session = Depends(get_db),
 ):
     """Registra aceite ou recusa individual da proposta de uma rodada.
+
+    A recusa também é a posição da parte na rodada: sem ela o gestor ficaria
+    esperando uma manifestação que a parte já deu. Com as duas posições, o
+    gestor decide entre nova rodada e decisão.
 
     Acordo só existe depois de dois aceites independentes sobre exatamente a
     mesma proposta. O hash impede que a proposta seja alterada entre as duas
@@ -274,10 +281,21 @@ def respond_to_conciliation_agreement(
             detail="A proposta mudou depois da primeira manifestação",
         )
     responses = dict(agreement.get("responses") or {})
-    responses[payload.party] = {
-        "accepted": payload.accepted,
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
-    }
+    recorded_at = datetime.now(timezone.utc).isoformat()
+    responses[payload.party] = {"accepted": payload.accepted, "recorded_at": recorded_at}
+    refused_now = payload.accepted is False
+    if refused_now:
+        if payload.reason.strip():
+            responses[payload.party]["reason"] = payload.reason.strip()
+        positions = dict(selected.get("party_positions") or {})
+        if payload.party not in positions:
+            reason = payload.reason.strip()
+            positions[payload.party] = {
+                "text": "Recusou a proposta desta rodada." + (f" Motivo: {reason}" if reason else ""),
+                "waived": False,
+                "recorded_at": recorded_at,
+            }
+            selected["party_positions"] = positions
     complete = all(
         (responses.get(party) or {}).get("accepted") is True
         for party in ("claimant", "respondent")
@@ -304,6 +322,14 @@ def respond_to_conciliation_agreement(
         },
     )
     db.commit()
+    if refused_now and not complete:
+        _conduct_steward(
+            db,
+            get_case(db, case_id),
+            wait=wait,
+            run_model_stages=_model_stages_enabled(x_steward_run_models),
+        )
+        db.expire_all()
     if complete:
         save_steward_state(
             db,

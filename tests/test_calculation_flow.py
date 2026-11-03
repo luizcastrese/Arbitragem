@@ -347,3 +347,50 @@ def test_acceptance_is_bound_to_the_calculation_and_the_record_carries_it(bankin
     assert memory["sha256"] == sha
     assert memory["lines"][-2]["value"] == "R$ 5.177,32"
     assert "SGS 25464" in memory["lines"][1]["source"]
+
+
+def test_refusing_the_proposal_records_the_position_and_wakes_the_steward(banking_case, monkeypatch):
+    client, case_id, _ = banking_case
+    _extract(client, case_id)
+    _correct(client, case_id, **AVERAGE)
+    _lock(client, case_id)
+    _round(client, case_id, monkeypatch, _assessment())
+    refused = client.post(
+        f"/cases/{case_id}/conciliation/1/agreement",
+        json={"party": "claimant", "accepted": False, "reason": "O valor não cobre o seguro."},
+        headers={**actor_headers(case_id, "claimant"), "X-Steward-Run-Models": "0"},
+    )
+    assert refused.status_code == 200, refused.text
+    assert refused.json()["complete"] is False
+    case = client.get(f"/cases/{case_id}").json()
+    rnd = case["conciliation_rounds"][0]
+    assert rnd["agreement"]["responses"]["claimant"] == {
+        "accepted": False,
+        "recorded_at": rnd["agreement"]["responses"]["claimant"]["recorded_at"],
+        "reason": "O valor não cobre o seguro.",
+    }
+    assert "Recusou a proposta" in rnd["party_positions"]["claimant"]["text"]
+    assert "O valor não cobre o seguro." in rnd["party_positions"]["claimant"]["text"]
+    # O gestor passa a esperar só a outra parte.
+    assert "respondent:composicao" in (case["steward"]["waiting_on"] or [])
+    assert "claimant:composicao" not in (case["steward"]["waiting_on"] or [])
+
+
+def test_a_refusal_does_not_overwrite_a_position_already_filed(banking_case, monkeypatch):
+    client, case_id, _ = banking_case
+    _extract(client, case_id)
+    _correct(client, case_id, **AVERAGE)
+    _lock(client, case_id)
+    _round(client, case_id, monkeypatch, _assessment())
+    client.post(
+        f"/cases/{case_id}/conciliation/1/position",
+        json={"party": "claimant", "text": "Quero rever o seguro.", "waived": False},
+        headers={**actor_headers(case_id, "claimant"), "X-Steward-Run-Models": "0"},
+    )
+    client.post(
+        f"/cases/{case_id}/conciliation/1/agreement",
+        json={"party": "claimant", "accepted": False},
+        headers={**actor_headers(case_id, "claimant"), "X-Steward-Run-Models": "0"},
+    )
+    rnd = client.get(f"/cases/{case_id}").json()["conciliation_rounds"][0]
+    assert rnd["party_positions"]["claimant"]["text"] == "Quero rever o seguro."

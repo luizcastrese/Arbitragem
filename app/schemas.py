@@ -202,6 +202,8 @@ class AgreementResponseRequest(BaseModel):
 
     party: str
     accepted: bool
+    # Motivo de uma recusa (opcional). Vira a posição da parte na rodada.
+    reason: str = Field(default="", max_length=2_000)
 
     @field_validator("party")
     @classmethod

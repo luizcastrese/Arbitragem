@@ -38,6 +38,7 @@ import {
   userHasRole
 } from './shared.js'
 import CalculationCard, { CALCULATION_MATTERS, MemoryTable, ProposalPanel } from './Calculation.jsx'
+import { AttachChecklist, BatchContradictory, RefuseProposal } from './Pilot.jsx'
 import { LiveMessage, LoadingState } from './ui.jsx'
 
 // Casca do workspace: lista de casos à esquerda e, à direita, a abertura de um
@@ -283,6 +284,9 @@ function CaseWorkspace({
   setShowTechnical,
   user
 }) {
+  // Modo piloto "acordo rápido": disputa bancária de consumo, acordo primeiro,
+  // sem agenda processual nem detalhes técnicos no caminho principal.
+  const quick = CALCULATION_MATTERS.has(caseData.pathway?.matter_framework_id)
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : stageIndexFor(caseData)
   const endedEarly = EARLY_CLOSE.has(caseData.status) || caseData.procedure_conclusion === 'withdrawn'
@@ -384,6 +388,7 @@ function CaseWorkspace({
       )}
 
       <OperationsCard
+        quick={quick}
         caseData={caseData}
         busy={busy}
         isPending={isPending}
@@ -456,11 +461,17 @@ function CaseWorkspace({
         <AnalysisDetails caseData={caseData} />
       )}
 
-      <TechnicalDetails
-        caseData={caseData}
-        open={showTechnical}
-        setOpen={setShowTechnical}
-      />
+      {quick && !showTechnical ? (
+        <button type="button" className="technical-link" onClick={() => setShowTechnical(true)}>
+          Mostrar detalhes técnicos (hashes, modelos e cadeia de auditoria)
+        </button>
+      ) : (
+        <TechnicalDetails
+          caseData={caseData}
+          open={showTechnical}
+          setOpen={setShowTechnical}
+        />
+      )}
     </>
   )
 }
@@ -807,7 +818,7 @@ function DecisionRecordCard({ caseData, isPending, run }) {
   )
 }
 
-function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders, user }) {
+function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders, user, quick = false }) {
   const [inviteLink, setInviteLink] = useState('')
   const [inviteNotice, setInviteNotice] = useState('')
   const deadlines = caseData.deadlines || []
@@ -885,15 +896,17 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
   }
 
   return (
-    <section className="operations-card">
+    <section className={`operations-card${quick ? ' quick' : ''}`}>
       <div className="card-title-row">
         <div>
-          <span className="section-label">Acesso, agenda e entrega</span>
-          <h3>Condução pelas partes</h3>
+          <span className="section-label">{quick ? 'Convite' : 'Acesso, agenda e entrega'}</span>
+          <h3>{quick ? 'Convide a outra parte' : 'Condução pelas partes'}</h3>
         </div>
-        <button className="button secondary" onClick={downloadReport} disabled={isPending('download:report')}>
-          <Download size={16} /> Baixar relatório Word
-        </button>
+        {!quick && (
+          <button className="button secondary" onClick={downloadReport} disabled={isPending('download:report')}>
+            <Download size={16} /> Baixar relatório Word
+          </button>
+        )}
       </div>
 
       <div className="operations-grid">
@@ -945,29 +958,31 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           {!canConduct && <small>Somente as partes podem criar novos convites.</small>}
         </div>
 
-        <div className="operation-block">
-          <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
-          <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
-          <div className="deadline-list">
-            {deadlines.map((deadline) => (
-              <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
-                <strong>{deadline.label}</strong>
-                <small>{deadline.assigned_to} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
-              </span>
-            ))}
-            {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
+        {!quick && (
+          <div className="operation-block">
+            <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
+            <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
+            <div className="deadline-list">
+              {deadlines.map((deadline) => (
+                <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
+                  <strong>{deadline.label}</strong>
+                  <small>{deadline.assigned_to} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
+                </span>
+              ))}
+              {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
+            </div>
+            {canConduct && <form className="compact-form deadline-form" onSubmit={addDeadline}>
+              <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
+              <select name="assigned_to" defaultValue="all">
+                <option value="all">Todas as pessoas</option>
+                <option value="claimant">Reclamante</option>
+                <option value="respondent">Reclamada</option>
+              </select>
+              <input name="due_at" type="datetime-local" required />
+              <button className="button secondary" disabled={busy}>Adicionar prazo</button>
+            </form>}
           </div>
-          {canConduct && <form className="compact-form deadline-form" onSubmit={addDeadline}>
-            <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
-            <select name="assigned_to" defaultValue="all">
-              <option value="all">Todas as pessoas</option>
-              <option value="claimant">Reclamante</option>
-              <option value="respondent">Reclamada</option>
-            </select>
-            <input name="due_at" type="datetime-local" required />
-            <button className="button secondary" disabled={busy}>Adicionar prazo</button>
-          </form>}
-        </div>
+        )}
       </div>
     </section>
   )
@@ -1219,6 +1234,10 @@ function NextAction({
               />
             </label>
           </div>
+
+          {CALCULATION_MATTERS.has(caseData.pathway?.matter_framework_id) && (
+            <AttachChecklist documents={caseData.documents || []} />
+          )}
 
           <div className="upload-options">
             <label className="upload-option">
@@ -1555,13 +1574,13 @@ function ConciliationActions({
   const latest = rounds[rounds.length - 1] || caseData.conciliation || {}
   const agreement = latest.agreement || { responses: {} }
 
-  function answerAgreement(party, accepted) {
+  function answerAgreement(party, accepted, reason = '') {
     return run(
       accepted ? 'Registrando seu aceite da proposta...' : 'Registrando sua recusa da proposta...',
       () => request(`/cases/${caseData.id}/conciliation/${latest.round_number || rounds.length}/agreement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, party) },
-        body: JSON.stringify({ party, accepted })
+        body: JSON.stringify({ party, accepted, ...(accepted ? {} : { reason }) })
       })
     )
   }
@@ -1614,6 +1633,15 @@ function ConciliationActions({
           </button>
         ))}
       </div>
+      {['claimant', 'respondent'].map((party) => roles[party] && latest.possible_terms?.length > 0 && !agreement.complete && (
+        <RefuseProposal
+          key={`refuse-${party}`}
+          party={party}
+          refused={agreement.responses?.[party]?.accepted === false}
+          disabled={busy || agreement.responses?.[party]?.accepted === true}
+          onRefuse={(who, reason) => answerAgreement(who, false, reason)}
+        />
+      ))}
       <StewardNote caseData={caseData} />
       <small className="consent-note">
         {agreement.complete
@@ -1645,6 +1673,14 @@ function DocumentsCard({
         </div>
         {locked && <span className="locked-badge"><LockKeyhole size={14} /> Conjunto protegido</span>}
       </div>
+      <BatchContradictory
+        caseData={caseData}
+        roles={roles}
+        busy={busy}
+        run={run}
+        request={request}
+        actorHeaders={actorHeaders}
+      />
       <div className="document-list">
         {documents.map((document) => (
           <DocumentEvidenceItem

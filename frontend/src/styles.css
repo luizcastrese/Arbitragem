@@ -1163,3 +1163,31 @@ a.button { text-decoration: none; }
   .fee-row .icon-button { justify-self: end; }
   .calc-actions .button { flex: 1 1 100%; }
 }
+
+/* Modo piloto: acordo rápido */
+.operations-card.quick .operations-grid { grid-template-columns: 1fr; }
+.technical-link { justify-self: start; padding: 6px 0; color: var(--muted); background: none; border: 0; border-bottom: 1px solid currentColor; font-size: 13px; font-weight: 600; text-align: left; }
+.technical-link:hover { color: var(--green-700); }
+.attach-checklist, .batch-card { display: grid; gap: 12px; padding: 18px; background: #fffdf7; border: 1px solid #e4dcc8; border-radius: 16px; }
+.attach-title { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14.5px; }
+.attach-checklist ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.attach-checklist li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.attach-checklist li:first-child { border-top: 0; }
+.attach-checklist li strong { display: block; font-size: 14px; }
+.attach-checklist li small { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.attach-mark { width: 24px; height: 24px; display: grid; place-items: center; color: var(--muted); background: #eee7d4; border-radius: 50%; }
+.attach-checklist li.done .attach-mark { color: white; background: #3f8a52; }
+.attach-manual { font-size: 12.5px; font-weight: 600; }
+.batch-card p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+.batch-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13.5px; font-weight: 600; }
+.batch-row > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.refuse-box { display: grid; gap: 10px; padding: 16px; background: #fff8f6; border: 1px solid #efcfcc; border-radius: 14px; font-size: 14px; line-height: 1.55; }
+.refuse-box ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: #3e4b63; }
+.refuse-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.refused-note { display: flex; align-items: flex-start; gap: 6px; color: var(--danger); }
+.refused-note svg { flex: none; margin-top: 3px; }
+@media (max-width: 640px) {
+  .attach-checklist li { grid-template-columns: auto minmax(0, 1fr); }
+  .attach-manual { grid-column: 2; }
+  .batch-row > div .button, .refuse-actions .button { flex: 1 1 100%; }
+}
