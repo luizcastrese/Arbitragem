@@ -3,6 +3,23 @@
 export const API_BASE = import.meta.env.VITE_API_BASE
   || (window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin)
 
+// E-mail de contato e de privacidade exibido no site. Configure no build com
+// VITE_CONTACT_EMAIL; sem a variável, vale o padrão abaixo.
+export const CONTACT_EMAIL = (import.meta.env.VITE_CONTACT_EMAIL || '').trim() || 'alugai.adm@gmail.com'
+
+// Quem vê o selo de ambiente (IA configurada / modo demonstração): ambiente de
+// desenvolvimento, ou usuário logado marcado como administrador
+// (`is_admin` na conta ou e-mail em VITE_ADMIN_EMAILS, separados por vírgula).
+// É só exibição; não dá acesso a nada.
+const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || '')
+  .split(',').map((item) => item.trim().toLowerCase()).filter(Boolean)
+
+export function canSeeSystemBadge(user) {
+  if (import.meta.env.DEV) return true
+  if (!user) return false
+  return user.is_admin === true || ADMIN_EMAILS.includes(String(user.email || '').toLowerCase())
+}
+
 export function formatApiDetail(detail, fallback = 'Erro inesperado') {
   if (typeof detail === 'string' && detail.trim()) return detail
   if (Array.isArray(detail)) {

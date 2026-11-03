@@ -750,15 +750,17 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #0e
   align-items: flex-start;
 }
 .legal-reader-heading h2 { margin: 4px 0 0; font-size: 22px; }
-.legal-footer {
+.legal-footer { color: var(--muted); font-size: 12.5px; }
+.legal-footer-inner {
+  max-width: 1240px;
+  margin: auto;
+  padding: 8px 24px 32px;
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 8px 16px;
   align-items: center;
-  padding: 8px 24px 32px;
-  color: var(--muted);
-  font-size: 12.5px;
 }
+.legal-footer a { color: var(--green-700); font-weight: 600; }
 .legal-footer button {
   background: none;
   border: 0;
