@@ -107,7 +107,7 @@ export default function Workspace({
 
       <div className="main-content">
         {showCreate ? (
-          <CreateCase busy={creating} error={createError} onSubmit={createCase} onCancel={
+          <CreateCase busy={creating} error={createError} onSubmit={createCase} unverifiedEmail={caseProps.user?.email_verified === false ? caseProps.user.email : ''} onCancel={
             cases.length ? () => setShowCreate(false) : null
           } />
         ) : caseData ? (
@@ -120,7 +120,7 @@ export default function Workspace({
   )
 }
 
-function CreateCase({ busy, error, onSubmit, onCancel }) {
+function CreateCase({ busy, error, onSubmit, onCancel, unverifiedEmail = '' }) {
   const [matterId, setMatterId] = useState(MATTERS[0].id)
   const [entryPoint, setEntryPoint] = useState('pre_litigation')
   const [creatorRole, setCreatorRole] = useState('claimant')
@@ -223,13 +223,22 @@ function CreateCase({ busy, error, onSubmit, onCancel }) {
           </>
         )}
 
+        {unverifiedEmail && (
+          <div className="full-row auth-callout" role="note">
+            <Info size={16} aria-hidden="true" />
+            <span>
+              Confirme seu e-mail antes de abrir o caso. Enviamos um link para {unverifiedEmail};
+              use "Reenviar link" no aviso acima se ele não chegou.
+            </span>
+          </div>
+        )}
         <div className="full-row"><LiveMessage type="error" text={error} /></div>
 
         <div className="form-actions">
           {onCancel && (
             <button type="button" className="button ghost" onClick={onCancel}>Cancelar</button>
           )}
-          <button className="button primary" disabled={busy}>
+          <button className="button primary" disabled={busy || Boolean(unverifiedEmail)}>
             Criar caso e adicionar documentos <ArrowRight size={17} />
           </button>
         </div>

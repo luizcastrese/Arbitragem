@@ -10,7 +10,8 @@ import {
   formatApiDetail,
   statusLabels
 } from './shared.js'
-import { LiveMessage, LoadingState, ProcessingCard, useFocusTrap } from './ui.jsx'
+import { InviteDialog, LeadDialog } from './Dialogs.jsx'
+import { LiveMessage, LoadingState, Modal, ProcessingCard } from './ui.jsx'
 
 // A landing e o workspace são chunks separados: quem chega sem conta só baixa a
 // apresentação, e quem já está logado não baixa a landing.
@@ -49,6 +50,12 @@ export default function App() {
   const [user, setUser] = useState(null)
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState('register')
+  // De onde o acesso foi aberto: muda o texto (abrir caso, convite recebido).
+  const [authContext, setAuthContext] = useState('default')
+  const [showInvite, setShowInvite] = useState(false)
+  const [showLead, setShowLead] = useState(false)
+  const [leadSent, setLeadSent] = useState(false)
+  const [leadError, setLeadError] = useState('')
   const [inviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') || '')
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '')
   const [terms, setTerms] = useState(null)
@@ -134,7 +141,8 @@ export default function App() {
           setStatus('Acesso confirmado. Seus casos e convites estão protegidos pela sua conta.')
         }
         await loadCases()
-        // Quem entrou para abrir um caso cai direto no formulário.
+        // Quem entrou para abrir um caso cai direto no formulário, desde que o
+        // e-mail já esteja confirmado; senão o aviso de confirmação vem antes.
         if (pendingStart) {
           setPendingStart(false)
           setShowCreate(true)
@@ -508,9 +516,45 @@ export default function App() {
     })
   }
 
-  function openAuth(mode = 'login') {
+  function openAuth(mode = 'login', context = 'default') {
     setAuthMode(mode)
+    setAuthContext(context)
+    setShowInvite(false)
     setShowAuth(true)
+  }
+
+  function openInvite() {
+    setShowInvite(true)
+  }
+
+  function openLead() {
+    setLeadSent(false)
+    setLeadError('')
+    setShowLead(true)
+  }
+
+  function submitLead(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    return track('lead', async () => {
+      setLeadError('')
+      try {
+        await request('/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: form.get('name'),
+            company: form.get('company'),
+            email: form.get('email'),
+            monthly_volume: Number(form.get('monthly_volume') || 0),
+            website: form.get('website') || ''
+          })
+        })
+        setLeadSent(true)
+      } catch (err) {
+        setLeadError(err.message)
+      }
+    })
   }
 
   function startNewCase() {
@@ -519,7 +563,7 @@ export default function App() {
     if (!user) {
       // Criar um caso exige conta: abre o acesso e retoma o formulário depois.
       setPendingStart(true)
-      openAuth('register')
+      openAuth('register', 'start')
       return
     }
     setShowCreate(true)
@@ -578,7 +622,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                <button type="button" className="topbar-link" onClick={() => openAuth('login')}>
+                <button type="button" className="topbar-link" onClick={openInvite}>
                   Recebi um convite
                 </button>
                 <button type="button" className="button ghost compact" onClick={() => openAuth('login')} aria-label="Entrar">
@@ -596,7 +640,7 @@ export default function App() {
       <main className="page">
         {!user && (
           <Suspense fallback={<div className="landing-fallback" aria-busy="true" />}>
-            <Landing onStart={startNewCase} />
+            <Landing onStart={startNewCase} onLead={openLead} />
           </Suspense>
         )}
 
@@ -638,9 +682,10 @@ export default function App() {
         )}
 
         {showAuth && !resetToken && (
-          <AuthDialog onClose={closeAuth}>
+          <Modal onClose={closeAuth} labelledBy="auth-dialog-title">
             <AuthPanel
               mode={authMode}
+              context={authContext}
               setMode={setAuthMode}
               busy={isPending('auth')}
               error={error}
@@ -650,7 +695,27 @@ export default function App() {
               privacy={privacy}
               onOpenLegal={setLegalView}
             />
-          </AuthDialog>
+          </Modal>
+        )}
+
+        {showInvite && !user && (
+          <InviteDialog
+            hasToken={Boolean(inviteToken)}
+            onClose={() => setShowInvite(false)}
+            onLogin={() => openAuth('login', 'invite')}
+            onRegister={() => openAuth('register', 'invite')}
+          />
+        )}
+
+        {showLead && (
+          <LeadDialog
+            sent={leadSent}
+            pending={isPending('lead')}
+            error={leadError}
+            onSubmit={submitLead}
+            onClose={() => setShowLead(false)}
+            onOpenPrivacy={() => { setShowLead(false); setLegalView('privacy') }}
+          />
         )}
 
         {inviteToken && (
@@ -763,25 +828,6 @@ export default function App() {
   )
 }
 
-// Diálogo modal do acesso: foco preso, Esc fecha, rótulo vem do título do painel.
-function AuthDialog({ onClose, children }) {
-  const dialogRef = useFocusTrap(true, onClose)
-  return (
-    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div
-        className="dialog"
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="auth-dialog-title"
-        tabIndex={-1}
-      >
-        {children}
-      </div>
-    </div>
-  )
-}
-
 const AUTH_COPY = {
   register: {
     title: 'Crie sua conta',
@@ -800,14 +846,44 @@ const AUTH_COPY = {
   }
 }
 
-function AuthPanel({ mode, setMode, busy, error, onSubmit, onClose, terms, privacy, onOpenLegal }) {
-  const copy = AUTH_COPY[mode] || AUTH_COPY.login
+// Variações do texto por origem: quem vem de "abrir um caso" ou de um convite
+// precisa saber o que vem depois do cadastro.
+const AUTH_CONTEXT_COPY = {
+  start: {
+    register: {
+      title: 'Crie sua conta para abrir o caso',
+      description: 'Para abrir o caso você precisa de uma conta. Depois do cadastro enviamos um link para confirmar seu e-mail; sem a confirmação não é possível abrir o caso nem anexar documentos.'
+    },
+    login: {
+      title: 'Entre para abrir o caso',
+      description: 'Entre com a conta que você já tem. Se o e-mail ainda não foi confirmado, confirme-o antes de abrir o caso.'
+    }
+  },
+  invite: {
+    register: {
+      title: 'Crie a conta com o e-mail do convite',
+      description: 'Use o mesmo e-mail que recebeu o convite: ele vale só para esse endereço. Depois do cadastro, abra o link do convite para vincular o caso à conta.'
+    },
+    login: {
+      title: 'Entre com o e-mail do convite',
+      description: 'Use a conta cadastrada com o mesmo e-mail que recebeu o convite: ele vale só para esse endereço.'
+    }
+  }
+}
+
+function AuthPanel({ mode, context = 'default', setMode, busy, error, onSubmit, onClose, terms, privacy, onOpenLegal }) {
+  const copy = { ...(AUTH_COPY[mode] || AUTH_COPY.login), ...(AUTH_CONTEXT_COPY[context]?.[mode] || {}) }
   return (
     <section className="auth-panel">
       <div>
         <span className="section-label">Acesso protegido</span>
         <h2 id="auth-dialog-title">{copy.title}</h2>
         <p>{copy.description}</p>
+        {mode === 'register' && (
+          <p className="auth-callout" role="note">
+            <Mail size={16} aria-hidden="true" /> Você vai precisar confirmar o e-mail: enviamos um link logo após o cadastro.
+          </p>
+        )}
         {mode === 'register' && (
           <p className="auth-legal">
             Ao criar a conta você declara ter lido os{' '}

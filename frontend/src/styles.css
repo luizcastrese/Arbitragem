@@ -1092,3 +1092,27 @@ a.button { text-decoration: none; }
 .counsel-field { align-content: start; }
 .check-line { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
 .check-line input { width: 18px; min-height: 0; height: 18px; accent-color: var(--ink); }
+
+/* Diálogos */
+.overlay .dialog-wide { max-width: 880px; }
+.overlay .dialog-narrow { max-width: 520px; }
+.dialog-card { position: relative; padding: 32px; background: white; border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow-raised); }
+.dialog-close { position: absolute; top: 14px; right: 14px; width: 36px; height: 36px; display: grid; place-items: center; color: var(--muted); background: var(--green-50); border: 0; border-radius: 50%; }
+.dialog-close:hover { color: var(--ink); }
+.dialog-body { display: grid; gap: 12px; }
+.dialog-body h2 { margin: 2px 0 0; padding-right: 36px; font-family: var(--font-display); font-size: 28px; font-weight: 400; line-height: 1.15; }
+.dialog-body > p { margin: 0; color: var(--muted); line-height: 1.6; font-size: 14.5px; }
+.dialog-steps { display: grid; gap: 8px; margin: 4px 0; padding-left: 20px; color: #3e4b63; font-size: 14.5px; line-height: 1.55; }
+.dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 6px; }
+.dialog-alt { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; color: var(--green-700); font-size: 13px; font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.dialog-fine { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.hp-field { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.auth-callout { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 10px 12px; color: #73500d; background: var(--warning-bg); border: 1px solid #eeddb7; border-radius: 10px; font-size: 13px; line-height: 1.45; }
+.auth-callout svg { flex: none; margin-top: 2px; }
+.pilot-actions { display: grid; gap: 12px; justify-items: start; }
+.pilot-mail { display: inline-flex; align-items: center; gap: 6px; color: #3e4b63; font-size: 14px; overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .dialog-card { padding: 22px 18px; }
+  .dialog-actions .button { flex: 1 1 100%; }
+  .dialog-alt { flex: 1 1 100%; margin-right: 0; }
+}

@@ -486,3 +486,20 @@ class SettlementPayment(Base):
     updated_at = Column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )
+
+
+class PilotLead(Base):
+    """Interesse de banco ou escritório no piloto, vindo da landing."""
+
+    __tablename__ = "pilot_leads"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    company = Column(String, nullable=False)
+    email = Column(String, nullable=False, index=True)
+    monthly_volume = Column(Integer, nullable=False, default=0)
+    source = Column(String, nullable=False, default="landing")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    # Resultado do aviso por e-mail ao time (delivered, logged, failed).
+    notification_status = Column(String, nullable=True)
+    notified_at = Column(DateTime(timezone=True), nullable=True)

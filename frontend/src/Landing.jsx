@@ -127,12 +127,12 @@ const HERO_FACTS = [
   { value: '1', label: 'auto assinado ao final' }
 ]
 
-export default function Landing({ onStart }) {
+export default function Landing({ onStart, onLead }) {
   const pilotHref = `mailto:${PILOT_EMAIL}?subject=${encodeURIComponent('Piloto Valinor')}&body=${encodeURIComponent('Olá! Quero testar a Valinor com os meus processos.')}`
 
   return (
     <div className="landing">
-      <Hero onStart={onStart} />
+      <Hero onStart={onStart} onLead={onLead} />
       <ExampleCalc />
       <HowItWorks />
       <Pathways />
@@ -140,12 +140,12 @@ export default function Landing({ onStart }) {
       <ScopeCompare />
       <Cost />
       <Principles />
-      <PilotBand href={pilotHref} />
+      <PilotBand href={pilotHref} onLead={onLead} />
     </div>
   )
 }
 
-function Hero({ onStart }) {
+function Hero({ onStart, onLead }) {
   return (
     <section className="intro" aria-labelledby="landing-title">
       <div className="intro-copy">
@@ -156,9 +156,9 @@ function Hero({ onStart }) {
           os cálculos visíveis para os dois lados.
         </p>
         <div className="intro-actions">
-          <a className="button gold" href="#piloto">
+          <button type="button" className="button gold" onClick={onLead}>
             Sou banco ou escritório <ArrowRight size={17} />
-          </a>
+          </button>
           <button type="button" className="button ghost-light" onClick={onStart}>
             Sou parte ou advogado do autor
           </button>
@@ -422,7 +422,7 @@ function Principles() {
   )
 }
 
-function PilotBand({ href }) {
+function PilotBand({ href, onLead }) {
   return (
     <section className="closing-band" id="piloto" aria-labelledby="pilot-title">
       <div>
@@ -432,9 +432,14 @@ function PilotBand({ href }) {
           vista e um auto que diz o que é e o que faz.
         </p>
       </div>
-      <a className="button gold" href={href}>
-        <Mail size={17} /> Falar sobre o piloto
-      </a>
+      <div className="pilot-actions">
+        <button type="button" className="button gold" onClick={onLead}>
+          <ArrowRight size={17} /> Falar sobre o piloto
+        </button>
+        <a className="pilot-mail" href={href}>
+          <Mail size={15} /> ou escreva para {PILOT_EMAIL}
+        </a>
+      </div>
     </section>
   )
 }

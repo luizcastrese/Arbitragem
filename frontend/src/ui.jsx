@@ -127,3 +127,23 @@ export function useFocusTrap(active, onEscape) {
 
   return containerRef
 }
+
+// Diálogo modal: fundo escurecido, foco preso, Esc e clique fora fecham, e o
+// rótulo vem do título (`labelledBy`) que o conteúdo renderiza.
+export function Modal({ onClose, labelledBy, children, size = 'wide' }) {
+  const dialogRef = useFocusTrap(true, onClose)
+  return (
+    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div
+        className={`dialog dialog-${size}`}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        tabIndex={-1}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}

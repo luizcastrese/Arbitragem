@@ -54,6 +54,8 @@ AUTH_RATE_LIMITED_PATHS = {
     "/auth/verify-email/resend",
     "/auth/password-reset",
     "/auth/password-reset/confirm",
+    # Formulário público do piloto: mesmo teto estreito das rotas de credencial.
+    "/leads",
 }
 
 

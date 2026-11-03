@@ -388,3 +388,16 @@ class AttestationVerifyRequest(BaseModel):
 class DecisionRecordVerifyRequest(BaseModel):
     record: dict
     public_key_b64: str = ""
+
+
+class LeadRequest(BaseModel):
+    """Contato de banco ou escritório interessado no piloto."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+    name: str = Field(min_length=2, max_length=120)
+    company: str = Field(min_length=2, max_length=160)
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    # Processos novos por mês, em números: serve para dimensionar o piloto.
+    monthly_volume: int = Field(ge=0, le=10_000_000)
+    # Campo-isca: um navegador de verdade deixa vazio.
+    website: str = Field(default="", max_length=200)
