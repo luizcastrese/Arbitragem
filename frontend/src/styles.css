@@ -1088,3 +1088,7 @@ a.button { text-decoration: none; }
   .topbar-actions { gap: 8px; }
   .topbar-link { font-size: 12px; }
 }
+
+.counsel-field { align-content: start; }
+.check-line { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.check-line input { width: 18px; min-height: 0; height: 18px; accent-color: var(--ink); }

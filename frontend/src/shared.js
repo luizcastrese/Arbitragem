@@ -171,3 +171,17 @@ export const STAGE_PROCESSING_STATUS = {
   attestation: 'processing_attestation',
   appeal: 'processing_appeal'
 }
+
+export const ROLE_LABELS = {
+  claimant: 'Reclamante',
+  respondent: 'Reclamada',
+  arbitrator: 'Árbitro'
+}
+
+export function roleLabel(role) {
+  return ROLE_LABELS[role] || role
+}
+
+export function oppositeRole(role) {
+  return role === 'respondent' ? 'claimant' : 'respondent'
+}

@@ -81,6 +81,26 @@ class CreateCaseRequest(BaseModel):
     matter_framework_id: Optional[str] = Field(default=None, max_length=80)
     # Em relação de consumo, qual parte é o consumidor.
     consumer_party: Optional[str] = Field(default=None, max_length=20)
+    # Parte em que o criador atua: reclamante (padrão) ou reclamada. O convidado
+    # recebe o papel oposto.
+    creator_role: str = Field(default="claimant", max_length=20)
+    # Indicação opcional de que o criador atua como advogado da parte, com a
+    # OAB. Não cria papel novo: o criador segue como reclamante ou reclamada.
+    acting_as_counsel: bool = False
+    counsel_bar_number: Optional[str] = Field(default=None, max_length=30)
+
+    @field_validator("creator_role")
+    @classmethod
+    def creator_role_must_be_a_party(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("creator_role must be claimant or respondent")
+        return value
+
+    @model_validator(mode="after")
+    def counsel_needs_a_bar_number(self):
+        if self.acting_as_counsel and not (self.counsel_bar_number or "").strip():
+            raise ValueError("Informe a OAB de quem atua como advogado da parte")
+        return self
 
 
 class AddDocumentRequest(BaseModel):

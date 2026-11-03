@@ -439,6 +439,10 @@ export default function App() {
             respondent: form.get('respondent'),
             matter_framework_id: form.get('matter_framework_id'),
             entry_point: form.get('entry_point'),
+            creator_role: form.get('creator_role') || 'claimant',
+            ...(form.get('acting_as_counsel')
+              ? { acting_as_counsel: true, counsel_bar_number: form.get('counsel_bar_number') }
+              : {}),
             ...(form.get('entry_point') === 'pending_lawsuit'
               ? { lawsuit_number: form.get('lawsuit_number'), court: form.get('court') }
               : {}),

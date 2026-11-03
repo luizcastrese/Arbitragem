@@ -112,6 +112,10 @@ def create_case(
             lawsuit_number=payload.lawsuit_number,
             court=payload.court,
             consumer_party=payload.consumer_party,
+            creator_role=payload.creator_role,
+            counsel_bar_number=(
+                payload.counsel_bar_number if payload.acting_as_counsel else None
+            ),
         )
     except PathwayError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -131,8 +135,9 @@ def create_case(
         pathway=pathway,
     )
     if user:
-        # Quem abre o caso entra como parte reclamante. O gestor é a IA.
-        add_member(db, case.id, user.id, "claimant")
+        # Quem abre o caso entra na parte que escolheu (reclamante por padrão);
+        # o convidado recebe a oposta. O gestor é a IA.
+        add_member(db, case.id, user.id, payload.creator_role)
         db.expire_all()
         case = get_case(db, case.id)
     result = case_to_dict(case, include_content=False, include_embeddings=False)

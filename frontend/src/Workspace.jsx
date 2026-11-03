@@ -30,6 +30,8 @@ import {
   MATTERS,
   formatApiDetail,
   invitationDeliveryMessage,
+  oppositeRole,
+  roleLabel,
   stageIndexFor,
   statusLabels,
   steps,
@@ -121,6 +123,8 @@ export default function Workspace({
 function CreateCase({ busy, error, onSubmit, onCancel }) {
   const [matterId, setMatterId] = useState(MATTERS[0].id)
   const [entryPoint, setEntryPoint] = useState('pre_litigation')
+  const [creatorRole, setCreatorRole] = useState('claimant')
+  const [actingAsCounsel, setActingAsCounsel] = useState(false)
   const matter = MATTERS.find((item) => item.id === matterId)
   return (
     <section className="surface create-surface">
@@ -154,6 +158,31 @@ function CreateCase({ busy, error, onSubmit, onCancel }) {
           <small>A outra parte, que responderá ao caso.</small>
           <input name="respondent" placeholder="Ex.: Banco Exemplo S.A." required minLength="2" />
         </label>
+        <label className="field">
+          <span>Você atua como</span>
+          <small>O convidado recebe o papel oposto.</small>
+          <select name="creator_role" value={creatorRole} onChange={(event) => setCreatorRole(event.target.value)}>
+            <option value="claimant">Reclamante (quem abre a reclamação)</option>
+            <option value="respondent">Reclamada (a outra parte)</option>
+          </select>
+        </label>
+        <div className="field counsel-field">
+          <label className="check-line">
+            <input
+              type="checkbox"
+              name="acting_as_counsel"
+              checked={actingAsCounsel}
+              onChange={(event) => setActingAsCounsel(event.target.checked)}
+            />
+            <span>Atuo como advogado(a) desta parte</span>
+          </label>
+          {actingAsCounsel && (
+            <>
+              <small>Informe a OAB. Ela fica registrada no caso; você segue como {creatorRole === 'claimant' ? 'reclamante' : 'reclamada'} no procedimento.</small>
+              <input name="counsel_bar_number" placeholder="OAB/SP 123456" required maxLength="30" autoComplete="off" />
+            </>
+          )}
+        </div>
         <label className="field">
           <span>Matéria</span>
           <small>Define as regras aplicadas, as exclusões e o limite de valor.</small>
@@ -748,6 +777,9 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
   const participants = caseData.participants || []
   const pendingInvites = (caseData.invitations || []).filter((item) => item.status === 'pending')
   const canConduct = userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
+  // O convidado recebe, por padrão, o papel oposto ao de quem convida.
+  const myRole = userHasRole(caseData, user, 'respondent') ? 'respondent' : 'claimant'
+  const counsel = caseData.pathway?.counsel || {}
 
   async function invite(event) {
     event.preventDefault()
@@ -833,14 +865,17 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
           {participants.map((participant) => (
             <span className="participant-row" key={`${participant.email}-${participant.role}`}>
-              <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
+              <strong>{participant.display_name}</strong> {roleLabel(participant.role)} · {participant.email}
+              {counsel[participant.role]?.bar_number && (
+                <small> · advogado(a) da parte, {counsel[participant.role].bar_number}</small>
+              )}
             </span>
           ))}
           {pendingInvites.map((invitation) => (
             <span className="participant-row pending-invite" key={invitation.id}>
               <span>
                 <strong>{invitation.email}</strong>
-                <small>{invitation.role} · convite pendente</small>
+                <small>{roleLabel(invitation.role)} · convite pendente</small>
               </span>
               {canConduct && (
                 <button
@@ -856,7 +891,7 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           ))}
           {canConduct && <form className="compact-form" onSubmit={invite}>
             <input name="email" type="email" required placeholder="E-mail da parte" />
-            <select name="role" defaultValue="respondent">
+            <select name="role" defaultValue={oppositeRole(myRole)} key={myRole}>
               <option value="claimant">Reclamante</option>
               <option value="respondent">Reclamada</option>
               <option value="arbitrator">Árbitro</option>
