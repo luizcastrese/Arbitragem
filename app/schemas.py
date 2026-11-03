@@ -81,6 +81,26 @@ class CreateCaseRequest(BaseModel):
     matter_framework_id: Optional[str] = Field(default=None, max_length=80)
     # Em relação de consumo, qual parte é o consumidor.
     consumer_party: Optional[str] = Field(default=None, max_length=20)
+    # Parte em que o criador atua: reclamante (padrão) ou reclamada. O convidado
+    # recebe o papel oposto.
+    creator_role: str = Field(default="claimant", max_length=20)
+    # Indicação opcional de que o criador atua como advogado da parte, com a
+    # OAB. Não cria papel novo: o criador segue como reclamante ou reclamada.
+    acting_as_counsel: bool = False
+    counsel_bar_number: Optional[str] = Field(default=None, max_length=30)
+
+    @field_validator("creator_role")
+    @classmethod
+    def creator_role_must_be_a_party(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("creator_role must be claimant or respondent")
+        return value
+
+    @model_validator(mode="after")
+    def counsel_needs_a_bar_number(self):
+        if self.acting_as_counsel and not (self.counsel_bar_number or "").strip():
+            raise ValueError("Informe a OAB de quem atua como advogado da parte")
+        return self
 
 
 class AddDocumentRequest(BaseModel):
@@ -182,6 +202,8 @@ class AgreementResponseRequest(BaseModel):
 
     party: str
     accepted: bool
+    # Motivo de uma recusa (opcional). Vira a posição da parte na rodada.
+    reason: str = Field(default="", max_length=2_000)
 
     @field_validator("party")
     @classmethod
@@ -368,3 +390,58 @@ class AttestationVerifyRequest(BaseModel):
 class DecisionRecordVerifyRequest(BaseModel):
     record: dict
     public_key_b64: str = ""
+
+
+class LeadRequest(BaseModel):
+    """Contato de banco ou escritório interessado no piloto."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+    name: str = Field(min_length=2, max_length=120)
+    company: str = Field(min_length=2, max_length=160)
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    # Processos novos por mês, em números: serve para dimensionar o piloto.
+    monthly_volume: int = Field(ge=0, le=10_000_000)
+    # Campo-isca: um navegador de verdade deixa vazio.
+    website: str = Field(default="", max_length=200)
+
+
+class CalculationExtractRequest(BaseModel):
+    party: str
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
+class RateSourceInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    name: str = Field(default="", max_length=200)
+    series: str = Field(default="", max_length=40)
+    reference_date: str = Field(default="", max_length=10)
+    url: str = Field(default="", max_length=300)
+
+
+class FeeInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+    name: str = Field(max_length=160)
+    amount: str = Field(max_length=40)
+    questionable: bool = True
+    reason: str = Field(default="", max_length=400)
+
+
+class CalculationInputsRequest(CalculationExtractRequest):
+    """Correções de uma parte nos dados do cálculo. Só os campos enviados mudam."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    principal: Optional[str] = Field(default=None, max_length=40)
+    installments: Optional[str] = Field(default=None, max_length=10)
+    contract_rate_monthly: Optional[str] = Field(default=None, max_length=20)
+    contract_rate_annual: Optional[str] = Field(default=None, max_length=20)
+    paid_installments: Optional[str] = Field(default=None, max_length=10)
+    average_rate_monthly: Optional[str] = Field(default=None, max_length=20)
+    average_rate_source: Optional[RateSourceInput] = None
+    interest_adjustment_applies: Optional[bool] = None
+    fees: Optional[List[FeeInput]] = Field(default=None, max_length=30)

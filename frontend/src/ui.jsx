@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, LoaderCircle } from 'lucide-react'
+import { GLOSSARY } from './shared.js'
 
 // Ícone de loading: gira por CSS (.spin). Com prefers-reduced-motion o giro
 // para, e o texto ao lado continua dizendo que algo está em andamento.
@@ -75,6 +76,9 @@ export function ProcessingCard({ title, detail, startedAt }) {
   )
 }
 
+// Pilha de diálogos abertos: só o de cima prende o foco e responde ao Esc.
+const trapStack = []
+
 const FOCUSABLE = [
   'a[href]', 'button:not([disabled])', 'input:not([disabled])', 'select:not([disabled])',
   'textarea:not([disabled])', '[tabindex]:not([tabindex="-1"])'
@@ -92,12 +96,14 @@ export function useFocusTrap(active, onEscape) {
     if (!active) return undefined
     const container = containerRef.current
     const previous = document.activeElement
+    trapStack.push(container)
     const items = () => Array.from(container?.querySelectorAll(FOCUSABLE) || [])
       .filter((node) => node.offsetParent !== null || node === document.activeElement)
     const target = container?.querySelector('input:not([disabled])') || items()[0] || container
     target?.focus()
 
     function onKey(event) {
+      if (trapStack[trapStack.length - 1] !== container) return
       if (event.key === 'Escape') {
         escapeRef.current?.()
         return
@@ -121,9 +127,68 @@ export function useFocusTrap(active, onEscape) {
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('keydown', onKey)
+      const position = trapStack.lastIndexOf(container)
+      if (position >= 0) trapStack.splice(position, 1)
       if (previous && typeof previous.focus === 'function') previous.focus()
     }
   }, [active])
 
   return containerRef
+}
+
+// Diálogo modal: fundo escurecido, foco preso, Esc e clique fora fecham, e o
+// rótulo vem do título (`labelledBy`) que o conteúdo renderiza.
+export function Modal({ onClose, labelledBy, children, size = 'wide' }) {
+  const dialogRef = useFocusTrap(true, onClose)
+  return (
+    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div
+        className={`dialog dialog-${size}`}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        tabIndex={-1}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// Termo do procedimento com explicação curta. Abre ao passar o mouse, ao focar
+// ou ao tocar; Esc fecha. O texto vem de GLOSSARY.
+export function Term({ k, children }) {
+  const id = useId()
+  const wrapper = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [alignRight, setAlignRight] = useState(false)
+  const text = GLOSSARY[k]
+  if (!text) return children
+
+  function show() {
+    const box = wrapper.current?.getBoundingClientRect()
+    setAlignRight(Boolean(box) && box.left > window.innerWidth / 2)
+    setOpen(true)
+  }
+
+  return (
+    <span className="term" ref={wrapper} onMouseEnter={show} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        className="term-button"
+        aria-describedby={open ? id : undefined}
+        aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : show())}
+        onFocus={show}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}
+      >
+        {children}
+      </button>
+      {open && (
+        <span role="tooltip" id={id} className={`term-tip${alignRight ? ' right' : ''}`}>{text}</span>
+      )}
+    </span>
+  )
 }

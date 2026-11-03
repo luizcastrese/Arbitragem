@@ -41,6 +41,8 @@ def root():
         "openai_enabled": ctx.settings.openai_enabled,
         "openrouter_enabled": ctx.settings.openrouter_enabled,
         "llm_enabled": ctx.settings.llm_enabled,
+        # A interface só menciona pagamento quando a instância o habilita.
+        "payments_enabled": get_settings().payments_enabled,
         "auth_required": ctx.settings.auth_required,
         "mission": (
             "Tirar conflitos da Justiça: acordo primeiro e, sem acordo, "

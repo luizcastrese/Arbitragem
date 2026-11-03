@@ -28,6 +28,7 @@ def _prompt_policy() -> Dict:
     from app.agents import (  # noqa: F401
         appeal,
         conciliator,
+        extractor,
         judge,
         organizer,
         reviewer,

@@ -30,12 +30,19 @@ import {
   MATTERS,
   formatApiDetail,
   invitationDeliveryMessage,
+  matterLabel,
+  oppositeRole,
+  roleLabel,
   stageIndexFor,
   statusLabels,
   steps,
   userHasRole
 } from './shared.js'
-import { LiveMessage, LoadingState } from './ui.jsx'
+import PaymentCard from './Payment.jsx'
+import CalculationCard, { CALCULATION_MATTERS, MemoryTable, ProposalPanel } from './Calculation.jsx'
+import { AttachChecklist, BatchContradictory, RefuseProposal } from './Pilot.jsx'
+import Markdown from './Markdown.jsx'
+import { LiveMessage, LoadingState, Term } from './ui.jsx'
 
 // Casca do workspace: lista de casos à esquerda e, à direita, a abertura de um
 // caso novo ou o caso selecionado. Carregada sob demanda (React.lazy) só depois
@@ -105,7 +112,7 @@ export default function Workspace({
 
       <div className="main-content">
         {showCreate ? (
-          <CreateCase busy={creating} error={createError} onSubmit={createCase} onCancel={
+          <CreateCase busy={creating} error={createError} onSubmit={createCase} unverifiedEmail={caseProps.user?.email_verified === false ? caseProps.user.email : ''} onCancel={
             cases.length ? () => setShowCreate(false) : null
           } />
         ) : caseData ? (
@@ -118,9 +125,11 @@ export default function Workspace({
   )
 }
 
-function CreateCase({ busy, error, onSubmit, onCancel }) {
+function CreateCase({ busy, error, onSubmit, onCancel, unverifiedEmail = '' }) {
   const [matterId, setMatterId] = useState(MATTERS[0].id)
   const [entryPoint, setEntryPoint] = useState('pre_litigation')
+  const [creatorRole, setCreatorRole] = useState('claimant')
+  const [actingAsCounsel, setActingAsCounsel] = useState(false)
   const matter = MATTERS.find((item) => item.id === matterId)
   return (
     <section className="surface create-surface">
@@ -154,6 +163,31 @@ function CreateCase({ busy, error, onSubmit, onCancel }) {
           <small>A outra parte, que responderá ao caso.</small>
           <input name="respondent" placeholder="Ex.: Banco Exemplo S.A." required minLength="2" />
         </label>
+        <label className="field">
+          <span>Você atua como</span>
+          <small>O convidado recebe o papel oposto.</small>
+          <select name="creator_role" value={creatorRole} onChange={(event) => setCreatorRole(event.target.value)}>
+            <option value="claimant">Reclamante (quem abre a reclamação)</option>
+            <option value="respondent">Reclamada (a outra parte)</option>
+          </select>
+        </label>
+        <div className="field counsel-field">
+          <label className="check-line">
+            <input
+              type="checkbox"
+              name="acting_as_counsel"
+              checked={actingAsCounsel}
+              onChange={(event) => setActingAsCounsel(event.target.checked)}
+            />
+            <span>Atuo como advogado(a) desta parte</span>
+          </label>
+          {actingAsCounsel && (
+            <>
+              <small>Informe a OAB. Ela fica registrada no caso; você segue como {creatorRole === 'claimant' ? 'reclamante' : 'reclamada'} no procedimento.</small>
+              <input name="counsel_bar_number" placeholder="OAB/SP 123456" required maxLength="30" autoComplete="off" />
+            </>
+          )}
+        </div>
         <label className="field">
           <span>Matéria</span>
           <small>Define as regras aplicadas, as exclusões e o limite de valor.</small>
@@ -194,13 +228,22 @@ function CreateCase({ busy, error, onSubmit, onCancel }) {
           </>
         )}
 
+        {unverifiedEmail && (
+          <div className="full-row auth-callout" role="note">
+            <Info size={16} aria-hidden="true" />
+            <span>
+              Confirme seu e-mail antes de abrir o caso. Enviamos um link para {unverifiedEmail};
+              use "Reenviar link" no aviso acima se ele não chegou.
+            </span>
+          </div>
+        )}
         <div className="full-row"><LiveMessage type="error" text={error} /></div>
 
         <div className="form-actions">
           {onCancel && (
             <button type="button" className="button ghost" onClick={onCancel}>Cancelar</button>
           )}
-          <button className="button primary" disabled={busy}>
+          <button className="button primary" disabled={busy || Boolean(unverifiedEmail)}>
             Criar caso e adicionar documentos <ArrowRight size={17} />
           </button>
         </div>
@@ -242,8 +285,12 @@ function CaseWorkspace({
   privacy,
   showTechnical,
   setShowTechnical,
+  paymentsEnabled = false,
   user
 }) {
+  // Modo piloto "acordo rápido": disputa bancária de consumo, acordo primeiro,
+  // sem agenda processual nem detalhes técnicos no caminho principal.
+  const quick = CALCULATION_MATTERS.has(caseData.pathway?.matter_framework_id)
   const unavailable = hasUnavailableAI(caseData)
   const displayedStage = unavailable ? 2 : stageIndexFor(caseData)
   const endedEarly = EARLY_CLOSE.has(caseData.status) || caseData.procedure_conclusion === 'withdrawn'
@@ -314,6 +361,18 @@ function CaseWorkspace({
         />
       )}
 
+      {CALCULATION_MATTERS.has(caseData.pathway?.matter_framework_id)
+        && (caseData.documents.length > 0 || caseData.calculation) && (
+        <CalculationCard
+          caseData={caseData}
+          roles={roles}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+        />
+      )}
+
       <LiveMessage type="success" text={status} />
       <LiveMessage type="error" text={error} />
 
@@ -333,6 +392,7 @@ function CaseWorkspace({
       )}
 
       <OperationsCard
+        quick={quick}
         caseData={caseData}
         busy={busy}
         isPending={isPending}
@@ -369,6 +429,7 @@ function CaseWorkspace({
         && !caseData.arbitral_award?.adopted
         && (roles.claimant || roles.respondent) && (
         <AcceptDecisionCard
+          paymentsEnabled={paymentsEnabled}
           caseData={caseData}
           busy={busy}
           run={run}
@@ -382,6 +443,31 @@ function CaseWorkspace({
         <DecisionRecordCard caseData={caseData} isPending={isPending} run={run} />
       )}
 
+      {paymentsEnabled && caseData.decision_record && (
+        <PaymentCard
+          caseData={caseData}
+          roles={roles}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+        />
+      )}
+
+      {(caseData.decision?.calculation || caseData.decision_record?.agreement?.calculation) && (
+        <section className="calc-card-ui">
+          <span className="section-label">Memória de cálculo</span>
+          <h3>{caseData.decision?.calculation ? 'Números da decisão' : 'Números do acordo'}</h3>
+          <MemoryTable
+            lines={(caseData.decision?.calculation || caseData.decision_record.agreement.calculation).lines}
+            sha256={(caseData.decision?.calculation || caseData.decision_record.agreement.calculation).sha256}
+            source={(caseData.decision?.calculation || caseData.decision_record.agreement.calculation).average_rate_source}
+          />
+          {caseData.decision?.calculation?.remedy_matches_calculation === false && (
+            <small className="consent-note">O valor escrito pela IA divergiu da memória; vale a memória.</small>
+          )}
+        </section>
+      )}
+
       {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
         <Conclusion caseData={caseData} />
       )}
@@ -390,13 +476,26 @@ function CaseWorkspace({
         <AnalysisDetails caseData={caseData} />
       )}
 
-      <TechnicalDetails
-        caseData={caseData}
-        open={showTechnical}
-        setOpen={setShowTechnical}
-      />
+      {quick && !showTechnical ? (
+        <button type="button" className="technical-link" onClick={() => setShowTechnical(true)}>
+          Mostrar detalhes técnicos (hashes, modelos e cadeia de auditoria)
+        </button>
+      ) : (
+        <TechnicalDetails
+          caseData={caseData}
+          open={showTechnical}
+          setOpen={setShowTechnical}
+        />
+      )}
     </>
   )
+}
+
+// Papel da parte com a explicação em tooltip (Reclamante, Reclamada).
+const ROLE_TERM = { claimant: 'reclamante', respondent: 'reclamada' }
+
+function RoleTerm({ role }) {
+  return ROLE_TERM[role] ? <Term k={ROLE_TERM[role]}>{roleLabel(role)}</Term> : roleLabel(role)
 }
 
 function saveBlob(blob, filename) {
@@ -539,7 +638,7 @@ function ArbitratorCard({ caseData, busy, run, request, actorHeaders, roles, isA
   )
 }
 
-function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles }) {
+function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles, paymentsEnabled = false }) {
   const [state, setState] = useState(null)
   const [confirmed, setConfirmed] = useState(false)
   const caseId = caseData.id
@@ -576,8 +675,8 @@ function AcceptDecisionCard({ caseData, busy, run, request, actorHeaders, roles 
           <h3>{both ? 'Decisão acatada: vale como acordo entre as partes' : 'Adotar a decisão da IA como acordo'}</h3>
           <p>
             Não precisa de árbitro. Se as duas partes acatarem, a decisão passa a valer como acordo
-            (Código Civil, art. 840), nos termos do dispositivo, e o pagamento pode ser feito sem esperar
-            o prazo de recurso. O ato é irrevogável e afasta o recurso de quem acatou.
+            (Código Civil, art. 840), nos termos do dispositivo{paymentsEnabled ? ', e o pagamento pode ser feito sem esperar o prazo de recurso' : ''}.
+            {' '}O ato é irrevogável e afasta o recurso de quem acatou.
           </p>
         </div>
       </div>
@@ -741,13 +840,16 @@ function DecisionRecordCard({ caseData, isPending, run }) {
   )
 }
 
-function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders, user }) {
+function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders, user, quick = false }) {
   const [inviteLink, setInviteLink] = useState('')
   const [inviteNotice, setInviteNotice] = useState('')
   const deadlines = caseData.deadlines || []
   const participants = caseData.participants || []
   const pendingInvites = (caseData.invitations || []).filter((item) => item.status === 'pending')
   const canConduct = userHasRole(caseData, user, 'claimant') || userHasRole(caseData, user, 'respondent')
+  // O convidado recebe, por padrão, o papel oposto ao de quem convida.
+  const myRole = userHasRole(caseData, user, 'respondent') ? 'respondent' : 'claimant'
+  const counsel = caseData.pathway?.counsel || {}
 
   async function invite(event) {
     event.preventDefault()
@@ -816,15 +918,17 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
   }
 
   return (
-    <section className="operations-card">
+    <section className={`operations-card${quick ? ' quick' : ''}`}>
       <div className="card-title-row">
         <div>
-          <span className="section-label">Acesso, agenda e entrega</span>
-          <h3>Condução pelas partes</h3>
+          <span className="section-label">{quick ? 'Convite' : 'Acesso, agenda e entrega'}</span>
+          <h3>{quick ? 'Convide a outra parte' : 'Condução pelas partes'}</h3>
         </div>
-        <button className="button secondary" onClick={downloadReport} disabled={isPending('download:report')}>
-          <Download size={16} /> Baixar relatório Word
-        </button>
+        {!quick && (
+          <button className="button secondary" onClick={downloadReport} disabled={isPending('download:report')}>
+            <Download size={16} /> Baixar relatório Word
+          </button>
+        )}
       </div>
 
       <div className="operations-grid">
@@ -833,14 +937,17 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
           {participants.map((participant) => (
             <span className="participant-row" key={`${participant.email}-${participant.role}`}>
-              <strong>{participant.display_name}</strong> {participant.role} · {participant.email}
+              <strong>{participant.display_name}</strong> <RoleTerm role={participant.role} /> · {participant.email}
+              {counsel[participant.role]?.bar_number && (
+                <small> · advogado(a) da parte, {counsel[participant.role].bar_number}</small>
+              )}
             </span>
           ))}
           {pendingInvites.map((invitation) => (
             <span className="participant-row pending-invite" key={invitation.id}>
               <span>
                 <strong>{invitation.email}</strong>
-                <small>{invitation.role} · convite pendente</small>
+                <small>{roleLabel(invitation.role)} · convite pendente</small>
               </span>
               {canConduct && (
                 <button
@@ -856,7 +963,7 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           ))}
           {canConduct && <form className="compact-form" onSubmit={invite}>
             <input name="email" type="email" required placeholder="E-mail da parte" />
-            <select name="role" defaultValue="respondent">
+            <select name="role" defaultValue={oppositeRole(myRole)} key={myRole}>
               <option value="claimant">Reclamante</option>
               <option value="respondent">Reclamada</option>
               <option value="arbitrator">Árbitro</option>
@@ -873,29 +980,31 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           {!canConduct && <small>Somente as partes podem criar novos convites.</small>}
         </div>
 
-        <div className="operation-block">
-          <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
-          <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
-          <div className="deadline-list">
-            {deadlines.map((deadline) => (
-              <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
-                <strong>{deadline.label}</strong>
-                <small>{deadline.assigned_to} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
-              </span>
-            ))}
-            {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
+        {!quick && (
+          <div className="operation-block">
+            <div className="operation-title"><Clock3 size={18} /><strong>Agenda processual</strong></div>
+            <p>Defina datas claras para manifestação, documentos ou negociação. A situação é calculada automaticamente.</p>
+            <div className="deadline-list">
+              {deadlines.map((deadline) => (
+                <span className={`deadline-row ${deadline.status}`} key={deadline.id}>
+                  <strong>{deadline.label}</strong>
+                  <small>{deadline.assigned_to} · {new Date(deadline.due_at).toLocaleString('pt-BR')} · {deadline.status}</small>
+                </span>
+              ))}
+              {!deadlines.length && <span className="empty-inline">Nenhum prazo registrado.</span>}
+            </div>
+            {canConduct && <form className="compact-form deadline-form" onSubmit={addDeadline}>
+              <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
+              <select name="assigned_to" defaultValue="all">
+                <option value="all">Todas as pessoas</option>
+                <option value="claimant">Reclamante</option>
+                <option value="respondent">Reclamada</option>
+              </select>
+              <input name="due_at" type="datetime-local" required />
+              <button className="button secondary" disabled={busy}>Adicionar prazo</button>
+            </form>}
           </div>
-          {canConduct && <form className="compact-form deadline-form" onSubmit={addDeadline}>
-            <input name="label" required minLength="3" placeholder="Ex.: resposta aos documentos" />
-            <select name="assigned_to" defaultValue="all">
-              <option value="all">Todas as pessoas</option>
-              <option value="claimant">Reclamante</option>
-              <option value="respondent">Reclamada</option>
-            </select>
-            <input name="due_at" type="datetime-local" required />
-            <button className="button secondary" disabled={busy}>Adicionar prazo</button>
-          </form>}
-        </div>
+        )}
       </div>
     </section>
   )
@@ -1002,7 +1111,7 @@ function ProcessSteps({ currentStage, blockedByAI = false, endedLabel = null }) 
                 {done ? <Check size={15} /> : active ? index + 1 : <Circle size={11} />}
               </span>
               <div>
-                <strong>{step.title}</strong>
+                <strong>{step.glossary ? <Term k={step.glossary}>{step.title}</Term> : step.title}</strong>
                 <small>{active ? step.description : step.short}</small>
               </div>
             </div>
@@ -1064,7 +1173,7 @@ function NextAction({
       icon: <Gavel size={22} />,
       label: 'Próximo passo',
       title: 'Solicite a decisão da IA',
-      description: 'O agente julgador aplicará o framework Comercial Equilibrado às evidências do caso.'
+      description: `O agente julgador aplicará às evidências do caso as regras fixadas para a matéria: ${matterLabel(caseData)}.`
     },
     decided: {
       icon: <ShieldCheck size={22} />,
@@ -1147,6 +1256,10 @@ function NextAction({
               />
             </label>
           </div>
+
+          {CALCULATION_MATTERS.has(caseData.pathway?.matter_framework_id) && (
+            <AttachChecklist documents={caseData.documents || []} />
+          )}
 
           <div className="upload-options">
             <label className="upload-option">
@@ -1359,13 +1472,17 @@ function ConsentPanel({ caseData, busy, run, request, actorHeaders, roles, terms
           {showTerms ? 'Ocultar o texto integral' : 'Ler o texto integral dos termos'}
         </button>
         {showTerms && (
-          <pre className="terms-text">{terms?.text || 'Carregando os termos...'}</pre>
+          <div className="terms-scroll" tabIndex={0}>
+            {terms?.text ? <Markdown source={terms.text} /> : <p>Carregando os termos...</p>}
+          </div>
         )}
         <button className="link-button" onClick={() => setShowPrivacy(!showPrivacy)}>
           {showPrivacy ? 'Ocultar a política de privacidade' : 'Ler a política de privacidade'}
         </button>
         {showPrivacy && (
-          <pre className="terms-text">{privacy?.text || 'Carregando a política de privacidade...'}</pre>
+          <div className="terms-scroll" tabIndex={0}>
+            {privacy?.text ? <Markdown source={privacy.text} /> : <p>Carregando a política de privacidade...</p>}
+          </div>
         )}
       </div>
       <small>
@@ -1388,7 +1505,7 @@ function StewardNote({ caseData }) {
     <div className="blocking-note">
       <ShieldCheck size={17} />
       <span>
-        Gestor: {steward.reason}
+        <Term k="gestor">Gestor</Term>: {steward.reason}
         {steward.state === 'processing' ? ' A etapa está em andamento.' : ''}
         {steward.state === 'waiting' ? ' A próxima palavra é de uma parte.' : ''}
       </span>
@@ -1483,13 +1600,13 @@ function ConciliationActions({
   const latest = rounds[rounds.length - 1] || caseData.conciliation || {}
   const agreement = latest.agreement || { responses: {} }
 
-  function answerAgreement(party, accepted) {
+  function answerAgreement(party, accepted, reason = '') {
     return run(
       accepted ? 'Registrando seu aceite da proposta...' : 'Registrando sua recusa da proposta...',
       () => request(`/cases/${caseData.id}/conciliation/${latest.round_number || rounds.length}/agreement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...actorHeaders(caseData.id, party) },
-        body: JSON.stringify({ party, accepted })
+        body: JSON.stringify({ party, accepted, ...(accepted ? {} : { reason }) })
       })
     )
   }
@@ -1525,6 +1642,8 @@ function ConciliationActions({
         />
       ))}
 
+      <ProposalPanel round={latest} />
+
       <div className="conciliation-buttons">
         {['claimant', 'respondent'].map((party) => roles[party] && (
           <button
@@ -1540,6 +1659,15 @@ function ConciliationActions({
           </button>
         ))}
       </div>
+      {['claimant', 'respondent'].map((party) => roles[party] && latest.possible_terms?.length > 0 && !agreement.complete && (
+        <RefuseProposal
+          key={`refuse-${party}`}
+          party={party}
+          refused={agreement.responses?.[party]?.accepted === false}
+          disabled={busy || agreement.responses?.[party]?.accepted === true}
+          onRefuse={(who, reason) => answerAgreement(who, false, reason)}
+        />
+      ))}
       <StewardNote caseData={caseData} />
       <small className="consent-note">
         {agreement.complete
@@ -1571,6 +1699,14 @@ function DocumentsCard({
         </div>
         {locked && <span className="locked-badge"><LockKeyhole size={14} /> Conjunto protegido</span>}
       </div>
+      <BatchContradictory
+        caseData={caseData}
+        roles={roles}
+        busy={busy}
+        run={run}
+        request={request}
+        actorHeaders={actorHeaders}
+      />
       <div className="document-list">
         {documents.map((document) => (
           <DocumentEvidenceItem
@@ -1862,7 +1998,7 @@ function Conclusion({ caseData }) {
         <Fact
           label="Resultado"
           value={outcomeLabel(decision.outcome)}
-          note={`Framework ${decision.framework_id || decision.framework || ''} ${(decision.execution || {}).model || ''}`}
+          note={`Matéria: ${matterLabel(caseData)}${(decision.execution || {}).model ? ` · modelo ${decision.execution.model}` : ''}`}
         />
       </div>
       {decision.material_findings?.length > 0 && (

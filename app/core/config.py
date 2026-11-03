@@ -150,6 +150,13 @@ class Settings:
     stripe_webhook_secret: str = ""
     platform_fee_bps: int = 1000
     public_app_url: str = "http://localhost:5173"
+    # Quem recebe o aviso de novo lead do piloto. Vazio, vale o e-mail de
+    # privacidade; sem nenhum dos dois o lead só é gravado.
+    lead_notification_email: str = ""
+
+    @property
+    def lead_recipient(self) -> str:
+        return self.lead_notification_email or self.privacy_contact_email
 
     @property
     def payments_enabled(self) -> bool:
@@ -616,6 +623,7 @@ def get_settings() -> Settings:
             else os.getenv("LLM_FALLBACK_MODEL", "").strip()
         ),
         expose_api_docs=_env_flag("EXPOSE_API_DOCS", not is_production),
+        lead_notification_email=os.getenv("LEAD_NOTIFICATION_EMAIL", "").strip(),
         stripe_secret_key=os.getenv("STRIPE_SECRET_KEY", "").strip(),
         stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", "").strip(),
         platform_fee_bps=min(

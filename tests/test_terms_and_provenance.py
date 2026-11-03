@@ -276,6 +276,7 @@ def test_every_agent_registers_a_versioned_prompt():
     assert set(policy) == {
         "appeal",
         "conciliator",
+        "extractor",
         "judge",
         "organizer",
         "reviewer",

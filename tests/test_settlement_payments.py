@@ -412,3 +412,94 @@ def test_new_attestation_requires_new_payment(env):
     view = client.get(f"/cases/{case_id}/settlement").json()
     assert view["offer"]["attestation_hash"] == "b" * 64
     assert view["payment"] is None
+
+
+# --- Acordo com memória de cálculo ---------------------------------------------
+
+
+def _agreed_case_data(consumer="claimant"):
+    return {
+        "status": "agreement",
+        "procedure_conclusion": "agreement",
+        "pathway": {"consumer_party": consumer},
+        "conciliation_rounds": [
+            {
+                "round_number": 1,
+                "agreement": {"complete": True, "proposal_sha256": "p" * 64},
+                "calculation": {
+                    "status": "ready",
+                    "sha256": "c" * 64,
+                    "scenario": {"percent": 100, "amount_minor": 517_732},
+                },
+            }
+        ],
+    }
+
+
+def test_agreement_with_calculation_generates_an_offer_of_the_agreed_amount():
+    offer = settlement_offer(_agreed_case_data())
+    assert offer["available"] is True
+    assert offer["kind"] == "agreement"
+    assert offer["amount_minor_units"] == 517_732
+    assert offer["platform_fee_minor_units"] == 51_773
+    assert offer["currency"] == "BRL"
+    assert (offer["payer_role"], offer["payee_role"]) == ("respondent", "claimant")
+    assert offer["attestation_hash"] == "p" * 64
+
+
+def test_the_consumer_receives_even_when_it_is_the_respondent():
+    offer = settlement_offer(_agreed_case_data(consumer="respondent"))
+    assert (offer["payer_role"], offer["payee_role"]) == ("claimant", "respondent")
+
+
+@pytest.mark.parametrize(
+    "mutation,reason",
+    [
+        (lambda d: d["conciliation_rounds"][0]["agreement"].update(complete=False), "no_agreement"),
+        (lambda d: d["conciliation_rounds"][0].pop("calculation"), "no_verified_amount"),
+        (lambda d: d["conciliation_rounds"][0]["calculation"].update(status="needs_inputs"), "no_verified_amount"),
+    ],
+)
+def test_agreement_without_a_verified_amount_has_no_offer(mutation, reason):
+    data = _agreed_case_data()
+    mutation(data)
+    offer = settlement_offer(data)
+    assert offer["available"] is False
+    assert offer["reason"] == reason
+
+
+def test_agreement_checkout_is_opened_by_the_payer_and_pays_the_consumer(env):
+    client, factory, fake = env
+    case_id, creds = _make_case(client, factory)
+    with factory() as db:
+        row = db.get(Case, case_id)
+        row.status = "agreement"
+        row.procedure_conclusion = "agreement"
+        row.decision_json = None
+        row.attestation_json = None
+        row.verification_json = None
+        row.conciliation_json = json.dumps(_agreed_case_data()["conciliation_rounds"])
+        db.query(AttestationRecord).delete()
+        db.commit()
+    for token in (creds["claimant"], "bogus"):
+        refused = client.post(f"/cases/{case_id}/settlement/checkout", headers={"X-Actor-Token": token})
+        assert refused.status_code == 403
+    response = client.post(
+        f"/cases/{case_id}/settlement/checkout", headers={"X-Actor-Token": creds["respondent"]}
+    )
+    assert response.status_code == 200, response.text
+    sent = fake.created[0]
+    assert sent["amount_minor_units"] == 517_732
+    assert sent["fee_minor_units"] == 51_773
+    assert sent["destination_account_id"] == "acct_1"
+    view = client.get(f"/cases/{case_id}/settlement").json()
+    assert view["offer"]["kind"] == "agreement"
+    assert view["payment"]["status"] == "pending"
+
+
+def test_root_tells_the_interface_whether_payments_exist(env, monkeypatch):
+    client, _, _ = env
+    assert client.get("/").json()["payments_enabled"] is True
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "")
+    get_settings.cache_clear()
+    assert client.get("/").json()["payments_enabled"] is False

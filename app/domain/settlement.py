@@ -1,4 +1,4 @@
-"""Oferta de pagamento opcional da decisão.
+"""Oferta de pagamento opcional da decisão ou do acordo.
 
 O pagamento não é execução da decisão: é uma saída que a parte devedora pode
 escolher para encerrar o litígio. Este módulo só decide, de forma
@@ -48,10 +48,62 @@ def _unavailable(reason: str, **extra: Any) -> Dict[str, Any]:
     return {"available": False, "reason": reason, **extra}
 
 
+def _agreement_offer(case_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Oferta de pagamento de um acordo bilateral que tem memória de cálculo.
+
+    O valor é o da proposta que as duas partes aceitaram (o `scenario` da
+    memória, calculado pelo módulo determinístico, nunca um texto da IA). Quem
+    paga é a parte que não é a consumidora; quem recebe, a consumidora. A chave
+    da cobrança é o hash da proposta aceita, que faz as vezes da attestation.
+    """
+    agreed = next(
+        (
+            item
+            for item in case_data.get("conciliation_rounds") or []
+            if (item.get("agreement") or {}).get("complete")
+        ),
+        None,
+    )
+    if agreed is None:
+        return _unavailable("no_agreement")
+    calculation = agreed.get("calculation") or {}
+    scenario = calculation.get("scenario") or {}
+    amount = scenario.get("amount_minor")
+    if (
+        calculation.get("status") != "ready"
+        or isinstance(amount, bool)
+        or not isinstance(amount, int)
+        or amount <= 0
+    ):
+        return _unavailable("no_verified_amount")
+    consumer = (case_data.get("pathway") or {}).get("consumer_party") or PAYEE_ROLE
+    payee = consumer if consumer in ("claimant", "respondent") else PAYEE_ROLE
+    payer = "respondent" if payee == "claimant" else "claimant"
+    fee = platform_fee(amount)
+    return {
+        "available": True,
+        "reason": None,
+        "kind": "agreement",
+        "attestation_hash": agreed["agreement"]["proposal_sha256"],
+        "calculation_sha256": calculation.get("sha256"),
+        "payer_role": payer,
+        "payee_role": payee,
+        "amount_minor_units": amount,
+        "platform_fee_minor_units": fee,
+        "net_to_payee_minor_units": amount - fee,
+        "currency": "BRL",
+        "voluntary": True,
+        "accepted_by_both_parties": True,
+    }
+
+
 def settlement_offer(
     case_data: Dict[str, Any], now: Optional[datetime] = None
 ) -> Dict[str, Any]:
     """Calcula a oferta a partir do caso serializado (`case_to_dict`).
+
+    Acordo bilateral com memória de cálculo gera a oferta do valor acordado;
+    sem acordo, vale o caminho da decisão abaixo.
 
     Só há oferta quando a decisão é de mérito, verificada, atestada, favorável
     ao reclamante com valor calculado, e a fase de contestação terminou. Se as
@@ -59,6 +111,11 @@ def settlement_offer(
     esperada: ninguém mais vai recorrer.
     """
     now = now or datetime.now(timezone.utc)
+    if (
+        case_data.get("status") == "agreement"
+        or case_data.get("procedure_conclusion") == "agreement"
+    ):
+        return _agreement_offer(case_data)
     decision = case_data.get("decision") or {}
     attestation = case_data.get("attestation") or {}
     records = case_data.get("attestation_records") or []
@@ -100,6 +157,7 @@ def settlement_offer(
     return {
         "available": True,
         "reason": None,
+        "kind": "decision",
         "attestation_hash": records[-1]["attestation_hash"],
         "payer_role": PAYER_ROLE,
         "payee_role": PAYEE_ROLE,

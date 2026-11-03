@@ -110,7 +110,7 @@ def get_settlement(
         if offer["available"]
         else None
     )
-    payee = member_user(db, case.id, "claimant")
+    payee = member_user(db, case.id, offer.get("payee_role") or "claimant")
     return {
         "payments_enabled": get_settings().payments_enabled,
         "offer": offer,
@@ -129,12 +129,14 @@ def create_settlement_checkout(
     Checkout; a confirmação chega pelo webhook, nunca pelo navegador."""
     _require_payments()
     case = _case_or_404(db, case_id)
-    payer = _require_actor(db, case, x_actor_token, "respondent")
     offer = settlement_offer(case_to_dict(case, include_content=False))
+    # Quem paga depende do desfecho: na decisão é a reclamada; no acordo, a
+    # parte que não é a consumidora. Sem oferta, a regra antiga vale.
+    payer = _require_actor(db, case, x_actor_token, offer.get("payer_role") or "respondent")
     if not offer["available"]:
         raise HTTPException(status_code=409, detail=offer["reason"])
 
-    payee = member_user(db, case.id, "claimant")
+    payee = member_user(db, case.id, offer["payee_role"])
     if payee is None or not payee.stripe_account_id:
         raise HTTPException(status_code=409, detail="payee_not_onboarded")
     if payer is not None and payer.id == payee.id:

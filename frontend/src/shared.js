@@ -58,12 +58,14 @@ export const steps = [
   {
     key: 'locked',
     title: 'Regras fixadas',
+    glossary: 'manifesto',
     short: 'Proteja o processo',
     description: 'O sistema registra os documentos e impede alterações posteriores.'
   },
   {
     key: 'conciliation',
     title: 'Composição',
+    glossary: 'composicao',
     short: 'Negocie em rodadas',
     description: 'A IA conduz novas tentativas enquanto houver espaço útil para acordo.'
   },
@@ -170,4 +172,33 @@ export const STAGE_PROCESSING_STATUS = {
   review: 'processing_review',
   attestation: 'processing_attestation',
   appeal: 'processing_appeal'
+}
+
+export const ROLE_LABELS = {
+  claimant: 'Reclamante',
+  respondent: 'Reclamada',
+  arbitrator: 'Árbitro'
+}
+
+export function roleLabel(role) {
+  return ROLE_LABELS[role] || role
+}
+
+export function oppositeRole(role) {
+  return role === 'respondent' ? 'claimant' : 'respondent'
+}
+
+// Nome da matéria do caso (o que as regras fixadas tratam), para os textos da tela.
+export function matterLabel(caseData) {
+  const id = caseData?.pathway?.matter_framework_id
+  return MATTERS.find((item) => item.id === id)?.label || 'as regras fixadas no caso'
+}
+
+// Glossário curto, mostrado em tooltip (componente Term).
+export const GLOSSARY = {
+  composicao: 'Fase de tentativa de acordo: a IA propõe termos e as partes aceitam, recusam ou ajustam, em rodadas, antes de qualquer decisão.',
+  manifesto: 'Registro assinado que fixa, na trava, os documentos admitidos, as regras, os modelos e os prompts. Depois dele, nada disso muda.',
+  gestor: 'A IA que conduz o procedimento: admite o material, trava o conjunto e abre cada etapa. Nenhuma parte faz isso pela outra.',
+  reclamante: 'Quem abre a reclamação e pede algo. Em disputa bancária, em regra, é o consumidor.',
+  reclamada: 'A outra parte, que responde à reclamação. Em disputa bancária, em regra, é o banco.'
 }

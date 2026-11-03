@@ -71,6 +71,9 @@ class Case(Base):
     current_decision_run_id = Column(String, nullable=True)
     current_review_run_id = Column(String, nullable=True)
     verification_json = Column(Text, nullable=True)
+    # Extração por IA, avaliação das cobranças e memória de cálculo auditável
+    # (app.domain.calculation). Os números só nascem do módulo de cálculo.
+    calculation_json = Column(Text, nullable=True)
     stability_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(
@@ -486,3 +489,20 @@ class SettlementPayment(Base):
     updated_at = Column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )
+
+
+class PilotLead(Base):
+    """Interesse de banco ou escritório no piloto, vindo da landing."""
+
+    __tablename__ = "pilot_leads"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    company = Column(String, nullable=False)
+    email = Column(String, nullable=False, index=True)
+    monthly_volume = Column(Integer, nullable=False, default=0)
+    source = Column(String, nullable=False, default="landing")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    # Resultado do aviso por e-mail ao time (delivered, logged, failed).
+    notification_status = Column(String, nullable=True)
+    notified_at = Column(DateTime(timezone=True), nullable=True)

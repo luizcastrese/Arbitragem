@@ -9,10 +9,10 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 
 
-def test_alembic_head_is_the_steward_chain_revision():
+def test_alembic_head_is_the_calculation_revision():
     cfg = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "b3e7f1a9c5d2"
+    assert script.get_current_head() == "e4b8c2d6f1a9"
 
 
 def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):
@@ -38,6 +38,8 @@ def test_alembic_upgrade_empty_sqlite(tmp_path, monkeypatch):
         assert "decision_records_json" in columns
         assert "claimant_tax_id" in columns
         assert "settlement_payments" in tables
+        assert "pilot_leads" in tables
+        assert "calculation_json" in columns
         user_columns = {item["name"] for item in inspect(engine).get_columns("users")}
         assert "stripe_account_id" in user_columns
         command.downgrade(cfg, "b7c4e91a5d20")

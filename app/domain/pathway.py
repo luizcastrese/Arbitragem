@@ -61,6 +61,21 @@ class PathwayError(ValueError):
     """Via ou escolha inválida. A mensagem vai para o usuário."""
 
 
+_BAR_PATTERN = re.compile(r"^(?:OAB)?[\s/.-]*([A-Za-z]{2})[\s/.-]*(\d{1,3}(?:\.?\d{3})?[A-Za-z]?)$", re.IGNORECASE)
+
+
+def normalize_bar_number(raw: Optional[str]) -> str:
+    """OAB no formato ``OAB/UF 123456`` (UF e número de inscrição).
+
+    Só confere o formato: a inscrição não é consultada no cadastro da OAB.
+    """
+    match = _BAR_PATTERN.match((raw or "").strip())
+    if not match:
+        raise PathwayError("OAB inválida. Use o formato OAB/UF 123456.")
+    uf, number = match.groups()
+    return f"OAB/{uf.upper()} {number.replace('.', '')}"
+
+
 def normalize_lawsuit_number(raw: Optional[str]) -> str:
     """Número único do processo (Res. CNJ 65/2008), com dígito verificador.
 
@@ -90,6 +105,8 @@ def build_pathway(
     lawsuit_number: Optional[str] = None,
     court: Optional[str] = None,
     consumer_party: Optional[str] = None,
+    creator_role: str = "claimant",
+    counsel_bar_number: Optional[str] = None,
 ) -> Dict[str, Any]:
     if entry_point not in ENTRY_POINTS:
         raise PathwayError("Via desconhecida: use pre_litigation ou pending_lawsuit.")
@@ -117,12 +134,21 @@ def build_pathway(
             )
     elif consumer_party:
         raise PathwayError("Esta matéria não é de consumo: não há parte consumidora.")
+    if creator_role not in PARTIES:
+        raise PathwayError("Indique se você atua como reclamante ou reclamada.")
+    # O advogado não é um papel do procedimento: ele atua pela parte em que o
+    # criador entrou. Só o registro (OAB) fica no caso.
+    counsel = {}
+    if counsel_bar_number:
+        counsel[creator_role] = {"bar_number": normalize_bar_number(counsel_bar_number)}
     return {
         "entry_point": entry_point,
         "lawsuit": lawsuit,
         "matter_framework_id": matter_framework_id,
         "consumer_relation": bool(consumer_relation),
         "consumer_party": consumer_party if consumer_relation else None,
+        "creator_role": creator_role,
+        "counsel": counsel,
         "arbitration_elections": {},
     }
 

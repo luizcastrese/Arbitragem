@@ -133,6 +133,22 @@ def _procedure(document: Document, record: Dict[str, Any]) -> None:
             )
 
 
+def _calculation_memory(document: Document, memory: Dict[str, Any]) -> None:
+    """Memória de cálculo: cada linha com fórmula, entradas, valor e fonte."""
+    document.add_paragraph(
+        "Memória de cálculo (determinística, hash "
+        f"{str(memory.get('sha256') or '')[:16]}…):"
+    )
+    for line in memory.get("lines") or []:
+        inputs = "; ".join(f"{key} = {value}" for key, value in (line.get("inputs") or {}).items())
+        text = f"{line.get('label')}: {line.get('value')}. Fórmula: {line.get('formula')}"
+        if inputs:
+            text += f" ({inputs})"
+        if line.get("source"):
+            text += f". Fonte: {line['source']}"
+        document.add_paragraph(text, style="List Bullet")
+
+
 def _agreement(document: Document, record: Dict[str, Any]) -> None:
     agreement = record.get("agreement") or {}
     document.add_heading("IV. Termo de acordo", level=1)
@@ -141,6 +157,8 @@ def _agreement(document: Document, record: Dict[str, Any]) -> None:
         f"{agreement.get('round_number')}, nos seguintes termos:"
     )
     _bullets(document, agreement.get("terms") or [])
+    if agreement.get("calculation"):
+        _calculation_memory(document, agreement["calculation"])
     accepted = agreement.get("accepted_at") or {}
     _add_key_value_table(
         document,
@@ -212,6 +230,8 @@ def _operative(document: Document, record: Dict[str, Any]) -> None:
         for item in remedy.get("inputs") or []:
             rows.append((str(item.get("name")), format_money(item.get("value_minor_units"), item.get("currency"))))
     _add_key_value_table(document, rows)
+    if decision.get("calculation"):
+        _calculation_memory(document, decision["calculation"])
 
 
 def _review(document: Document, record: Dict[str, Any]) -> None:

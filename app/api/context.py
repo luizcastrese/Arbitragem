@@ -54,6 +54,8 @@ AUTH_RATE_LIMITED_PATHS = {
     "/auth/verify-email/resend",
     "/auth/password-reset",
     "/auth/password-reset/confirm",
+    # Formulário público do piloto: mesmo teto estreito das rotas de credencial.
+    "/leads",
 }
 
 
@@ -66,6 +68,7 @@ stage_runner = StageRunner(max_workers=int(os.getenv("STAGE_WORKERS", "4")))
 # execução falhar no meio.
 ASYNC_STAGES = {
     "conciliation": {"claimed": False, "on_error_status": None},
+    "extract": {"claimed": False, "on_error_status": None},
     "organize": {"claimed": True, "on_error_status": "conciliation"},
     "decide": {"claimed": True, "on_error_status": "organized"},
     "review": {"claimed": True, "on_error_status": "decided"},

@@ -197,3 +197,53 @@ def deliver_invitation_email(
         sender=settings.smtp_from,
     )
     return _deliver(message, kind="invitation_email", to_email=to_email)
+
+
+def build_lead_message(
+    *,
+    to_email: str,
+    sender: str,
+    name: str,
+    company: str,
+    email: str,
+    monthly_volume: int,
+) -> EmailMessage:
+    message = EmailMessage()
+    message["Subject"] = f"Novo contato do piloto: {company}"
+    message["From"] = sender
+    message["To"] = to_email
+    message["Reply-To"] = email
+    message.set_content(
+        "Novo contato pelo formulário do piloto da Valinor.\n\n"
+        f"Nome: {name}\n"
+        f"Empresa: {company}\n"
+        f"E-mail: {email}\n"
+        f"Processos por mês: {monthly_volume}\n\n"
+        "Responda a esta mensagem para falar com a pessoa."
+    )
+    return message
+
+
+def deliver_lead_notification(
+    *,
+    name: str,
+    company: str,
+    email: str,
+    monthly_volume: int,
+) -> Dict[str, object]:
+    """Avisa o time de um novo lead. Nunca levanta exceção: o lead já está
+    gravado, e a falha do e-mail só fica registrada no próprio lead."""
+    settings = get_settings()
+    recipient = settings.lead_recipient
+    if not recipient:
+        logger.info("lead_notification transport=none")
+        return {"delivered": False, "transport": "none"}
+    message = build_lead_message(
+        to_email=recipient,
+        sender=settings.smtp_from or recipient,
+        name=name,
+        company=company,
+        email=email,
+        monthly_volume=monthly_volume,
+    )
+    return _deliver(message, kind="lead_notification", to_email=recipient)

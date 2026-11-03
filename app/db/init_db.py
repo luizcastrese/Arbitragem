@@ -38,6 +38,7 @@ def _upgrade_sqlite_schema():
         "current_decision_run_id": "TEXT",
         "current_review_run_id": "TEXT",
         "verification_json": "TEXT",
+        "calculation_json": "TEXT",
         "stability_json": "TEXT",
     }
     user_additions = {
