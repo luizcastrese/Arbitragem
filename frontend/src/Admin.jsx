@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import './admin.css'
 import { statusLabels } from './shared.js'
-import { LiveMessage, LoadingState, Modal } from './ui.jsx'
+import { CloseButton, LiveMessage, LoadingState, Modal } from './ui.jsx'
 
 // Painel de operação. Mostra metadados (situação, papéis, falhas, e-mails,
 // modelos), nunca o teor dos casos; o servidor registra cada consulta a um caso
@@ -78,6 +78,7 @@ function ReasonDialog({ title, description, confirmLabel, onConfirm, onClose, bu
         onSubmit={(event) => { event.preventDefault(); onConfirm(reason.trim()) }}
       >
         <h2 id="adm-reason-title">{title}</h2>
+        <CloseButton onClose={onClose} />
         <p>{description}</p>
         <label className="mini-field">
           <span>Motivo (fica no registro de operação)</span>

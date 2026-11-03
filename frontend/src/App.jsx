@@ -12,7 +12,7 @@ import {
 } from './shared.js'
 import { InviteDialog, LeadDialog } from './Dialogs.jsx'
 import Markdown from './Markdown.jsx'
-import { LiveMessage, LoadingState, Modal, ProcessingCard } from './ui.jsx'
+import { CloseButton, LiveMessage, LoadingState, Modal, ProcessingCard } from './ui.jsx'
 
 // A landing e o workspace são chunks separados: quem chega sem conta só baixa a
 // apresentação, e quem já está logado não baixa a landing.
@@ -24,6 +24,24 @@ function legalFromPath() {
   const match = window.location.pathname.match(/\/(termos|privacidade)\/?$/)
   if (!match) return null
   return match[1] === 'termos' ? 'terms' : 'privacy'
+}
+
+// Link de verdade para os textos legais: o clique normal abre o modal sem sair
+// da página; clique com Ctrl/Cmd/Shift, botão do meio e "abrir em nova aba"
+// seguem o endereço (/ui/termos, /ui/privacidade), que o servidor também serve.
+function LegalLink({ kind, onOpen, children }) {
+  return (
+    <a
+      href={`${import.meta.env.BASE_URL}${LEGAL_SLUGS[kind]}`}
+      onClick={(event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+        event.preventDefault()
+        onOpen(kind)
+      }}
+    >
+      {children}
+    </a>
+  )
 }
 
 function adminFromPath() {
@@ -906,8 +924,8 @@ export default function App() {
       </main>
       <footer className="legal-footer">
         <div className="legal-footer-inner">
-          <button type="button" onClick={() => setLegalView('terms')}>Termos do procedimento</button>
-          <button type="button" onClick={() => setLegalView('privacy')}>Política de privacidade</button>
+          <LegalLink kind="terms" onOpen={setLegalView}>Termos do procedimento</LegalLink>
+          <LegalLink kind="privacy" onOpen={setLegalView}>Política de privacidade</LegalLink>
           <span>Contato e privacidade: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></span>
         </div>
       </footer>
@@ -973,6 +991,7 @@ function AuthPanel({ mode, context = 'default', setMode, busy, error, onSubmit, 
       <div>
         <span className="section-label">Acesso protegido</span>
         <h2 id="auth-dialog-title">{copy.title}</h2>
+        <CloseButton onClose={onClose} />
         <p>{copy.description}</p>
         {mode === 'register' && (
           <p className="auth-callout" role="note">
@@ -1060,10 +1079,10 @@ function LegalReader({ kind, terms, privacy, onClose }) {
   return (
     <Modal onClose={onClose} labelledBy="legal-title">
       <section className="dialog-card legal-card">
-        <button type="button" className="dialog-close" onClick={onClose} aria-label="Fechar">×</button>
         <header className="legal-head">
           <span className="section-label">{title}</span>
           <h2 id="legal-title">{doc?.version ? `Versão ${doc.version}` : title}</h2>
+          <CloseButton onClose={onClose} />
           {doc?.sha256 && <small>SHA-256 {doc.sha256.slice(0, 16)}…</small>}
         </header>
         <div className="legal-scroll" tabIndex={0}>

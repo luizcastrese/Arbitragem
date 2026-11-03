@@ -1,25 +1,17 @@
-import { ArrowRight, LogIn, Mail, UserPlus, X } from 'lucide-react'
+import { ArrowRight, LogIn, Mail, UserPlus } from 'lucide-react'
 import { CONTACT_EMAIL } from './shared.js'
-import { LiveMessage, Modal, Spinner } from './ui.jsx'
-
-function CloseButton({ onClose }) {
-  return (
-    <button type="button" className="dialog-close" onClick={onClose} aria-label="Fechar">
-      <X size={18} />
-    </button>
-  )
-}
+import { CloseButton, LiveMessage, Modal, Spinner } from './ui.jsx'
 
 // Formulário curto do piloto: grava o lead no backend, que avisa o time por e-mail.
 export function LeadDialog({ onClose, onSubmit, pending, error, sent, onOpenPrivacy }) {
   return (
     <Modal onClose={onClose} labelledBy="lead-title" size="narrow">
       <section className="dialog-card">
-        <CloseButton onClose={onClose} />
         {sent ? (
           <div className="dialog-body" role="status">
             <span className="section-label">Recebemos seu contato</span>
             <h2 id="lead-title">Obrigado. Retornamos por e-mail.</h2>
+            <CloseButton onClose={onClose} />
             <p>
               Se preferir, escreva direto para{' '}
               <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
@@ -32,6 +24,7 @@ export function LeadDialog({ onClose, onSubmit, pending, error, sent, onOpenPriv
           <form className="dialog-body" onSubmit={onSubmit}>
             <span className="section-label">Piloto para bancos e escritórios</span>
             <h2 id="lead-title">Quer testar com seus processos?</h2>
+            <CloseButton onClose={onClose} />
             <p>Conte quem é você e quantos processos de revisional chegam por mês. Retornamos por e-mail.</p>
             <label className="mini-field">
               <span>Seu nome</span>
@@ -76,10 +69,10 @@ export function InviteDialog({ onClose, onLogin, onRegister, hasToken }) {
   return (
     <Modal onClose={onClose} labelledBy="invite-title" size="narrow">
       <section className="dialog-card">
-        <CloseButton onClose={onClose} />
         <div className="dialog-body">
           <span className="section-label">Recebi um convite</span>
           <h2 id="invite-title">Entre com o e-mail que recebeu o convite</h2>
+          <CloseButton onClose={onClose} />
           <p>
             O convite é pessoal: vale só para o endereço de e-mail que o recebeu. Entre, ou crie
             sua conta, com <strong>esse mesmo e-mail</strong>.

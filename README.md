@@ -386,6 +386,8 @@ Variáveis do arquivo `.env`:
 | `REMINDER_SCAN_INTERVAL_SECONDS` | Intervalo da varredura de lembretes (padrão 900; 0 desliga) |
 | `REMINDER_STALLED_HOURS` | Horas sem resposta a um material até o lembrete (padrão 72) |
 | `OUTBOX_RETENTION_DAYS` | Dias que a fila guarda e-mails já enviados (padrão 90) |
+| `DATA_CONTROLLER_NAME` | Nome do controlador dos dados, escrito na política de privacidade. Obrigatório em produção. Vazio (fora de produção), o texto diz "a organização que opera esta plataforma" |
+| `PRIVACY_CONTACT_EMAIL` | Canal do titular, escrito na política de privacidade. Vazio: contato padrão do site (`alugai.adm@gmail.com`). Os Termos trazem esse endereço fixo no texto |
 | `LEAD_NOTIFICATION_EMAIL` | Quem recebe o aviso de cada contato do piloto (`POST /leads`). Vazio, vale `PRIVACY_CONTACT_EMAIL`; sem nenhum, o lead só é gravado em `pilot_leads` |
 | `SMTP_USE_TLS` | Usa STARTTLS na conexão SMTP |
 | `DOCUMENT_STORAGE_BACKEND` | `local`, `s3` ou `memory` (testes) |
@@ -637,13 +639,15 @@ que ela precisa reprovar. Detalhes em `evals/README.md`.
   senha e bloqueia tentativa repetida de senha, mas ainda não há autenticação
   multifator;
 - a camada de proteção de dados existe: política de privacidade versionada e
-  endereçada por hash (`GET /privacy`), bases legais declaradas, aviso de
+  endereçada por hash e preenchida com controlador, contato e prazo de retenção da
+  configuração (`GET /privacy`), bases legais declaradas, aviso de
   transferência internacional pelo processamento no provedor de modelo, aviso
   sobre a âncora pública em Nostr, exportação (`GET /account/data-export`),
   eliminação por anonimização (`POST /account/erasure`) e expurgo por retenção
   (`python -m app.retention`). O texto da política, porém, **ainda não passou
-  por validação jurídica**, e `DATA_CONTROLLER_NAME`/`PRIVACY_CONTACT_EMAIL`
-  precisam apontar para um responsável real;
+  por validação jurídica** (lembrete interno em `app/privacy/README.md`, fora do
+  texto público), e `DATA_CONTROLLER_NAME` precisa apontar para um responsável
+  real;
 - em `APP_ENV=production` a autenticação por conta é exigida em todas as rotas e
   os tokens por papel são desabilitados; o modo local com tokens permanece
   apenas em desenvolvimento;

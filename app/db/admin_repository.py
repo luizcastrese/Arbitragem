@@ -553,7 +553,7 @@ def config_checks() -> List[Dict[str, Any]]:
          "Sem a chave, toda decisão termina inconclusiva."),
         ("attestation", "Chave Ed25519 das attestations", settings.attestation_enabled,
          "Sem ela não há attestation nem prazo de recurso automático."),
-        ("privacy", "Controlador e contato de privacidade", settings.privacy_contacts_declared,
+        ("privacy", "Controlador dos dados (política de privacidade)", settings.privacy_contacts_declared,
          "A política de privacidade fica sem responsável."),
         ("notifications", "Avisos por e-mail ligados", settings.notifications_enabled,
          "As partes não são avisadas dos atos e prazos."),

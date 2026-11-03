@@ -17,6 +17,10 @@ from app.llm.models import (
 
 load_dotenv()
 
+# Contato de privacidade quando PRIVACY_CONTACT_EMAIL não é definido. É o mesmo
+# endereço de contato exibido no site.
+DEFAULT_PRIVACY_CONTACT_EMAIL = "alugai.adm@gmail.com"
+
 
 def _split_csv(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -250,10 +254,16 @@ class Settings:
         return self.rate_limit_enabled and not self.trusted_proxy_ips
 
     @property
+    def privacy_contact(self) -> str:
+        """Canal do titular: o configurado ou, na falta dele, o contato padrão."""
+        return self.privacy_contact_email or DEFAULT_PRIVACY_CONTACT_EMAIL
+
+    @property
     def privacy_contacts_declared(self) -> bool:
-        """Sem controlador e canal de contato declarados, a política publicada
-        não atende ao art. 9º da LGPD: o titular não sabe a quem recorrer."""
-        return bool(self.privacy_contact_email and self.data_controller_name)
+        """Sem controlador declarado, a política publicada não atende ao art. 9º
+        da LGPD: o titular não sabe quem responde pelos dados. O canal de
+        contato sempre existe (há um padrão), então só o controlador conta."""
+        return bool(self.data_controller_name)
 
     @property
     def email_enabled(self) -> bool:
@@ -395,10 +405,10 @@ def validate_runtime_policy(settings: Settings) -> None:
 
     if settings.is_production and not settings.privacy_contacts_declared:
         raise RuntimeError(
-            "DATA_CONTROLLER_NAME e PRIVACY_CONTACT_EMAIL são obrigatórios em "
-            "produção: a política de privacidade publicada precisa dizer quem "
-            "é o controlador dos dados e por qual canal o titular exerce seus "
-            "direitos (art. 9º e 18 da LGPD)."
+            "DATA_CONTROLLER_NAME é obrigatório em produção: a política de "
+            "privacidade publicada precisa dizer quem é o controlador dos "
+            "dados (art. 9º e 18 da LGPD). O canal do titular usa "
+            "PRIVACY_CONTACT_EMAIL ou, se vazio, o contato padrão do site."
         )
 
     if settings.rate_limit_backend not in {"memory", "redis"}:

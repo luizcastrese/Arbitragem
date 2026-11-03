@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.privacy import (
     PrivacyPolicyNotFound,
     current_policy,
+    current_version,
     get_policy,
     list_versions as list_privacy_versions,
 )
@@ -86,9 +87,8 @@ def root():
                     else None
                 ),
                 (
-                    "DATA_CONTROLLER_NAME/PRIVACY_CONTACT_EMAIL não declarados: "
-                    "a política de privacidade fica sem controlador e sem canal "
-                    "para o titular."
+                    "DATA_CONTROLLER_NAME não declarado: a política de "
+                    "privacidade fica sem o nome do controlador dos dados."
                     if not ctx.settings.privacy_contacts_declared
                     else None
                 ),
@@ -141,11 +141,11 @@ def get_current_privacy_policy():
     controlador. É o endereço que os termos do procedimento referenciam."""
     settings_now = get_settings()
     return {
-        **current_policy().as_dict(),
+        **current_policy(settings_now).as_dict(),
         "available_versions": list_privacy_versions(),
         "controller": {
             "name": settings_now.data_controller_name or None,
-            "contact_email": settings_now.privacy_contact_email or None,
+            "contact_email": settings_now.privacy_contact,
             "declared": settings_now.privacy_contacts_declared,
         },
         "retention": {
@@ -176,7 +176,7 @@ def get_current_privacy_policy():
 @router.get("/privacy/{version}")
 def get_privacy_policy_version(version: str):
     try:
-        policy = get_policy(version)
+        policy = get_policy(version, get_settings())
     except PrivacyPolicyNotFound as exc:
         raise HTTPException(
             status_code=404,
@@ -184,7 +184,7 @@ def get_privacy_policy_version(version: str):
         ) from exc
     return {
         **policy.as_dict(),
-        "current": version == current_policy().version,
+        "current": version == current_version(),
         "available_versions": list_privacy_versions(),
     }
 

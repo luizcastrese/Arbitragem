@@ -98,7 +98,7 @@ def render_body(case: Case, user: User, role: str, notice: Notice) -> str:
         "podem ser desativados: são o que garante que ninguém perca a vez "
         "de se manifestar.",
     ]
-    contact = get_settings().privacy_contact_email
+    contact = get_settings().privacy_contact
     if contact:
         lines.append(f"Dúvidas: {contact}")
     return "\n".join(lines)
