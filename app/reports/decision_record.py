@@ -156,12 +156,32 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _calculation_memory(calculation: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Memória de cálculo como ela entra no auto: linha a linha, com fonte."""
+    if not calculation or calculation.get("status") != "ready":
+        return None
+    return {
+        "sha256": calculation.get("sha256"),
+        "lines": [
+            {
+                "label": line.get("label"),
+                "formula": line.get("formula"),
+                "inputs": line.get("inputs"),
+                "value": line.get("display"),
+                "source": line.get("source"),
+            }
+            for line in calculation.get("lines") or []
+        ],
+        "average_rate_source": calculation.get("average_rate_source"),
+    }
+
+
 def _agreement(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for round_data in case_data.get("conciliation_rounds") or []:
         agreement = round_data.get("agreement") or {}
         if agreement.get("complete"):
             responses = agreement.get("responses") or {}
-            return {
+            result = {
                 "round_number": round_data.get("round_number"),
                 "terms": list(round_data.get("possible_terms") or []),
                 "proposal_sha256": agreement.get("proposal_sha256"),
@@ -170,6 +190,12 @@ def _agreement(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     for party in PARTIES
                 },
             }
+            # Só quando a proposta teve memória de cálculo: os autos anteriores
+            # não mudam de hash.
+            memory = _calculation_memory(round_data.get("calculation"))
+            if memory:
+                result["calculation"] = memory
+            return result
     return None
 
 
@@ -297,7 +323,7 @@ def _decision_section(case_data: Dict[str, Any], kind: str) -> Optional[Dict[str
     names = {item.get("id"): item.get("name") for item in case_data.get("documents") or []}
     outcome = decision.get("outcome")
     remedy = decision.get("remedy_calculation")
-    return {
+    section = {
         "outcome": outcome,
         "outcome_label": OUTCOME_LABELS.get(outcome or "", outcome),
         "partial_claimant_bps": decision.get("partial_claimant_bps"),
@@ -352,6 +378,10 @@ def _decision_section(case_data: Dict[str, Any], kind: str) -> Optional[Dict[str
         "decision_hash": canonical_hash(decision),
         "model": (decision.get("execution") or {}).get("model"),
     }
+    memory = _calculation_memory(decision.get("calculation"))
+    if memory:
+        section["calculation"] = memory
+    return section
 
 
 def _review_section(case_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -28,6 +28,10 @@ class ConciliationOutput(BaseModel):
     next_round_focus: str
     stop_reason: Optional[str]
     requires_party_consent: bool
+    # Concessão proposta nesta rodada, em % do total apurado pela memória de
+    # cálculo (50 a 100). Só vale a partir da segunda rodada; o valor em reais
+    # é calculado pelo módulo, nunca pela IA.
+    proposal_adjustment_percent: Optional[int] = None
 
 
 SYSTEM_PROMPT = """
@@ -55,10 +59,22 @@ Regras:
 - Informe quantas rodadas adicionais parecem adequadas ao caso naquele momento
   e qual deve ser o foco da próxima.
 - A composição exige consentimento das partes.
+- Quando o contexto trouxer "calculation" com status "ready", os valores da
+  proposta vêm da memória de cálculo: o servidor escreve a cláusula monetária.
+  Você NÃO calcula, NÃO escreve valores em reais nem percentuais nas cláusulas
+  e NÃO altera números. Cite a memória só pelos rótulos das linhas. Use
+  possible_terms para condições sem número (forma e prazo de pagamento,
+  quitação, renegociação das parcelas restantes).
+- A partir da segunda rodada, se as posições das partes indicarem espaço para
+  concessão, informe proposal_adjustment_percent (50 a 100, % do total
+  apurado); o servidor calcula o valor. Na primeira rodada deixe nulo.
+- Se "calculation" tiver status "abstained", "needs_inputs" ou "unavailable",
+  não proponha valores: diga o que falta (por exemplo, a taxa média do Bacen
+  com fonte e data) e recomende nova rodada quando os dados estiverem completos.
 - Responda em português do Brasil.
 """
 
-PROMPT = register_prompt("conciliator", "1.1.0", SYSTEM_PROMPT)
+PROMPT = register_prompt("conciliator", "1.2.0", SYSTEM_PROMPT)
 
 
 def _safe_fallback(reason: str, round_number: int) -> Dict:

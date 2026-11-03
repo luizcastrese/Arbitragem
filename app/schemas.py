@@ -401,3 +401,45 @@ class LeadRequest(BaseModel):
     monthly_volume: int = Field(ge=0, le=10_000_000)
     # Campo-isca: um navegador de verdade deixa vazio.
     website: str = Field(default="", max_length=200)
+
+
+class CalculationExtractRequest(BaseModel):
+    party: str
+
+    @field_validator("party")
+    @classmethod
+    def party_must_be_valid(cls, value: str) -> str:
+        if value not in {"claimant", "respondent"}:
+            raise ValueError("party must be claimant or respondent")
+        return value
+
+
+class RateSourceInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    name: str = Field(default="", max_length=200)
+    series: str = Field(default="", max_length=40)
+    reference_date: str = Field(default="", max_length=10)
+    url: str = Field(default="", max_length=300)
+
+
+class FeeInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+    name: str = Field(max_length=160)
+    amount: str = Field(max_length=40)
+    questionable: bool = True
+    reason: str = Field(default="", max_length=400)
+
+
+class CalculationInputsRequest(CalculationExtractRequest):
+    """Correções de uma parte nos dados do cálculo. Só os campos enviados mudam."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    principal: Optional[str] = Field(default=None, max_length=40)
+    installments: Optional[str] = Field(default=None, max_length=10)
+    contract_rate_monthly: Optional[str] = Field(default=None, max_length=20)
+    contract_rate_annual: Optional[str] = Field(default=None, max_length=20)
+    paid_installments: Optional[str] = Field(default=None, max_length=10)
+    average_rate_monthly: Optional[str] = Field(default=None, max_length=20)
+    average_rate_source: Optional[RateSourceInput] = None
+    interest_adjustment_applies: Optional[bool] = None
+    fees: Optional[List[FeeInput]] = Field(default=None, max_length=30)

@@ -237,6 +237,7 @@ def case_to_dict(
             for item in _json_load(case.decision_records_json) or []
         ],
         "verification": _json_load(case.verification_json),
+        "calculation": _json_load(case.calculation_json),
         "stability": _json_load(case.stability_json),
         "procedure_conclusion": case.procedure_conclusion,
         "withdrawal": _withdrawal(case),
@@ -965,6 +966,20 @@ def save_stage(
 ) -> Case:
     setattr(case, field, _json_dump(value))
     case.status = status
+    append_audit(db, case, event_type, event_payload)
+    db.commit()
+    return get_case(db, case.id)
+
+
+def save_calculation(
+    db: Session,
+    case: Case,
+    value: Dict[str, Any],
+    event_type: str,
+    event_payload: Dict[str, Any],
+) -> Case:
+    """Grava a extração/memória de cálculo sem mexer no status do caso."""
+    case.calculation_json = _json_dump(value)
     append_audit(db, case, event_type, event_payload)
     db.commit()
     return get_case(db, case.id)

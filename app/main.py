@@ -38,6 +38,7 @@ from app.api.routes import (
     arbitration,
     attestation,
     auth,
+    calculation,
     cases,
     documents,
     leads,
@@ -225,6 +226,7 @@ async def security_headers(request: Request, call_next):
 for module in (
     meta,
     auth,
+    calculation,
     cases,
     account,
     documents,

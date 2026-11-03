@@ -193,6 +193,9 @@ def _stage_result(case_data: Dict, stage: str):
     if stage == "conciliation":
         rounds = case_data.get("conciliation_rounds") or []
         return rounds[-1] if rounds else None
+    if stage == "extract":
+        calculation = case_data.get("calculation") or {}
+        return calculation if calculation.get("extraction") else None
     if stage == "organize":
         return case_data.get("organized")
     if stage == "decide":

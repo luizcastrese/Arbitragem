@@ -48,6 +48,11 @@ from app.domain.acceptance import acceptance_status
 from app.domain.concurrency import StageBusy, claim_case_stage
 from app.domain.jobs import COMPLETED, FAILED, RUNNING
 from app.domain.legacy import public_decision_view
+from app.domain.proposal import (
+    attach_calculation_to_decision,
+    attach_calculation_to_round,
+    memory_for_model,
+)
 from app.domain.procedure import (
     alternate_judge_available,
     finalize_review_outcome,
@@ -65,6 +70,12 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+
+def _consumer_name(case_data: dict) -> str:
+    """Nome da parte consumidora, a quem a restituição é devida."""
+    party = (case_data.get("pathway") or {}).get("consumer_party") or "claimant"
+    return case_data.get(party) or case_data["claimant"]
 
 
 @router.post("/cases/{case_id}/conciliation")
@@ -155,6 +166,7 @@ def assess_case_conciliation(
             "respondent": payload.respondent_response,
             "new_information": payload.new_information,
         },
+        "calculation": memory_for_model(case_data.get("calculation")),
         "retrieved_evidence": {
             "shared_interests": _retrieve(
                 case_data,
@@ -174,6 +186,14 @@ def assess_case_conciliation(
             case_data,
             "conciliator",
             assess_conciliation(context, round_number),
+        )
+        # Os números da proposta vêm só do módulo de cálculo: o que a IA
+        # escrever fora da memória é removido e registrado.
+        conciliation = attach_calculation_to_round(
+            conciliation,
+            case_data.get("calculation"),
+            _consumer_name(case_data),
+            round_number,
         )
         updated_rounds = [*rounds, conciliation]
         save_stage(
@@ -240,9 +260,12 @@ def respond_to_conciliation_agreement(
             detail="Esta rodada não contém proposta que possa ser aceita",
         )
 
-    proposal_sha256 = canonical_hash(
-        {"round_number": round_number, "possible_terms": terms}
-    )
+    proposal_basis = {"round_number": round_number, "possible_terms": terms}
+    bound_calculation = (selected.get("calculation") or {}).get("sha256")
+    if bound_calculation:
+        # O aceite cobre também a memória de cálculo em que a proposta se apoia.
+        proposal_basis["calculation_sha256"] = bound_calculation
+    proposal_sha256 = canonical_hash(proposal_basis)
     agreement = dict(selected.get("agreement") or {})
     recorded_hash = agreement.get("proposal_sha256")
     if recorded_hash and recorded_hash != proposal_sha256:
@@ -490,6 +513,7 @@ def decide_case(
             "manifest": job_data["locked_manifest"],
             "conciliation_rounds": job_data["conciliation_rounds"],
             "organized_case": job_data["organized"],
+            "calculation": memory_for_model(job_data.get("calculation")),
             "retrieved_evidence": {
                 "delivery": _retrieve(
                     job_data,
@@ -514,6 +538,7 @@ def decide_case(
             idempotency_key=idempotency_key or None,
         )
         decision = _record_prompt_provenance(job_data, "judge", decision)
+        decision = attach_calculation_to_decision(decision, job_data.get("calculation"))
         stability = maybe_run_stability(
             job_db, job_case, job_data, decision_context, decision
         )

@@ -32,6 +32,10 @@ Regras obrigatórias:
 - Valores monetários usam minor units inteiros, moeda explícita, origem
   documental e fórmula determinística. Nunca use float para dinheiro.
 - Toda RuleApplication referencia uma regra existente no framework fixado.
+- Quando o contexto trouxer "calculation" com status "ready", os valores
+  vêm da memória de cálculo determinística: use-os sem recalcular, cite as
+  linhas e o hash da memória, e não invente outro valor. O servidor confere o
+  valor do remédio contra a memória.
 - Se a evidência for insuficiente, use outcome "inconclusive" e
   abstention_reasons contendo "insufficient_evidence".
 - Se a matéria estiver fora do escopo, use outcome "inconclusive" e
@@ -46,7 +50,7 @@ Regras obrigatórias:
 - Responda em português do Brasil.
 """
 
-PROMPT = register_prompt("judge", "2.1.0", SYSTEM_PROMPT)
+PROMPT = register_prompt("judge", "2.2.0", SYSTEM_PROMPT)
 
 
 def _safe_fallback(reason: str, framework_id: str = "digital_services_b2b_v1") -> Dict:

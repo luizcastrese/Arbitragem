@@ -37,6 +37,7 @@ import {
   steps,
   userHasRole
 } from './shared.js'
+import CalculationCard, { CALCULATION_MATTERS, MemoryTable, ProposalPanel } from './Calculation.jsx'
 import { LiveMessage, LoadingState } from './ui.jsx'
 
 // Casca do workspace: lista de casos à esquerda e, à direita, a abertura de um
@@ -352,6 +353,18 @@ function CaseWorkspace({
         />
       )}
 
+      {CALCULATION_MATTERS.has(caseData.pathway?.matter_framework_id)
+        && (caseData.documents.length > 0 || caseData.calculation) && (
+        <CalculationCard
+          caseData={caseData}
+          roles={roles}
+          busy={busy}
+          run={run}
+          request={request}
+          actorHeaders={actorHeaders}
+        />
+      )}
+
       <LiveMessage type="success" text={status} />
       <LiveMessage type="error" text={error} />
 
@@ -418,6 +431,21 @@ function CaseWorkspace({
 
       {caseData.decision_record && (
         <DecisionRecordCard caseData={caseData} isPending={isPending} run={run} />
+      )}
+
+      {(caseData.decision?.calculation || caseData.decision_record?.agreement?.calculation) && (
+        <section className="calc-card-ui">
+          <span className="section-label">Memória de cálculo</span>
+          <h3>{caseData.decision?.calculation ? 'Números da decisão' : 'Números do acordo'}</h3>
+          <MemoryTable
+            lines={(caseData.decision?.calculation || caseData.decision_record.agreement.calculation).lines}
+            sha256={(caseData.decision?.calculation || caseData.decision_record.agreement.calculation).sha256}
+            source={(caseData.decision?.calculation || caseData.decision_record.agreement.calculation).average_rate_source}
+          />
+          {caseData.decision?.calculation?.remedy_matches_calculation === false && (
+            <small className="consent-note">O valor escrito pela IA divergiu da memória; vale a memória.</small>
+          )}
+        </section>
       )}
 
       {['reviewed', 'attested', 'contested', 'inconclusive', 'inadmissible', 'invalidated', 'system_failure'].includes(caseData.status) && (
@@ -1568,6 +1596,8 @@ function ConciliationActions({
           setDraft={party === 'claimant' ? setClaimantResponse : setRespondentResponse}
         />
       ))}
+
+      <ProposalPanel round={latest} />
 
       <div className="conciliation-buttons">
         {['claimant', 'respondent'].map((party) => roles[party] && (
