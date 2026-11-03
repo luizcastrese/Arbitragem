@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, LoaderCircle } from 'lucide-react'
+import { GLOSSARY } from './shared.js'
 
 // Ícone de loading: gira por CSS (.spin). Com prefers-reduced-motion o giro
 // para, e o texto ao lado continua dizendo que algo está em andamento.
@@ -145,5 +146,42 @@ export function Modal({ onClose, labelledBy, children, size = 'wide' }) {
         {children}
       </div>
     </div>
+  )
+}
+
+// Termo do procedimento com explicação curta. Abre ao passar o mouse, ao focar
+// ou ao tocar; Esc fecha. O texto vem de GLOSSARY.
+export function Term({ k, children }) {
+  const id = useId()
+  const wrapper = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [alignRight, setAlignRight] = useState(false)
+  const text = GLOSSARY[k]
+  if (!text) return children
+
+  function show() {
+    const box = wrapper.current?.getBoundingClientRect()
+    setAlignRight(Boolean(box) && box.left > window.innerWidth / 2)
+    setOpen(true)
+  }
+
+  return (
+    <span className="term" ref={wrapper} onMouseEnter={show} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        className="term-button"
+        aria-describedby={open ? id : undefined}
+        aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : show())}
+        onFocus={show}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}
+      >
+        {children}
+      </button>
+      {open && (
+        <span role="tooltip" id={id} className={`term-tip${alignRight ? ' right' : ''}`}>{text}</span>
+      )}
+    </span>
   )
 }

@@ -733,14 +733,17 @@ export default function App() {
           </div>
         )}
 
-        {!llmReady(system) && (
+        {/* Visitante não vê aviso de infraestrutura. Quem está logado vê o efeito
+            (sem decisão de mérito); o detalhe da chave só aparece para admin/dev. */}
+        {user && !llmReady(system) && (
           <div className="demo-notice">
             <Info size={19} />
             <div>
-              <strong>Você está no modo demonstração</strong>
+              <strong>A análise por IA está indisponível neste ambiente</strong>
               <span>
-                Sem uma chave OpenRouter, o agente julgador não profere decisão de mérito
-                e o caso permanece inconclusivo.
+                {canSeeSystemBadge(user)
+                  ? 'Sem uma chave OpenRouter, o agente julgador não profere decisão de mérito e o caso permanece inconclusivo.'
+                  : 'O caso é registrado, mas a IA não profere decisão de mérito: ele permanece inconclusivo.'}
               </span>
             </div>
           </div>

@@ -30,6 +30,7 @@ import {
   MATTERS,
   formatApiDetail,
   invitationDeliveryMessage,
+  matterLabel,
   oppositeRole,
   roleLabel,
   stageIndexFor,
@@ -39,7 +40,7 @@ import {
 } from './shared.js'
 import CalculationCard, { CALCULATION_MATTERS, MemoryTable, ProposalPanel } from './Calculation.jsx'
 import { AttachChecklist, BatchContradictory, RefuseProposal } from './Pilot.jsx'
-import { LiveMessage, LoadingState } from './ui.jsx'
+import { LiveMessage, LoadingState, Term } from './ui.jsx'
 
 // Casca do workspace: lista de casos à esquerda e, à direita, a abertura de um
 // caso novo ou o caso selecionado. Carregada sob demanda (React.lazy) só depois
@@ -474,6 +475,13 @@ function CaseWorkspace({
       )}
     </>
   )
+}
+
+// Papel da parte com a explicação em tooltip (Reclamante, Reclamada).
+const ROLE_TERM = { claimant: 'reclamante', respondent: 'reclamada' }
+
+function RoleTerm({ role }) {
+  return ROLE_TERM[role] ? <Term k={ROLE_TERM[role]}>{roleLabel(role)}</Term> : roleLabel(role)
 }
 
 function saveBlob(blob, filename) {
@@ -915,7 +923,7 @@ function OperationsCard({ caseData, busy, isPending, run, request, actorHeaders,
           <p>Convide cada pessoa pelo e-mail que será usado na conta. O papel limita as ações disponíveis.</p>
           {participants.map((participant) => (
             <span className="participant-row" key={`${participant.email}-${participant.role}`}>
-              <strong>{participant.display_name}</strong> {roleLabel(participant.role)} · {participant.email}
+              <strong>{participant.display_name}</strong> <RoleTerm role={participant.role} /> · {participant.email}
               {counsel[participant.role]?.bar_number && (
                 <small> · advogado(a) da parte, {counsel[participant.role].bar_number}</small>
               )}
@@ -1089,7 +1097,7 @@ function ProcessSteps({ currentStage, blockedByAI = false, endedLabel = null }) 
                 {done ? <Check size={15} /> : active ? index + 1 : <Circle size={11} />}
               </span>
               <div>
-                <strong>{step.title}</strong>
+                <strong>{step.glossary ? <Term k={step.glossary}>{step.title}</Term> : step.title}</strong>
                 <small>{active ? step.description : step.short}</small>
               </div>
             </div>
@@ -1151,7 +1159,7 @@ function NextAction({
       icon: <Gavel size={22} />,
       label: 'Próximo passo',
       title: 'Solicite a decisão da IA',
-      description: 'O agente julgador aplicará o framework Comercial Equilibrado às evidências do caso.'
+      description: `O agente julgador aplicará às evidências do caso as regras fixadas para a matéria: ${matterLabel(caseData)}.`
     },
     decided: {
       icon: <ShieldCheck size={22} />,
@@ -1479,7 +1487,7 @@ function StewardNote({ caseData }) {
     <div className="blocking-note">
       <ShieldCheck size={17} />
       <span>
-        Gestor: {steward.reason}
+        <Term k="gestor">Gestor</Term>: {steward.reason}
         {steward.state === 'processing' ? ' A etapa está em andamento.' : ''}
         {steward.state === 'waiting' ? ' A próxima palavra é de uma parte.' : ''}
       </span>
@@ -1972,7 +1980,7 @@ function Conclusion({ caseData }) {
         <Fact
           label="Resultado"
           value={outcomeLabel(decision.outcome)}
-          note={`Framework ${decision.framework_id || decision.framework || ''} ${(decision.execution || {}).model || ''}`}
+          note={`Matéria: ${matterLabel(caseData)}${(decision.execution || {}).model ? ` · modelo ${decision.execution.model}` : ''}`}
         />
       </div>
       {decision.material_findings?.length > 0 && (
