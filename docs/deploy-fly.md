@@ -111,8 +111,8 @@ fly secrets set -a valinor \
   SMTP_FROM="..." \
   SMTP_USE_TLS="true" \
   OPENROUTER_API_KEY="..." \
-  DATA_CONTROLLER_NAME="..." \
-  PRIVACY_CONTACT_EMAIL="..."
+  DATA_CONTROLLER_NAME="Nome da empresa controladora" \
+  PRIVACY_CONTACT_EMAIL="alugai.adm@gmail.com"
 ```
 
 Opcional, se for emitir attestations:

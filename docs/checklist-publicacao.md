@@ -23,7 +23,11 @@ monitoramento.
       `key_id` publicado.
 - [ ] Usar S3 privado ou confirmar que o volume `document_data` está montado e
       incluído no backup.
-- [ ] Preencher `DATA_CONTROLLER_NAME` e `PRIVACY_CONTACT_EMAIL`.
+- [ ] Preencher `DATA_CONTROLLER_NAME` (o boot de produção exige; o nome sai na
+      política de privacidade). `PRIVACY_CONTACT_EMAIL` é opcional: vazio, vale
+      `alugai.adm@gmail.com`, o mesmo endereço fixo nos Termos.
+- [ ] Abrir `/ui/privacidade` e conferir o nome do controlador, o contato e o
+      prazo de retenção no texto.
 - [ ] Preencher `OPENROUTER_API_KEY` e deixar os `*_MODEL` vazios para o
       agente seletor escolher nas famílias distintas, ou fixar slugs
       `fornecedor/modelo` com julgador e revisor de laboratórios diferentes.

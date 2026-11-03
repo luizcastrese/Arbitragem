@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, LoaderCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, LoaderCircle, X } from 'lucide-react'
 import { GLOSSARY } from './shared.js'
 
 // Ícone de loading: gira por CSS (.spin). Com prefers-reduced-motion o giro
@@ -153,6 +153,17 @@ export function Modal({ onClose, labelledBy, children, size = 'wide' }) {
         {children}
       </div>
     </div>
+  )
+}
+
+// Botão "×" dos diálogos. Fica DEPOIS do título no código (ordem de leitura e de
+// Tab: o leitor de tela anuncia o diálogo, e só então a saída) e vai para o
+// canto por CSS (`.dialog-close` é absoluto), então o visual não muda.
+export function CloseButton({ onClose }) {
+  return (
+    <button type="button" className="dialog-close" onClick={onClose} aria-label="Fechar">
+      <X size={18} aria-hidden="true" />
+    </button>
   )
 }
 

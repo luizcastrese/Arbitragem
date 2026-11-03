@@ -768,6 +768,7 @@ input:focus, textarea:focus, select:focus { background: white; border-color: #0e
   font-weight: 600;
   padding: 0;
 }
+.legal-footer a:hover { text-decoration: underline; }
 .evidence-copy p { margin: 7px 0 0; color: #5c6860; font-size: 12px; line-height: 1.45; }
 .evidence-timeline { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
 .evidence-timeline span {
@@ -1044,16 +1045,19 @@ a.button { text-decoration: none; }
 .landing-fallback { min-height: 70vh; }
 
 .topbar-link {
-  padding: 8px 4px;
-  color: var(--muted);
+  padding: 10px 6px;
+  color: var(--ink);
   background: transparent;
   border: 0;
-  border-bottom: 1px solid transparent;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--gold);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
   white-space: nowrap;
 }
-.topbar-link:hover { color: var(--green-700); border-bottom-color: currentColor; }
+.topbar-link:hover { color: var(--green-700); text-decoration-color: currentColor; }
 
 /* Card fixo da etapa de IA em andamento */
 .processing-card {
@@ -1087,7 +1091,7 @@ a.button { text-decoration: none; }
   .processing-time { grid-column: 1 / -1; grid-auto-flow: column; justify-content: space-between; align-items: baseline; }
   .topbar-inner { gap: 8px; }
   .topbar-actions { gap: 8px; }
-  .topbar-link { font-size: 12px; }
+  .topbar-link { font-size: 14px; padding: 10px 4px; }
 }
 
 .counsel-field { align-content: start; }
